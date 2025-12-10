@@ -1,10 +1,13 @@
-from src.utils.colors.colorClass import col
-
 import os
 import sys
 
+from src.colors.color_class import col
+from src.logger.logger_class import Logger
+
+
 def main():
-    print(f"{col.CYA}Hello World!{col.RES}")
+    Logger.info("Hello World!", "H5")
+
 
 def _check_py_ver():
     # Allows for ANSI escape character processing on Windows
