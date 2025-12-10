@@ -52,7 +52,7 @@ def log_to_file(msg: str, file_path: str) -> None:
             f.write(msg + "\n")
     except Exception as e:
         print(
-            f"{col.bg}{col.RED} ERROR {col.BLU} LOGGER {col.RES}{col.RED}Failed to log to file {file_path}: {e}"
+            f"{col.bg}{col.RED} ERROR {col.BLU} LOGGER {col.RES}{col.RED}Failed to log to file {file_path}: {e}"  # noqa: E501
         )
 
 
@@ -115,7 +115,9 @@ class Logger:
         log_t(msg, ["DEBUG"] + tags)
 
     @staticmethod
-    def fatal(msg: str, tags: list[str] | str = [], raiseExeption: bool = True) -> None:
+    def fatal(
+        msg: str, tags: list[str] | str = [], raiseExeption: bool = True
+    ) -> None:
         if isinstance(tags, str):
             tags = [tags]
         log_t(msg, ["FATAL"] + tags)

@@ -14,3 +14,21 @@ dependencies = [
     "pandas>=2.3.3",
     "seaborn>=0.13.2"
 ]
+
+[project.optional-dependencies]
+dev = [
+    "ruff"
+]
+
+[tool.ruff]
+line-length = 80
+
+[tool.ruff.lint]
+select = ["F", "E", "W", "I"]
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

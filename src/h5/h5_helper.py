@@ -44,7 +44,9 @@ def inspect_h5_structure(file_path):
         print(f"Error: {e}")
 
 
-def get_h5_value(filename: Path, key_path: str, default=None, doGroup: bool = False):
+def get_h5_value(
+    filename: Path, key_path: str, default=None, doGroup: bool = False
+):
     """
     Safely retrieves a value from an H5 file.
 
@@ -87,7 +89,7 @@ def get_h5_value(filename: Path, key_path: str, default=None, doGroup: bool = Fa
 
             if not doGroup:
                 print(
-                    f"{col.RED}[ERROR] The key_path is a Group: {col.YEL}{key_path}{col.RES}"
+                    f"{col.RED}[ERROR] The key_path is a Group: {col.YEL}{key_path}{col.RES}"  # noqa: E501
                 )
                 return []
             return recursively_load(obj)
