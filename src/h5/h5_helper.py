@@ -39,9 +39,9 @@ def inspect_h5_structure(file_path):
             f.visititems(print_node_info)
 
     except FileNotFoundError:
-        print("Error: File not found.")
+        Logger.error("File not found.", "H5")
     except Exception as e:
-        print(f"Error: {e}")
+        Logger.error(f"Error: {e}", "H5")
 
 
 def get_h5_value(
@@ -78,7 +78,7 @@ def get_h5_value(
     try:
         with h5py.File(filename, "r") as f:
             if key_path not in f:
-                print(f"Warning: Key '{key_path}' not found in file.")
+                Logger.warn(f"Key '{key_path}' not found in file.", "H5")
                 return default
 
             obj = f[key_path]
@@ -88,14 +88,14 @@ def get_h5_value(
                 return obj[:]
 
             if not doGroup:
-                print(
-                    f"{col.RED}[ERROR] The key_path is a Group: {col.YEL}{key_path}{col.RES}"  # noqa: E501
+                Logger.error(
+                    f"The key_path is a Group: {col.YEL}{key_path}", "H5"
                 )
                 return []
             return recursively_load(obj)
 
     except Exception as e:
-        print(f"Error reading file: {e}")
+        Logger.error(f"Error reading file: {e}", "H5")
         return default
 
     return default
