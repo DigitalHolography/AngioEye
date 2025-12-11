@@ -1,7 +1,7 @@
 import os
 import sys
 
-from src.colors.color_class import col
+from colors.color_class import col
 
 # ┌───────────────────────────────────┐
 # │            TAGS_COLORS            │

@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 
-from src.logger.logger_class import Logger
+from logger.logger_class import Logger
 
 
 def save_womersley_results(

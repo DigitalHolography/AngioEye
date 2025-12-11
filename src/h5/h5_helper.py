@@ -2,9 +2,10 @@ import os
 from pathlib import Path
 
 import h5py
+import numpy as np
 
-from src.colors.color_class import col
-from src.logger.logger_class import Logger
+from colors.color_class import col
+from logger.logger_class import Logger
 
 
 def inspect_h5_structure(file_path):
@@ -99,3 +100,32 @@ def get_h5_value(
         return default
 
     return default
+
+
+def get_dimension_idx(dset: h5py.Dataset, dimDesc: str) -> int:
+    """
+    Returns the index of the Dimension named inside the Dataset "dimDescription"
+
+    Args:
+        dset (h5py.Dataset): The h5 Dataset.
+        dimDesc (str) : The Dimension name.
+
+    Returns:
+        The idx (or -1 if not found)
+
+    """
+    if "dimDescription" not in dset.attrs:
+        return -1
+
+    dims = dset.attrs["dimDescription"]
+
+    if not isinstance(dims, (np.ndarray, list, tuple)):
+        dims = [dims]
+
+    for i, d in enumerate(dims):
+        d_str = d.decode("utf-8") if isinstance(d, bytes) else str(d)
+
+        if dimDesc == d_str.lower():
+            return i
+
+    return -1
