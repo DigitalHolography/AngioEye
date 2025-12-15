@@ -6,6 +6,7 @@ import h5py
 import numpy as np
 import pandas as pd
 
+from analysis.visitors.visitor_BT import visitor_two_depth
 from colors.color_class import col
 from h5.h5_helper import get_dimension_idx
 from logger.logger_class import Logger
@@ -18,7 +19,7 @@ class AnalysisClass:
     def generate_df(
         filename: Path,
         WomersleyPath: str = "/Array3D_FrequencyAnalysis/Womersley",
-        percentiles: list[(int, int)] = [(10, 90), (25, 75), (40, 60)],
+        percentiles: list[tuple[int, int]] = [(10, 90), (25, 75), (40, 60)],
     ):
         """
         Analyzes H5 data and separates it into DataFrames based on the folder
@@ -28,46 +29,7 @@ class AnalysisClass:
             dict: { "Folder": pd.DataFrame, ... }
         """
 
-        raw_buckets = {}
-
-        def _get_harmonic_axis_index(dset: h5py.Dataset) -> int:
-            return get_dimension_idx(dset, "harmonic")
-
-        def _visitor(name, obj):
-            if isinstance(obj, h5py.Dataset):
-                parts = name.split("/")
-
-                if len(parts) >= 3:
-                    vessel_type = parts[0]
-                    wall_code = parts[1]
-                    var_name = parts[-1]
-
-                    bucket_key = wall_code
-
-                    if bucket_key not in raw_buckets:
-                        raw_buckets[bucket_key] = {}
-
-                    category = f"{vessel_type}_{bucket_key}"
-
-                    if "RnR0_complex_" in var_name:
-                        var_name = var_name.replace("RnR0_complex_", "RnR0_")
-
-                    data = obj[:]
-                    h_idx = _get_harmonic_axis_index(obj)
-
-                    target_dict = raw_buckets[bucket_key]
-
-                    if h_idx != -1:
-                        for h in range(data.shape[h_idx]):
-                            key = f"{category}_{var_name}_H{h + 1}"
-                            target_dict[key] = np.take(data, h, axis=h_idx)
-                    elif data.ndim == 3:
-                        for h in range(data.shape[2]):
-                            key = f"{category}_{var_name}_H{h + 1}"
-                            target_dict[key] = data[:, :, h]
-                    else:
-                        key = f"{category}_{var_name}_H0"
-                        target_dict[key] = data
+        _visitor, raw_buckets = visitor_two_depth()
 
         try:
             with h5py.File(filename, "r") as f:
