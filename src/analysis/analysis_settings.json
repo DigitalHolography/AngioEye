@@ -1,0 +1,13 @@
+{
+    "womersley_general": {
+        "visitor": "visitor_BT",
+        "analyser": "a_womersley_gen",
+        "exporter": "",
+        "h5_path": [
+            "/Array3D_FrequencyAnalysis/Womersley",
+            "/Array2D_FrequencyAnalysis/Womersley"
+        ],
+        "analyser_params": {},
+        "exporter_params": {}
+    }
+}

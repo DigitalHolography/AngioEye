@@ -8,26 +8,29 @@ from utils.export_results import save_womersley_results
 
 
 def main():
-    Logger.info("Hello World!", "H5")
-    file_name = input("File path: ")
-    if len(file_name) == 0 or not os.path.exists(os.path.abspath(file_name)):
-        Logger.error(f"File invalid: '{file_name}'")
-        return
+    # Logger.info("Hello World!", "H5")
+    # file_name = input("File path: ")
+    # if len(file_name) == 0 or not os.path.exists(os.path.abspath(file_name)):
+    #     Logger.error(f"File invalid: '{file_name}'")
+    #     return
 
-    ranges = [(10, 90), (25, 75)]
+    # ranges = [(10, 90), (25, 75)]
 
-    df = AnalysisClass.generate_df(
-        file_name,
-        "/Array3D_FrequencyAnalysis/Womersley",
-        ranges,
-    )
-    save_womersley_results(df, "3D", "output")
-    df = AnalysisClass.generate_df(
-        file_name,
-        "/Array2D_FrequencyAnalysis/Womersley",
-        ranges,
-    )
-    save_womersley_results(df, "2D", "output")
+    # df = AnalysisClass.generate_df(
+    #     file_name,
+    #     "/Array3D_FrequencyAnalysis/Womersley",
+    #     ranges,
+    # )
+    # save_womersley_results(df, "3D", "output")
+    # df = AnalysisClass.generate_df(
+    #     file_name,
+    #     "/Array2D_FrequencyAnalysis/Womersley",
+    #     ranges,
+    # )
+    # save_womersley_results(df, "2D", "output")
+    analyser = AnalysisClass()
+
+    analyser.execute_from_file("./src/analysis/analysis_settings.json")
 
 
 def _check_py_ver():

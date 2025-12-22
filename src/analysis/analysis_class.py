@@ -1,126 +1,155 @@
-import os
-import re
+import importlib
+import json
 from pathlib import Path
+from typing import Any, Callable
 
-import h5py
-import numpy as np
-import pandas as pd
-
-from analysis.visitors.visitor_BT import visitor_two_depth
 from colors.color_class import col
-from h5.h5_helper import get_dimension_idx
 from logger.logger_class import Logger
+from utils.json_parser import JsonParser
+from utils.path_utils import conv_to_path
 
 
 class AnalysisClass:
-    def __init__(self):
-        pass
-
-    def generate_df(
-        filename: Path,
-        WomersleyPath: str = "/Array3D_FrequencyAnalysis/Womersley",
-        percentiles: list[tuple[int, int]] = [(10, 90), (25, 75), (40, 60)],
+    def __init__(
+        self,
+        analysers_module: str = "analysis.analysers",
+        auto_reload: bool = False,
     ):
-        """
-        Analyzes H5 data and separates it into DataFrames based on the folder
-        structure found.
+        self.analysers_module = analysers_module
+        self.auto_reload = auto_reload
+        self.loaded_modules = {}
+
+        # Add analysers directory to Python path
+        # analysers_path = Path(analysers_dir).parent
+        # if str(analysers_path) not in sys.path:
+        #     sys.path.insert(0, str(analysers_path))
+
+    def _import_module(self, module_name: str):
+        """Import a module from the analysers directory"""
+        full_module_path = f"{self.analysers_module}.{module_name}"
+        return importlib.import_module(full_module_path)
+
+    def get_function(self, func_name: str) -> Callable | None:
+        """Get a function from a module, trying various naming conventions
+
+        Args:
+            func_name (str): The name of the function
 
         Returns:
-            dict: { "Folder": pd.DataFrame, ... }
+            Callable | None: The function
         """
+        try:
+            if self.auto_reload or func_name not in self.loaded_modules:
+                module = self._import_module(func_name)
+                self.loaded_modules[func_name] = module
+            else:
+                module = self.loaded_modules[func_name]
 
-        _visitor, raw_buckets = visitor_two_depth()
+            possible_names = [func_name]
+
+            for name in possible_names:
+                if hasattr(module, name):
+                    func = getattr(module, name)
+                    if callable(func):
+                        return func
+
+            Logger.error(f"No callable function found in module '{func_name}'")
+            return None
+
+        except ImportError as e:
+            Logger.error(f"Failed to import module '{func_name}': {e}")
+            return None
+        except Exception as e:
+            Logger.error(f"Error loading function '{func_name}': {e}")
+            return None
+
+    def execute_single(self, func_name: str, args: Any | list | dict) -> Any:
+        """Execute a single function call
+
+        Args:
+            func_name (str): _description_
+            args (Any | list | dict): The args to use (It can be Any, but
+                                      usually, use list or dict)
+
+        Returns:
+            Any: _description_
+        """
+        func = self.get_function(func_name)
+        if not func:
+            return {
+                "error": f"Function '{func_name}' not found or not callable"
+            }
 
         try:
-            with h5py.File(filename, "r") as f:
-                if WomersleyPath not in f:
-                    Logger.error(f"Group {WomersleyPath} not found.")
-                    return {}
-                f[WomersleyPath].visititems(_visitor)
+            if isinstance(args, list):
+                return func(*args)
+            elif isinstance(args, dict):
+                return func(**args)
+            else:
+                return func(args)
+        except TypeError as e:
+            Logger.error(f"Argument mismatch for {func_name}: {e}")
+            return {"error": f"Argument mismatch: {e}"}
         except Exception as e:
-            Logger.error(f"File error: {e}")
-            return {}
+            Logger.error(f"Error executing {func_name}: {e}")
+            return {"error": str(e)}
 
-        final_dfs = {}
+    def execute_batch(
+        self,
+        config: dict[str, dict],
+    ) -> dict[str, Any]:
+        """Execute batch of function calls from configuration"""
+        results = {}
 
-        for wall_type, raw_slices in raw_buckets.items():
-            if not raw_slices:
+        for section_name, params in config.items():
+            if "input_data" not in params:
+                Logger.error(
+                    f"'input_data' is not inisde '{section_name}'. Skipping...",
+                    "JSON",
+                )
                 continue
 
-            processed_data = {}
-            processed_keys = set()
-
-            for key, data in raw_slices.items():
-                if "_real_H" in key:
-                    imag_key = key.replace("_real_", "_imag_")
-                    if imag_key in raw_slices:
-                        base_key = key.replace("_real_", "_")
-                        complex_arr = data + 1j * raw_slices[imag_key]
-
-                        processed_data[
-                            re.sub(r"_H(\d+)$", r"_abs_H\1", base_key)
-                        ] = np.abs(complex_arr)
-                        processed_data[
-                            re.sub(r"_H(\d+)$", r"_arg_H\1", base_key)
-                        ] = np.angle(complex_arr)
-
-                        processed_keys.add(key)
-                        processed_keys.add(imag_key)
-
-            for key, val in raw_slices.items():
-                if key not in processed_keys:
-                    processed_data[key] = val
-
-            stats_list = []
-            percentile_pairs = percentiles if percentiles else []
-
-            for name, data in processed_data.items():
-                if np.issubdtype(data.dtype, np.number):
-                    flat = data.flatten()
-                    flat = flat[~np.isnan(flat)]
-
-                    if len(flat) > 0:
-                        stat_entry = {
-                            "Metric": re.sub(r"_H\d+$", "", name),
-                            "Harmonic": int(name.split("_H")[-1])
-                            if "_H" in name
-                            else 0,
-                            "NbSegments": len(flat),
-                            "Min": np.min(flat),
-                            "Max": np.max(flat),
-                            "Average": np.mean(flat),
-                            "Median": np.median(flat),
-                            "StdDev": np.std(flat),
-                        }
-
-                        for p_low, p_high in percentile_pairs:
-                            pl_val = np.percentile(flat, p_low)
-                            ph_val = np.percentile(flat, p_high)
-
-                            stat_entry[f"P{p_low}"] = pl_val
-                            stat_entry[f"P{p_high}"] = ph_val
-
-                            subset = flat[(flat >= pl_val) & (flat <= ph_val)]
-                            suffix = f"_P{p_low}P{p_high}"
-
-                            if len(subset) > 0:
-                                stat_entry[f"Average{suffix}"] = np.mean(subset)
-                                stat_entry[f"Median{suffix}"] = np.median(
-                                    subset
-                                )
-                                stat_entry[f"StdDev{suffix}"] = np.std(subset)
-                            else:
-                                stat_entry[f"Average{suffix}"] = np.nan
-                                stat_entry[f"Median{suffix}"] = np.nan
-                                stat_entry[f"StdDev{suffix}"] = np.nan
-
-                        stats_list.append(stat_entry)
-
-            df = pd.DataFrame(stats_list)
-            if not df.empty:
-                df = df.sort_values(by=["Metric", "Harmonic"]).reset_index(
-                    drop=True
+            if "analyser" not in params:
+                Logger.error(
+                    f"'analyser' is not inisde '{section_name}'. Skipping...",
+                    "JSON",
                 )
-                final_dfs[wall_type] = df
+                continue
 
-        return final_dfs
+            args_list = params["input_data"]
+            analyser_name = params["analyser"]
+            Logger.info(
+                f"{section_name}: Executing '{analyser_name}'"
+                f"with {len(args_list)} argument(s)"
+            )
+
+            func_results = []
+            for i, args in enumerate(args_list):
+                Logger.debug(f"  Call {i + 1}: {args}")
+                result = self.execute_single(analyser_name, args)
+                func_results.append(result)
+
+            results[section_name] = func_results
+
+        return results
+
+    def execute_from_file(
+        self, file_path: str | Path, h5_path: str | Path
+    ) -> dict[str, list] | None:
+        """Load configuration from JSON file and execute
+
+        Args:
+            file_path (Path): _description_
+
+        Returns:
+            dict[str, list] | None: _description_
+        """
+
+        file_path = conv_to_path(file_path)
+
+        config = JsonParser.load_json_file(file_path)
+        if not config:
+            Logger.error(f"Failed to execute Json file: '{file_path}'")
+            return None
+
+        return self.execute_batch(config)
