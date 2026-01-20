@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -7,6 +8,7 @@ from typing import Dict, Optional
 import h5py
 
 from pipelines import BasicStatsPipeline, ProcessPipeline, ProcessResult, VelocityComparisonPipeline
+from pipelines.utils import write_result_h5
 
 
 class ProcessApp(tk.Tk):
@@ -18,6 +20,8 @@ class ProcessApp(tk.Tk):
         self.pipeline_registry: Dict[str, ProcessPipeline] = {}
         self.last_process_result: Optional[ProcessResult] = None
         self.last_process_pipeline: Optional[ProcessPipeline] = None
+        self.output_dir_var = tk.StringVar(value=str(Path.cwd()))
+        self.last_output_dir: Optional[Path] = None
 
         self._build_ui()
         self._register_pipelines()
@@ -57,12 +61,17 @@ class ProcessApp(tk.Tk):
         export_frame = ttk.Frame(container, padding=(0, 8, 0, 0))
         export_frame.grid(row=3, column=0, columnspan=3, sticky="ew")
         export_frame.columnconfigure(1, weight=1)
-        ttk.Label(export_frame, text="Export CSV").grid(row=0, column=0, sticky="w")
+        ttk.Label(export_frame, text="Output folder").grid(row=0, column=0, sticky="w")
+        output_dir_entry = ttk.Entry(export_frame, textvariable=self.output_dir_var)
+        output_dir_entry.grid(row=0, column=1, sticky="ew", padx=4)
+        ttk.Button(export_frame, text="Browse", command=self.choose_output_dir).grid(row=0, column=2, sticky="w")
+
+        ttk.Label(export_frame, text="Export CSV").grid(row=1, column=0, sticky="w", pady=(6, 0))
         self.export_path_var = tk.StringVar(value="process_result.csv")
         export_entry = ttk.Entry(export_frame, textvariable=self.export_path_var)
-        export_entry.grid(row=0, column=1, sticky="ew", padx=4)
-        ttk.Button(export_frame, text="Browse", command=self.choose_export_path).grid(row=0, column=2, sticky="w")
-        ttk.Button(export_frame, text="Export", command=self.export_process_result).grid(row=0, column=3, sticky="w", padx=6)
+        export_entry.grid(row=1, column=1, sticky="ew", padx=4, pady=(6, 0))
+        ttk.Button(export_frame, text="Browse", command=self.choose_export_path).grid(row=1, column=2, sticky="w", pady=(6, 0))
+        ttk.Button(export_frame, text="Export", command=self.export_process_result).grid(row=1, column=3, sticky="w", padx=6, pady=(6, 0))
 
     def _register_pipelines(self) -> None:
         pipelines = [BasicStatsPipeline(), VelocityComparisonPipeline()]
@@ -95,6 +104,7 @@ class ProcessApp(tk.Tk):
         self.file_label.config(text=path)
         self.last_process_result = None
         self.last_process_pipeline = None
+        self.last_output_dir = None
         self._show_placeholder("File loaded. Pick a pipeline and run.")
 
     def run_selected_pipeline(self) -> None:
@@ -111,11 +121,18 @@ class ProcessApp(tk.Tk):
             return
         try:
             result = pipeline.run(self.h5_file)
-            output_path = self._default_output_path(name)
-            self._write_result_h5(result, output_path, pipeline_name=name)
-            result.output_h5_path = output_path
         except Exception as exc:  # noqa: BLE001
             messagebox.showerror("Pipeline error", f"Pipeline failed: {exc}")
+            return
+        try:
+            output_dir = self._prepare_output_dir()
+            output_path = self._default_output_path(name, output_dir)
+            self._write_result_h5(result, output_path, pipeline_name=name)
+            result.output_h5_path = output_path
+            self.last_output_dir = output_dir
+            self._update_export_default(output_dir)
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror("Output error", f"Cannot write outputs: {exc}")
             return
         self.last_process_result = result
         self.last_process_pipeline = pipeline
@@ -139,43 +156,69 @@ class ProcessApp(tk.Tk):
         self.process_output.configure(state="disabled")
 
     def choose_export_path(self) -> None:
+        initial_dir = self.last_output_dir or Path(self.output_dir_var.get() or Path.cwd())
         path = filedialog.asksaveasfilename(
             defaultextension=".csv",
             filetypes=[("CSV", "*.csv"), ("All files", "*.*")],
-            initialfile=self.export_path_var.get(),
+            initialdir=str(initial_dir),
+            initialfile=Path(self.export_path_var.get()).name,
         )
         if path:
-            self.export_path_var.set(path)
+            self.export_path_var.set(Path(path).name)
+
+    def choose_output_dir(self) -> None:
+        path = filedialog.askdirectory(
+            initialdir=self.output_dir_var.get() or None,
+            title="Select base folder for outputs",
+        )
+        if path:
+            self.output_dir_var.set(path)
 
     def export_process_result(self) -> None:
         if self.last_process_result is None or self.last_process_pipeline is None:
             messagebox.showwarning("No result", "Run a pipeline before exporting.")
             return
-        output_path = self.export_path_var.get() or "process_result.csv"
+        if self.last_output_dir is None:
+            try:
+                self.last_output_dir = self._prepare_output_dir()
+            except Exception as exc:  # noqa: BLE001
+                messagebox.showerror("Export failed", f"Cannot prepare output folder: {exc}")
+                return
+        export_name = Path(self.export_path_var.get() or "process_result.csv").name
+        final_path = self.last_output_dir / export_name
+        self.last_output_dir.mkdir(parents=True, exist_ok=True)
         try:
-            final_path = self.last_process_pipeline.export(self.last_process_result, output_path)
+            final_path_str = self.last_process_pipeline.export(self.last_process_result, str(final_path))
         except Exception as exc:  # noqa: BLE001
             messagebox.showerror("Export failed", f"Cannot export: {exc}")
             return
-        messagebox.showinfo("Export done", f"Result exported to: {final_path}")
+        self.export_path_var.set(final_path_str)
+        messagebox.showinfo("Export done", f"Result exported to: {final_path_str}")
 
-    def _default_output_path(self, pipeline_name: str) -> str:
+    def _prepare_output_dir(self) -> Path:
+        base_dir_value = (self.output_dir_var.get() or "").strip()
+        base_dir = Path(base_dir_value).expanduser() if base_dir_value else Path.cwd()
+        if not base_dir.is_absolute():
+            base_dir = Path.cwd() / base_dir
+        base_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        base_name = Path(self.h5_file.filename).stem if self.h5_file and self.h5_file.filename else "output"
+        output_dir = base_dir / f"{base_name}_{timestamp}"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        return output_dir
+
+    def _default_output_path(self, pipeline_name: str, output_dir: Path) -> str:
         safe_name = pipeline_name.lower().replace(" ", "_")
         base = Path(self.h5_file.filename).stem if self.h5_file and self.h5_file.filename else "output"
-        return str(Path.cwd() / f"{base}_{safe_name}_result.h5")
+        return str(output_dir / f"{base}_{safe_name}_result.h5")
+
+    def _update_export_default(self, output_dir: Path) -> None:
+        export_name = Path(self.export_path_var.get() or "process_result.csv").name
+        self.export_path_var.set(str(output_dir / export_name))
 
     def _write_result_h5(self, result: ProcessResult, path: str, pipeline_name: str) -> None:
-        with h5py.File(path, "w") as f:
-            f.attrs["pipeline"] = pipeline_name
-            if self.h5_file and self.h5_file.filename:
-                f.attrs["source_file"] = self.h5_file.filename
-            metrics_grp = f.create_group("metrics")
-            for key, value in result.metrics.items():
-                metrics_grp.create_dataset(key, data=value)
-            if result.artifacts:
-                artifacts_grp = f.create_group("artifacts")
-                for key, value in result.artifacts.items():
-                    artifacts_grp.create_dataset(key, data=value)
+        source_file = self.h5_file.filename if self.h5_file and self.h5_file.filename else None
+        write_result_h5(result, path, pipeline_name=pipeline_name, source_file=source_file)
 
 
 if __name__ == "__main__":

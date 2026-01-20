@@ -58,4 +58,7 @@ Desktop.ini
 *.hdf5
 *_result.h5
 *_result.csv
+*_metrics.csv
+*.zip
 process_result.csv
+pipelines.txt

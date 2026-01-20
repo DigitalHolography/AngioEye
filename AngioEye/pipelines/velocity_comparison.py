@@ -10,8 +10,8 @@ class VelocityComparisonPipeline(ProcessPipeline):
         "Mean of /Artery/CrossSections/velocity_whole_seg_mean and "
         "/Vein/CrossSections/velocity_trunc_seg_mean plus their ratio."
     )
-    artery_path = "/Artery/CrossSections/velocity_whole_seg_mean"
-    vein_path = "/Vein/CrossSections/velocity_trunc_seg_mean"
+    artery_path = "/Artery/CrossSections/velocity_whole_seg_mean/value"
+    vein_path = "/Vein/CrossSections/velocity_whole_seg_mean/value"
 
     def run(self, h5file: h5py.File) -> ProcessResult:
         missing = [p for p in (self.artery_path, self.vein_path) if p not in h5file]
