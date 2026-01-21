@@ -13,6 +13,8 @@ from pipelines import (
     BasicStatsPipeline,
     ProcessPipeline,
     ProcessResult,
+    TauHarmonic10Pipeline,
+    TauHarmonic10PerBeatPipeline,
     VelocityComparisonPipeline,
 )
 from pipelines.utils import write_result_h5
@@ -206,7 +208,12 @@ class ProcessApp(tk.Tk):
         batch_output_scroll.grid(row=0, column=1, sticky="ns")
 
     def _register_pipelines(self) -> None:
-        pipelines = [BasicStatsPipeline(), VelocityComparisonPipeline()]
+        pipelines = [
+            BasicStatsPipeline(),
+            VelocityComparisonPipeline(),
+            TauHarmonic10Pipeline(),
+            TauHarmonic10PerBeatPipeline(),
+        ]
         self.pipeline_registry = {p.name: p for p in pipelines}
         self.pipeline_combo["values"] = list(self.pipeline_registry.keys())
         if pipelines:
@@ -558,7 +565,7 @@ class ProcessApp(tk.Tk):
         return output_dir
 
     def _default_output_path(self, pipeline_name: str, output_dir: Path) -> str:
-        safe_name = pipeline_name.lower().replace(" ", "_")
+        safe_name = self._safe_pipeline_suffix(pipeline_name)
         base = (
             Path(self.h5_file.filename).stem
             if self.h5_file and self.h5_file.filename
