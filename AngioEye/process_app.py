@@ -9,7 +9,12 @@ from typing import Dict, List, Optional, Sequence
 
 import h5py
 
-from pipelines import BasicStatsPipeline, ProcessPipeline, ProcessResult, VelocityComparisonPipeline
+from pipelines import (
+    BasicStatsPipeline,
+    ProcessPipeline,
+    ProcessResult,
+    VelocityComparisonPipeline,
+)
 from pipelines.utils import write_result_h5
 
 
@@ -58,9 +63,13 @@ class ProcessApp(tk.Tk):
 
         ttk.Label(parent, text="Pipeline").grid(row=1, column=0, sticky="w")
         self.pipeline_var = tk.StringVar()
-        self.pipeline_combo = ttk.Combobox(parent, textvariable=self.pipeline_var, state="readonly", width=40)
+        self.pipeline_combo = ttk.Combobox(
+            parent, textvariable=self.pipeline_var, state="readonly", width=40
+        )
         self.pipeline_combo.grid(row=1, column=1, sticky="w")
-        run_btn = ttk.Button(parent, text="Run pipeline", command=self.run_selected_pipeline)
+        run_btn = ttk.Button(
+            parent, text="Run pipeline", command=self.run_selected_pipeline
+        )
         run_btn.grid(row=1, column=2, sticky="w", padx=6)
 
         ttk.Label(parent, text="Result").grid(row=2, column=0, sticky="nw", pady=(8, 2))
@@ -69,7 +78,9 @@ class ProcessApp(tk.Tk):
         output_frame.columnconfigure(0, weight=1)
         output_frame.rowconfigure(0, weight=1)
         self.process_output = tk.Text(output_frame, height=18, state="disabled")
-        output_scroll = ttk.Scrollbar(output_frame, orient="vertical", command=self.process_output.yview)
+        output_scroll = ttk.Scrollbar(
+            output_frame, orient="vertical", command=self.process_output.yview
+        )
         self.process_output.configure(yscrollcommand=output_scroll.set)
         self.process_output.grid(row=0, column=0, sticky="nsew")
         output_scroll.grid(row=0, column=1, sticky="ns")
@@ -80,74 +91,116 @@ class ProcessApp(tk.Tk):
         ttk.Label(export_frame, text="Output folder").grid(row=0, column=0, sticky="w")
         output_dir_entry = ttk.Entry(export_frame, textvariable=self.output_dir_var)
         output_dir_entry.grid(row=0, column=1, sticky="ew", padx=4)
-        ttk.Button(export_frame, text="Browse", command=self.choose_output_dir).grid(row=0, column=2, sticky="w")
+        ttk.Button(export_frame, text="Browse", command=self.choose_output_dir).grid(
+            row=0, column=2, sticky="w"
+        )
 
-        ttk.Label(export_frame, text="Export CSV").grid(row=1, column=0, sticky="w", pady=(6, 0))
+        ttk.Label(export_frame, text="Export CSV").grid(
+            row=1, column=0, sticky="w", pady=(6, 0)
+        )
         self.export_path_var = tk.StringVar(value="process_result.csv")
         export_entry = ttk.Entry(export_frame, textvariable=self.export_path_var)
         export_entry.grid(row=1, column=1, sticky="ew", padx=4, pady=(6, 0))
-        ttk.Button(export_frame, text="Browse", command=self.choose_export_path).grid(row=1, column=2, sticky="w", pady=(6, 0))
-        ttk.Button(export_frame, text="Export", command=self.export_process_result).grid(row=1, column=3, sticky="w", padx=6, pady=(6, 0))
+        ttk.Button(export_frame, text="Browse", command=self.choose_export_path).grid(
+            row=1, column=2, sticky="w", pady=(6, 0)
+        )
+        ttk.Button(
+            export_frame, text="Export", command=self.export_process_result
+        ).grid(row=1, column=3, sticky="w", padx=6, pady=(6, 0))
 
     def _build_batch_tab(self, parent: ttk.Frame) -> None:
         parent.columnconfigure(1, weight=1)
         parent.rowconfigure(4, weight=1)
 
-        ttk.Label(parent, text="Input (folder / .h5 / .hdf5 / .zip)").grid(row=0, column=0, sticky="w")
+        ttk.Label(parent, text="Input (folder / .h5 / .hdf5 / .zip)").grid(
+            row=0, column=0, sticky="w"
+        )
         input_entry = ttk.Entry(parent, textvariable=self.batch_input_var)
         input_entry.grid(row=0, column=1, sticky="ew", padx=(0, 4))
         input_btn_frame = ttk.Frame(parent)
         input_btn_frame.grid(row=0, column=2, sticky="w")
-        ttk.Button(input_btn_frame, text="Browse folder", command=self.choose_batch_folder).pack(side="left")
-        ttk.Button(input_btn_frame, text="Browse file/zip", command=self.choose_batch_file).pack(side="left", padx=(4, 0))
+        ttk.Button(
+            input_btn_frame, text="Browse folder", command=self.choose_batch_folder
+        ).pack(side="left")
+        ttk.Button(
+            input_btn_frame, text="Browse file/zip", command=self.choose_batch_file
+        ).pack(side="left", padx=(4, 0))
 
-        ttk.Label(parent, text="Pipelines").grid(row=1, column=0, sticky="nw", pady=(8, 0))
+        ttk.Label(parent, text="Pipelines").grid(
+            row=1, column=0, sticky="nw", pady=(8, 0)
+        )
         pipelines_wrapper = ttk.Frame(parent)
-        pipelines_wrapper.grid(row=1, column=1, columnspan=2, sticky="nsew", pady=(8, 0))
+        pipelines_wrapper.grid(
+            row=1, column=1, columnspan=2, sticky="nsew", pady=(8, 0)
+        )
         pipelines_wrapper.columnconfigure(0, weight=1)
         pipelines_wrapper.rowconfigure(1, weight=1)
 
         actions = ttk.Frame(pipelines_wrapper)
         actions.grid(row=0, column=0, sticky="e", pady=(0, 4))
-        ttk.Button(actions, text="Select all", command=self.select_all_pipelines).pack(side="left", padx=(0, 4))
-        ttk.Button(actions, text="Clear all", command=self.clear_all_pipelines).pack(side="left")
+        ttk.Button(actions, text="Select all", command=self.select_all_pipelines).pack(
+            side="left", padx=(0, 4)
+        )
+        ttk.Button(actions, text="Clear all", command=self.clear_all_pipelines).pack(
+            side="left"
+        )
 
         pipelines_container = ttk.Frame(pipelines_wrapper)
         pipelines_container.grid(row=1, column=0, sticky="nsew")
         pipelines_container.columnconfigure(0, weight=1)
         pipelines_container.rowconfigure(0, weight=1)
 
-        self.pipeline_checks_canvas = tk.Canvas(pipelines_container, highlightthickness=0, height=220)
+        self.pipeline_checks_canvas = tk.Canvas(
+            pipelines_container, highlightthickness=0, height=220
+        )
         self.pipeline_checks_canvas.grid(row=0, column=0, sticky="nsew")
-        pipeline_scroll = ttk.Scrollbar(pipelines_container, orient="vertical", command=self.pipeline_checks_canvas.yview)
+        pipeline_scroll = ttk.Scrollbar(
+            pipelines_container,
+            orient="vertical",
+            command=self.pipeline_checks_canvas.yview,
+        )
         pipeline_scroll.grid(row=0, column=1, sticky="ns")
         self.pipeline_checks_canvas.configure(yscrollcommand=pipeline_scroll.set)
         self.pipeline_checks_inner = ttk.Frame(self.pipeline_checks_canvas)
-        self.pipeline_checks_window = self.pipeline_checks_canvas.create_window((0, 0), window=self.pipeline_checks_inner, anchor="nw")
+        self.pipeline_checks_window = self.pipeline_checks_canvas.create_window(
+            (0, 0), window=self.pipeline_checks_inner, anchor="nw"
+        )
         self.pipeline_checks_inner.bind(
             "<Configure>",
-            lambda _evt: self.pipeline_checks_canvas.configure(scrollregion=self.pipeline_checks_canvas.bbox("all")),
+            lambda _evt: self.pipeline_checks_canvas.configure(
+                scrollregion=self.pipeline_checks_canvas.bbox("all")
+            ),
         )
         self.pipeline_checks_canvas.bind(
             "<Configure>",
-            lambda evt: self.pipeline_checks_canvas.itemconfigure(self.pipeline_checks_window, width=evt.width),
+            lambda evt: self.pipeline_checks_canvas.itemconfigure(
+                self.pipeline_checks_window, width=evt.width
+            ),
         )
 
-        ttk.Label(parent, text="Output folder").grid(row=2, column=0, sticky="w", pady=(8, 0))
+        ttk.Label(parent, text="Output folder").grid(
+            row=2, column=0, sticky="w", pady=(8, 0)
+        )
         batch_output_entry = ttk.Entry(parent, textvariable=self.batch_output_var)
         batch_output_entry.grid(row=2, column=1, sticky="ew", padx=(0, 4), pady=(8, 0))
-        ttk.Button(parent, text="Browse", command=self.choose_batch_output).grid(row=2, column=2, sticky="w", pady=(8, 0))
+        ttk.Button(parent, text="Browse", command=self.choose_batch_output).grid(
+            row=2, column=2, sticky="w", pady=(8, 0)
+        )
 
         run_btn = ttk.Button(parent, text="Run batch", command=self.run_batch)
         run_btn.grid(row=3, column=0, sticky="w", pady=(10, 4))
 
-        ttk.Label(parent, text="Batch log").grid(row=4, column=0, sticky="nw", pady=(8, 2))
+        ttk.Label(parent, text="Batch log").grid(
+            row=4, column=0, sticky="nw", pady=(8, 2)
+        )
         batch_output_frame = ttk.Frame(parent)
         batch_output_frame.grid(row=4, column=1, columnspan=2, sticky="nsew")
         batch_output_frame.columnconfigure(0, weight=1)
         batch_output_frame.rowconfigure(0, weight=1)
         self.batch_output = tk.Text(batch_output_frame, height=18, state="disabled")
-        batch_output_scroll = ttk.Scrollbar(batch_output_frame, orient="vertical", command=self.batch_output.yview)
+        batch_output_scroll = ttk.Scrollbar(
+            batch_output_frame, orient="vertical", command=self.batch_output.yview
+        )
         self.batch_output.configure(yscrollcommand=batch_output_scroll.set)
         self.batch_output.grid(row=0, column=0, sticky="nsew")
         batch_output_scroll.grid(row=0, column=1, sticky="ns")
@@ -167,7 +220,9 @@ class ProcessApp(tk.Tk):
         self.pipeline_check_vars = {}
         for idx, pipeline in enumerate(pipelines):
             var = tk.BooleanVar(value=True)
-            check = ttk.Checkbutton(self.pipeline_checks_inner, text=pipeline.name, variable=var)
+            check = ttk.Checkbutton(
+                self.pipeline_checks_inner, text=pipeline.name, variable=var
+            )
             check.grid(row=idx * 2, column=0, sticky="w", padx=(0, 8))
             if pipeline.description:
                 desc = ttk.Label(
@@ -181,13 +236,17 @@ class ProcessApp(tk.Tk):
                 desc.grid(row=idx * 2 + 1, column=0, sticky="w", pady=(0, 8))
             self.pipeline_check_vars[pipeline.name] = var
 
-    def _show_placeholder(self, message: str = "Load a .h5 file then run a pipeline") -> None:
+    def _show_placeholder(
+        self, message: str = "Load a .h5 file then run a pipeline"
+    ) -> None:
         self.process_output.configure(state="normal")
         self.process_output.delete("1.0", "end")
         self.process_output.insert("end", message)
         self.process_output.configure(state="disabled")
 
-    def _reset_batch_output(self, message: str = "Select an input path, choose pipelines, then run batch.") -> None:
+    def _reset_batch_output(
+        self, message: str = "Select an input path, choose pipelines, then run batch."
+    ) -> None:
         self.batch_output.configure(state="normal")
         self.batch_output.delete("1.0", "end")
         self.batch_output.insert("end", message)
@@ -198,6 +257,8 @@ class ProcessApp(tk.Tk):
         self.batch_output.insert("end", f"{text}\n")
         self.batch_output.see("end")
         self.batch_output.configure(state="disabled")
+        self.batch_output.update_idletasks()
+        self.update_idletasks()
 
     def select_all_pipelines(self) -> None:
         for var in self.pipeline_check_vars.values():
@@ -230,11 +291,15 @@ class ProcessApp(tk.Tk):
     def run_selected_pipeline(self) -> None:
         name = self.pipeline_var.get()
         if not name:
-            messagebox.showwarning("Missing pipeline", "Select a pipeline before running.")
+            messagebox.showwarning(
+                "Missing pipeline", "Select a pipeline before running."
+            )
             return
         pipeline = self.pipeline_registry.get(name)
         if pipeline is None:
-            messagebox.showerror("Pipeline missing", f"Pipeline '{name}' is not registered.")
+            messagebox.showerror(
+                "Pipeline missing", f"Pipeline '{name}' is not registered."
+            )
             return
         if self.h5_file is None:
             messagebox.showwarning("Missing file", "Load a .h5 file first.")
@@ -259,7 +324,9 @@ class ProcessApp(tk.Tk):
         file_label = self.h5_file.filename or "(in-memory file)"
         self._render_process_result(result, pipeline_name=name, file_path=file_label)
 
-    def _render_process_result(self, result: ProcessResult, pipeline_name: str, file_path: str) -> None:
+    def _render_process_result(
+        self, result: ProcessResult, pipeline_name: str, file_path: str
+    ) -> None:
         self.process_output.configure(state="normal")
         self.process_output.delete("1.0", "end")
         self.process_output.insert("end", f"Pipeline: {pipeline_name}\n")
@@ -272,7 +339,9 @@ class ProcessApp(tk.Tk):
             for key, value in result.artifacts.items():
                 self.process_output.insert("end", f" - {key}: {value}\n")
         if result.output_h5_path:
-            self.process_output.insert("end", f"\nResult HDF5: {result.output_h5_path}\n")
+            self.process_output.insert(
+                "end", f"\nResult HDF5: {result.output_h5_path}\n"
+            )
         self.process_output.configure(state="disabled")
 
     def choose_batch_folder(self) -> None:
@@ -301,7 +370,9 @@ class ProcessApp(tk.Tk):
             self.batch_output_var.set(path)
 
     def choose_export_path(self) -> None:
-        initial_dir = self.last_output_dir or Path(self.output_dir_var.get() or Path.cwd())
+        initial_dir = self.last_output_dir or Path(
+            self.output_dir_var.get() or Path.cwd()
+        )
         path = filedialog.asksaveasfilename(
             defaultextension=".csv",
             filetypes=[("CSV", "*.csv"), ("All files", "*.*")],
@@ -327,13 +398,17 @@ class ProcessApp(tk.Tk):
             try:
                 self.last_output_dir = self._prepare_output_dir()
             except Exception as exc:  # noqa: BLE001
-                messagebox.showerror("Export failed", f"Cannot prepare output folder: {exc}")
+                messagebox.showerror(
+                    "Export failed", f"Cannot prepare output folder: {exc}"
+                )
                 return
         export_name = Path(self.export_path_var.get() or "process_result.csv").name
         final_path = self.last_output_dir / export_name
         self.last_output_dir.mkdir(parents=True, exist_ok=True)
         try:
-            final_path_str = self.last_process_pipeline.export(self.last_process_result, str(final_path))
+            final_path_str = self.last_process_pipeline.export(
+                self.last_process_result, str(final_path)
+            )
         except Exception as exc:  # noqa: BLE001
             messagebox.showerror("Export failed", f"Cannot export: {exc}")
             return
@@ -343,13 +418,20 @@ class ProcessApp(tk.Tk):
     def run_batch(self) -> None:
         data_value = (self.batch_input_var.get() or "").strip()
         if not data_value:
-            messagebox.showwarning("Missing input", "Select a folder, HDF5 file, or .zip archive to process.")
+            messagebox.showwarning(
+                "Missing input",
+                "Select a folder, HDF5 file, or .zip archive to process.",
+            )
             return
         data_path = Path(data_value).expanduser()
 
-        selected_names = [name for name, var in self.pipeline_check_vars.items() if var.get()]
+        selected_names = [
+            name for name, var in self.pipeline_check_vars.items() if var.get()
+        ]
         if not selected_names:
-            messagebox.showwarning("No pipelines", "Select at least one pipeline to run.")
+            messagebox.showwarning(
+                "No pipelines", "Select at least one pipeline to run."
+            )
             return
 
         pipelines: List[ProcessPipeline] = []
@@ -361,11 +443,15 @@ class ProcessApp(tk.Tk):
             else:
                 pipelines.append(pipeline)
         if missing:
-            messagebox.showerror("Pipeline missing", f"Pipeline(s) not registered: {', '.join(missing)}")
+            messagebox.showerror(
+                "Pipeline missing", f"Pipeline(s) not registered: {', '.join(missing)}"
+            )
             return
 
         output_dir_value = (self.batch_output_var.get() or "").strip()
-        output_dir = Path(output_dir_value).expanduser() if output_dir_value else Path.cwd()
+        output_dir = (
+            Path(output_dir_value).expanduser() if output_dir_value else Path.cwd()
+        )
         if not output_dir.is_absolute():
             output_dir = Path.cwd() / output_dir
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -393,14 +479,21 @@ class ProcessApp(tk.Tk):
 
         self._log_batch(f"Completed. Outputs stored under: {output_dir}")
         if failures:
-            messagebox.showwarning("Batch completed with errors", f"{len(failures)} failure(s). See log for details.")
+            messagebox.showwarning(
+                "Batch completed with errors",
+                f"{len(failures)} failure(s). See log for details.",
+            )
         else:
-            messagebox.showinfo("Batch completed", f"Outputs stored under: {output_dir}")
+            messagebox.showinfo(
+                "Batch completed", f"Outputs stored under: {output_dir}"
+            )
 
         if tempdir is not None:
             tempdir.cleanup()
 
-    def _prepare_data_root(self, data_path: Path) -> tuple[Path, Optional[tempfile.TemporaryDirectory]]:
+    def _prepare_data_root(
+        self, data_path: Path
+    ) -> tuple[Path, Optional[tempfile.TemporaryDirectory]]:
         if data_path.is_file() and data_path.suffix.lower() == ".zip":
             tempdir = tempfile.TemporaryDirectory()
             with zipfile.ZipFile(data_path, "r") as zf:
@@ -438,7 +531,12 @@ class ProcessApp(tk.Tk):
                 h5_out = data_dir / f"{h5_path.stem}_{suffix}_result.h5"
                 csv_out = data_dir / f"{h5_path.stem}_{suffix}_metrics.csv"
                 result = pipeline.run(h5file)
-                write_result_h5(result, h5_out, pipeline_name=pipeline.name, source_file=str(h5_path))
+                write_result_h5(
+                    result,
+                    h5_out,
+                    pipeline_name=pipeline.name,
+                    source_file=str(h5_path),
+                )
                 result.output_h5_path = str(h5_out)
                 pipeline.export(result, str(csv_out))
                 self._log_batch(f"[OK] {h5_path.name} -> {pipeline.name}")
@@ -450,23 +548,37 @@ class ProcessApp(tk.Tk):
             base_dir = Path.cwd() / base_dir
         base_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        base_name = Path(self.h5_file.filename).stem if self.h5_file and self.h5_file.filename else "output"
+        base_name = (
+            Path(self.h5_file.filename).stem
+            if self.h5_file and self.h5_file.filename
+            else "output"
+        )
         output_dir = base_dir / f"{base_name}_{timestamp}"
         output_dir.mkdir(parents=True, exist_ok=True)
         return output_dir
 
     def _default_output_path(self, pipeline_name: str, output_dir: Path) -> str:
         safe_name = pipeline_name.lower().replace(" ", "_")
-        base = Path(self.h5_file.filename).stem if self.h5_file and self.h5_file.filename else "output"
+        base = (
+            Path(self.h5_file.filename).stem
+            if self.h5_file and self.h5_file.filename
+            else "output"
+        )
         return str(output_dir / f"{base}_{safe_name}_result.h5")
 
     def _update_export_default(self, output_dir: Path) -> None:
         export_name = Path(self.export_path_var.get() or "process_result.csv").name
         self.export_path_var.set(str(output_dir / export_name))
 
-    def _write_result_h5(self, result: ProcessResult, path: str, pipeline_name: str) -> None:
-        source_file = self.h5_file.filename if self.h5_file and self.h5_file.filename else None
-        write_result_h5(result, path, pipeline_name=pipeline_name, source_file=source_file)
+    def _write_result_h5(
+        self, result: ProcessResult, path: str, pipeline_name: str
+    ) -> None:
+        source_file = (
+            self.h5_file.filename if self.h5_file and self.h5_file.filename else None
+        )
+        write_result_h5(
+            result, path, pipeline_name=pipeline_name, source_file=source_file
+        )
 
 
 if __name__ == "__main__":
