@@ -13,6 +13,7 @@ from pipelines import (
     BasicStatsPipeline,
     ProcessPipeline,
     ProcessResult,
+    StaticMatrixExamplePipeline,
     TauHarmonic10Pipeline,
     TauHarmonic10PerBeatPipeline,
     VelocityComparisonPipeline,
@@ -213,6 +214,7 @@ class ProcessApp(tk.Tk):
             VelocityComparisonPipeline(),
             TauHarmonic10Pipeline(),
             TauHarmonic10PerBeatPipeline(),
+            StaticMatrixExamplePipeline(),
         ]
         self.pipeline_registry = {p.name: p for p in pipelines}
         self.pipeline_combo["values"] = list(self.pipeline_registry.keys())

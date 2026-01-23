@@ -1,5 +1,6 @@
 from .base import ProcessPipeline, ProcessResult
 from .basic_stats import BasicStatsPipeline
+from .static_example import StaticMatrixExamplePipeline
 from .velocity_comparison import VelocityComparisonPipeline
 from .tauh_n10 import TauHarmonic10Pipeline, TauHarmonic10PerBeatPipeline
 
@@ -10,4 +11,5 @@ __all__ = [
     "VelocityComparisonPipeline",
     "TauHarmonic10Pipeline",
     "TauHarmonic10PerBeatPipeline",
+    "StaticMatrixExamplePipeline",
 ]

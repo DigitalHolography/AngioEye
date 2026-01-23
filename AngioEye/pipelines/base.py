@@ -1,14 +1,14 @@
 import csv
 from dataclasses import dataclass
-from typing import Dict, Optional, Union
+from typing import Any, Dict, Optional
 
 import h5py
 
 
 @dataclass
 class ProcessResult:
-    metrics: Dict[str, float]
-    artifacts: Optional[Dict[str, Union[str, float, int]]] = None
+    metrics: Dict[str, Any]
+    artifacts: Optional[Dict[str, Any]] = None
     output_h5_path: Optional[str] = None
 
 

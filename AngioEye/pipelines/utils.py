@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Optional, Sequence, Tuple, Union
 
 import h5py
+import numpy as np
 
 from .base import ProcessResult
 
@@ -13,6 +14,28 @@ def safe_h5_key(name: str) -> str:
         cleaned = cleaned.replace("__", "_")
     cleaned = cleaned.strip("_")
     return cleaned or "pipeline"
+
+
+def _write_value_dataset(group: h5py.Group, key: str, value) -> None:
+    """
+    Create a dataset under group for the given value.
+
+    Handles scalars, numpy arrays, and nested lists/tuples.
+    Falls back to a UTF-8 string representation when the value type
+    is not directly supported by h5py.
+    """
+    if isinstance(value, str):
+        group.create_dataset(key, data=value, dtype=h5py.string_dtype(encoding="utf-8"))
+        return
+    data = value
+    if isinstance(value, (list, tuple)):
+        data = np.asarray(value)
+    try:
+        group.create_dataset(key, data=data)
+    except (TypeError, ValueError):
+        group.create_dataset(
+            key, data=str(value), dtype=h5py.string_dtype(encoding="utf-8")
+        )
 
 
 def write_result_h5(
@@ -38,11 +61,11 @@ def write_result_h5(
             f.attrs["source_file"] = source_file
         metrics_grp = f.create_group("metrics")
         for key, value in result.metrics.items():
-            metrics_grp.create_dataset(key, data=value)
+            _write_value_dataset(metrics_grp, key, value)
         if result.artifacts:
             artifacts_grp = f.create_group("artifacts")
             for key, value in result.artifacts.items():
-                artifacts_grp.create_dataset(key, data=value)
+                _write_value_dataset(artifacts_grp, key, value)
     return str(out_path)
 
 
@@ -67,9 +90,9 @@ def write_combined_results_h5(
             pipeline_grp.attrs["pipeline"] = pipeline_name
             metrics_grp = pipeline_grp.create_group("metrics")
             for key, value in result.metrics.items():
-                metrics_grp.create_dataset(key, data=value)
+                _write_value_dataset(metrics_grp, key, value)
             if result.artifacts:
                 artifacts_grp = pipeline_grp.create_group("artifacts")
                 for key, value in result.artifacts.items():
-                    artifacts_grp.create_dataset(key, data=value)
+                    _write_value_dataset(artifacts_grp, key, value)
     return str(out_path)

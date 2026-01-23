@@ -24,6 +24,7 @@ from pipelines import (
     BasicStatsPipeline,
     ProcessPipeline,
     ProcessResult,
+    StaticMatrixExamplePipeline,
     TauHarmonic10Pipeline,
     TauHarmonic10PerBeatPipeline,
     VelocityComparisonPipeline,
@@ -36,6 +37,7 @@ PIPELINE_CLASSES = [
     VelocityComparisonPipeline,
     TauHarmonic10Pipeline,
     TauHarmonic10PerBeatPipeline,
+    StaticMatrixExamplePipeline,
 ]
 
 
