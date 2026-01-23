@@ -1,7 +1,7 @@
 import h5py
 import numpy as np
 
-from .base import ProcessPipeline, ProcessResult
+from .core.base import ProcessPipeline, ProcessResult
 
 
 class VelocityComparisonPipeline(ProcessPipeline):

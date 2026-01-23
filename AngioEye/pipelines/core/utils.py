@@ -16,6 +16,35 @@ def safe_h5_key(name: str) -> str:
     return cleaned or "pipeline"
 
 
+def _copy_input_contents(source_file: Optional[Union[str, Path]], dest: h5py.File) -> None:
+    """Copy all attributes and top-level objects from the input H5 into dest."""
+    if not source_file:
+        return
+    src_path = Path(source_file)
+    if not src_path.exists():
+        return
+    with h5py.File(src_path, "r") as src:
+        for key, value in src.attrs.items():
+            dest.attrs[key] = value
+        for key in src.keys():
+            src.copy(src[key], dest, name=key)
+
+
+def _ensure_pipelines_group(h5file: h5py.File) -> h5py.Group:
+    """Return a pipelines group, creating it when missing."""
+    return h5file["pipelines"] if "pipelines" in h5file else h5file.create_group("pipelines")
+
+
+def _create_unique_group(parent: h5py.Group, base_name: str) -> h5py.Group:
+    """Create a subgroup avoiding name collisions."""
+    candidate = base_name
+    idx = 1
+    while candidate in parent:
+        candidate = f"{base_name}_{idx}"
+        idx += 1
+    return parent.create_group(candidate)
+
+
 def _write_value_dataset(group: h5py.Group, key: str, value) -> None:
     """
     Create a dataset under group for the given value.
@@ -56,14 +85,19 @@ def write_result_h5(
     out_path = Path(path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with h5py.File(out_path, "w") as f:
-        f.attrs["pipeline"] = pipeline_name
+        _copy_input_contents(source_file, f)
+        if "pipeline" not in f.attrs:
+            f.attrs["pipeline"] = pipeline_name
         if source_file:
             f.attrs["source_file"] = source_file
-        metrics_grp = f.create_group("metrics")
+        pipelines_grp = _ensure_pipelines_group(f)
+        pipeline_grp = _create_unique_group(pipelines_grp, safe_h5_key(pipeline_name))
+        pipeline_grp.attrs["pipeline"] = pipeline_name
+        metrics_grp = pipeline_grp.create_group("metrics")
         for key, value in result.metrics.items():
             _write_value_dataset(metrics_grp, key, value)
         if result.artifacts:
-            artifacts_grp = f.create_group("artifacts")
+            artifacts_grp = pipeline_grp.create_group("artifacts")
             for key, value in result.artifacts.items():
                 _write_value_dataset(artifacts_grp, key, value)
     return str(out_path)
@@ -82,11 +116,12 @@ def write_combined_results_h5(
     out_path = Path(path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with h5py.File(out_path, "w") as f:
+        _copy_input_contents(source_file, f)
         if source_file:
             f.attrs["source_file"] = source_file
-        pipelines_grp = f.create_group("pipelines")
+        pipelines_grp = _ensure_pipelines_group(f)
         for pipeline_name, result in results:
-            pipeline_grp = pipelines_grp.create_group(safe_h5_key(pipeline_name))
+            pipeline_grp = _create_unique_group(pipelines_grp, safe_h5_key(pipeline_name))
             pipeline_grp.attrs["pipeline"] = pipeline_name
             metrics_grp = pipeline_grp.create_group("metrics")
             for key, value in result.metrics.items():

@@ -9,16 +9,8 @@ from typing import Dict, List, Optional, Sequence
 
 import h5py
 
-from pipelines import (
-    BasicStatsPipeline,
-    ProcessPipeline,
-    ProcessResult,
-    StaticMatrixExamplePipeline,
-    TauHarmonic10Pipeline,
-    TauHarmonic10PerBeatPipeline,
-    VelocityComparisonPipeline,
-)
-from pipelines.utils import write_combined_results_h5, write_result_h5
+from pipelines import ProcessPipeline, ProcessResult, load_all_pipelines
+from pipelines.core.utils import write_combined_results_h5, write_result_h5
 
 
 class ProcessApp(tk.Tk):
@@ -209,13 +201,7 @@ class ProcessApp(tk.Tk):
         batch_output_scroll.grid(row=0, column=1, sticky="ns")
 
     def _register_pipelines(self) -> None:
-        pipelines = [
-            BasicStatsPipeline(),
-            VelocityComparisonPipeline(),
-            TauHarmonic10Pipeline(),
-            TauHarmonic10PerBeatPipeline(),
-            StaticMatrixExamplePipeline(),
-        ]
+        pipelines = load_all_pipelines()
         self.pipeline_registry = {p.name: p for p in pipelines}
         self.pipeline_combo["values"] = list(self.pipeline_registry.keys())
         if pipelines:

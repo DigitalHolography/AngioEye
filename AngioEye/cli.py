@@ -20,29 +20,12 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import h5py
 
-from pipelines import (
-    BasicStatsPipeline,
-    ProcessPipeline,
-    ProcessResult,
-    StaticMatrixExamplePipeline,
-    TauHarmonic10Pipeline,
-    TauHarmonic10PerBeatPipeline,
-    VelocityComparisonPipeline,
-)
-from pipelines.utils import write_combined_results_h5
-
-
-PIPELINE_CLASSES = [
-    BasicStatsPipeline,
-    VelocityComparisonPipeline,
-    TauHarmonic10Pipeline,
-    TauHarmonic10PerBeatPipeline,
-    StaticMatrixExamplePipeline,
-]
+from pipelines import ProcessPipeline, ProcessResult, load_all_pipelines
+from pipelines.core.utils import write_combined_results_h5
 
 
 def _build_pipeline_registry() -> Dict[str, ProcessPipeline]:
-    pipelines = [cls() for cls in PIPELINE_CLASSES]
+    pipelines = load_all_pipelines()
     return {p.name: p for p in pipelines}
 
 
