@@ -17,7 +17,7 @@ from pipelines import (
     TauHarmonic10PerBeatPipeline,
     VelocityComparisonPipeline,
 )
-from pipelines.utils import write_result_h5
+from pipelines.utils import write_combined_results_h5, write_result_h5
 
 
 class ProcessApp(tk.Tk):
@@ -532,21 +532,24 @@ class ProcessApp(tk.Tk):
     ) -> None:
         data_dir = output_root / h5_path.stem
         data_dir.mkdir(parents=True, exist_ok=True)
+        combined_h5_out = data_dir / f"{h5_path.stem}_pipelines_result.h5"
+        pipeline_results: List[tuple[str, ProcessResult]] = []
         with h5py.File(h5_path, "r") as h5file:
             for pipeline in pipelines:
-                suffix = self._safe_pipeline_suffix(pipeline.name)
-                h5_out = data_dir / f"{h5_path.stem}_{suffix}_result.h5"
-                csv_out = data_dir / f"{h5_path.stem}_{suffix}_metrics.csv"
                 result = pipeline.run(h5file)
-                write_result_h5(
-                    result,
-                    h5_out,
-                    pipeline_name=pipeline.name,
-                    source_file=str(h5_path),
-                )
-                result.output_h5_path = str(h5_out)
+                pipeline_results.append((pipeline.name, result))
+                suffix = self._safe_pipeline_suffix(pipeline.name)
+                csv_out = data_dir / f"{h5_path.stem}_{suffix}_metrics.csv"
                 pipeline.export(result, str(csv_out))
                 self._log_batch(f"[OK] {h5_path.name} -> {pipeline.name}")
+        write_combined_results_h5(
+            pipeline_results, combined_h5_out, source_file=str(h5_path)
+        )
+        for _, result in pipeline_results:
+            result.output_h5_path = str(combined_h5_out)
+        self._log_batch(
+            f"[OK] {h5_path.name}: combined results -> {combined_h5_out.name}"
+        )
 
     def _prepare_output_dir(self) -> Path:
         base_dir_value = (self.output_dir_var.get() or "").strip()
