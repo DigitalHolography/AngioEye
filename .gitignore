@@ -62,3 +62,4 @@ Desktop.ini
 *.zip
 process_result.csv
 pipelines.txt
+requirements-optional.txt

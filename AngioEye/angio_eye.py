@@ -14,7 +14,11 @@ try:
 except ImportError:  #  optional dependency
     sv_ttk = None
 
-from pipelines import ProcessPipeline, ProcessResult, load_all_pipelines
+from pipelines import (
+    ProcessPipeline,
+    ProcessResult,
+    load_pipeline_catalog,
+)
 from pipelines.core.utils import write_combined_results_h5, write_result_h5
 
 
@@ -307,28 +311,41 @@ class ProcessApp(tk.Tk):
         batch_output_scroll.grid(row=0, column=1, sticky="ns")
 
     def _register_pipelines(self) -> None:
-        pipelines = load_all_pipelines()
-        self.pipeline_registry = {p.name: p for p in pipelines}
+        available, missing = load_pipeline_catalog()
+        self.pipeline_registry = {p.name: p for p in available}
+        self.missing_pipelines = {p.name: p for p in missing}
         self.pipeline_combo["values"] = list(self.pipeline_registry.keys())
-        if pipelines:
+        if available:
             self.pipeline_combo.current(0)
-            self.pipeline_var.set(pipelines[0].name)
-        self._populate_pipeline_checks(pipelines)
+            self.pipeline_var.set(available[0].name)
+        self._populate_pipeline_checks(available, missing)
 
-    def _populate_pipeline_checks(self, pipelines: List[ProcessPipeline]) -> None:
+    def _populate_pipeline_checks(
+        self, available: List[ProcessPipeline], missing: List[ProcessPipeline]
+    ) -> None:
         for child in self.pipeline_checks_inner.winfo_children():
             child.destroy()
         self.pipeline_check_vars = {}
-        for idx, pipeline in enumerate(pipelines):
-            var = tk.BooleanVar(value=True)
+        rows: List[ProcessPipeline] = [*available, *missing]
+        for idx, pipeline in enumerate(rows):
+            is_available = getattr(pipeline, "available", True)
+            var = tk.BooleanVar(value=is_available)
+            var._enabled = is_available  # type: ignore[attr-defined]
+            label = pipeline.name if is_available else f"{pipeline.name} (missing deps)"
+            state = "normal" if is_available else "disabled"
             check = ttk.Checkbutton(
-                self.pipeline_checks_inner, text=pipeline.name, variable=var
+                self.pipeline_checks_inner, text=label, variable=var, state=state
             )
             check.grid(row=idx, column=0, sticky="w", padx=(0, 8), pady=(0, 6))
-            if pipeline.description:
+            tip_text = pipeline.description or ""
+            missing_deps = getattr(pipeline, "missing_deps", []) or getattr(pipeline, "requires", [])
+            if missing_deps:
+                tip_suffix = f"\nInstall: {', '.join(missing_deps)}"
+                tip_text = (tip_text + tip_suffix) if tip_text else tip_suffix
+            if tip_text:
                 _Tooltip(
                     check,
-                    pipeline.description,
+                    tip_text,
                     bg=self._surface_color,
                     fg=self._text_fg,
                 )
@@ -360,11 +377,13 @@ class ProcessApp(tk.Tk):
 
     def select_all_pipelines(self) -> None:
         for var in self.pipeline_check_vars.values():
-            var.set(True)
+            if getattr(var, "_enabled", True):
+                var.set(True)
 
     def clear_all_pipelines(self) -> None:
         for var in self.pipeline_check_vars.values():
-            var.set(False)
+            if getattr(var, "_enabled", True):
+                var.set(False)
 
     def open_file(self) -> None:
         path = filedialog.askopenfilename(
