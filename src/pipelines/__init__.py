@@ -30,21 +30,31 @@ class MissingPipeline(ProcessPipeline):
 
 def _module_docstring(module_name: str) -> str:
     spec = importlib.util.find_spec(module_name)
-    if not spec or not spec.origin or not spec.origin.endswith(".py"):
+    if not spec or not spec.origin:
         return ""
-    with open(spec.origin, "r", encoding="utf-8") as f:
-        source = f.read()
+    origin = spec.origin
+    # When frozen with PyInstaller, source files may not be present on disk (only .pyc).
+    if not origin.endswith((".py", ".pyw")):
+        return ""
+    try:
+        with open(origin, "r", encoding="utf-8") as f:
+            source = f.read()
+    except OSError:
+        return ""
     tree = ast.parse(source)
     return ast.get_docstring(tree) or ""
 
 
 def _parse_requires_from_source(module_name: str) -> List[str]:
     spec = importlib.util.find_spec(module_name)
-    if not spec or not spec.origin or not spec.origin.endswith(".py"):
+    if not spec or not spec.origin:
+        return []
+    origin = spec.origin
+    if not origin.endswith((".py", ".pyw")):
         return []
     try:
-        with open(spec.origin, "r", encoding="utf-8") as f:
-            tree = ast.parse(f.read(), filename=spec.origin)
+        with open(origin, "r", encoding="utf-8") as f:
+            tree = ast.parse(f.read(), filename=origin)
     except OSError:
         return []
     for node in tree.body:
