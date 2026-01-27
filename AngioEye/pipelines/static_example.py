@@ -3,13 +3,12 @@ import numpy as np
 from .core.base import ProcessPipeline, ProcessResult
 
 
-class StaticMatrixExamplePipeline(ProcessPipeline):
+class StaticExample(ProcessPipeline):
     """
     Minimal pipeline demonstrating scalar, vector, matrix, and 3D array outputs.
     Useful for validating HDF5 writing of non-scalar results.
     """
 
-    name = "Static matrix example"
     description = "Outputs fixed scalar, vector, matrix, and cube results."
 
     def run(self, _h5file) -> ProcessResult:

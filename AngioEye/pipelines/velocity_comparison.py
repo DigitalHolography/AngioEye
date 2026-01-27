@@ -4,8 +4,7 @@ import numpy as np
 from .core.base import ProcessPipeline, ProcessResult
 
 
-class VelocityComparisonPipeline(ProcessPipeline):
-    name = "Artery vs vein velocity"
+class VelocityComparison(ProcessPipeline):
     description = (
         "Mean of /Artery/CrossSections/velocity_whole_seg_mean and "
         "/Vein/CrossSections/velocity_trunc_seg_mean plus their ratio."

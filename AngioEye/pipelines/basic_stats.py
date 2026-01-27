@@ -6,8 +6,7 @@ import numpy as np
 from .core.base import ProcessPipeline, ProcessResult
 
 
-class BasicStatsPipeline(ProcessPipeline):
-    name = "Basic statistics (first dataset)"
+class BasicStats(ProcessPipeline):
     description = "Min / Max / Mean / Std over the first dataset found in the file."
 
     def _first_dataset(self, h5file: h5py.File) -> Optional[h5py.Dataset]:

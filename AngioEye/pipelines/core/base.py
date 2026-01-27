@@ -13,8 +13,12 @@ class ProcessResult:
 
 
 class ProcessPipeline:
-    name: str = "Pipeline"
     description: str = ""
+
+    def __init__(self) -> None:
+        # Derive the pipeline name from the module filename (e.g., basic_stats.py -> basic_stats).
+        module_name = (self.__class__.__module__ or "").rsplit(".", 1)[-1]
+        self.name: str = module_name or self.__class__.__name__
 
     def run(self, h5file: h5py.File) -> ProcessResult:
         raise NotImplementedError
