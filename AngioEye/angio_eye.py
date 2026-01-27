@@ -9,8 +9,55 @@ from typing import Dict, List, Optional, Sequence
 
 import h5py
 
+try:
+    import sv_ttk
+except ImportError:  #  optional dependency
+    sv_ttk = None
+
 from pipelines import ProcessPipeline, ProcessResult, load_all_pipelines
 from pipelines.core.utils import write_combined_results_h5, write_result_h5
+
+
+class _Tooltip:
+    """Lightweight tooltip that shows on hover."""
+
+    def __init__(
+        self, widget: tk.Widget, text: str, bg: str = "#333333", fg: str = "#f7f7f7"
+    ) -> None:
+        self.widget = widget
+        self.text = text
+        self.bg = bg
+        self.fg = fg
+        self.tipwindow: Optional[tk.Toplevel] = None
+        widget.bind("<Enter>", self._show)
+        widget.bind("<Leave>", self._hide)
+
+    def _show(self, _event=None) -> None:
+        if self.tipwindow or not self.text:
+            return
+        x = self.widget.winfo_rootx() + 24
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+        self.tipwindow = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        label = tk.Label(
+            tw,
+            text=self.text,
+            justify="left",
+            background=self.bg,
+            foreground=self.fg,
+            relief="solid",
+            borderwidth=1,
+            wraplength=360,
+            padx=8,
+            pady=6,
+        )
+        label.pack()
+
+    def _hide(self, _event=None) -> None:
+        if self.tipwindow:
+            self.tipwindow.destroy()
+            self.tipwindow = None
 
 
 class ProcessApp(tk.Tk):
@@ -28,10 +75,55 @@ class ProcessApp(tk.Tk):
         self.batch_input_var = tk.StringVar()
         self.batch_output_var = tk.StringVar(value=str(Path.cwd()))
 
+        self._apply_theme()
         self._build_ui()
         self._register_pipelines()
         self._show_placeholder()
         self._reset_batch_output()
+
+    def _apply_theme(self) -> None:
+        """
+        Apply the Sun Valley ttk theme when available; otherwise fall back to a simple dark palette.
+        """
+        style = ttk.Style(self)
+        if sv_ttk:
+            try:
+                sv_ttk.set_theme("dark")
+            except Exception:
+                pass
+
+        # Fallback palette aligned with Sun Valley dark.
+        fallback_bg = "#0f1116"
+        fallback_surface = "#1b1f27"
+        fallback_fg = "#e8eef5"
+        fallback_muted = "#9aa6b5"
+        fallback_accent = "#4f9dff"
+
+        # Derive colors from the active theme when possible to keep consistency.
+        bg = style.lookup("TFrame", "background") or fallback_bg
+        fg = style.lookup("TLabel", "foreground") or fallback_fg
+        surface = (
+            style.lookup("TEntry", "fieldbackground")
+            or style.lookup("TEntry", "background")
+            or fallback_surface
+        )
+        muted = (
+            style.lookup("TLabel", "foreground", state=("disabled",)) or fallback_muted
+        )
+        accent = (
+            style.lookup("TButton", "bordercolor")
+            or style.lookup("TNotebook", "foreground")
+            or fallback_accent
+        )
+
+        self.configure(bg=bg)
+        # set texts colors when created.
+        self._text_bg = surface
+        self._text_fg = fg
+        self._muted_fg = muted
+        self._bg_color = bg
+        self._surface_color = surface
+        self._accent_color = accent
 
     def _build_ui(self) -> None:
         notebook = ttk.Notebook(self)
@@ -72,7 +164,14 @@ class ProcessApp(tk.Tk):
         output_frame.grid(row=2, column=1, columnspan=2, sticky="nsew")
         output_frame.columnconfigure(0, weight=1)
         output_frame.rowconfigure(0, weight=1)
-        self.process_output = tk.Text(output_frame, height=18, state="disabled")
+        self.process_output = tk.Text(
+            output_frame,
+            height=18,
+            state="disabled",
+            bg=self._text_bg,
+            fg=self._text_fg,
+            insertbackground=self._text_fg,
+        )
         output_scroll = ttk.Scrollbar(
             output_frame, orient="vertical", command=self.process_output.yview
         )
@@ -146,7 +245,7 @@ class ProcessApp(tk.Tk):
         pipelines_container.rowconfigure(0, weight=1)
 
         self.pipeline_checks_canvas = tk.Canvas(
-            pipelines_container, highlightthickness=0, height=220
+            pipelines_container, highlightthickness=0, height=220, bg=self._bg_color
         )
         self.pipeline_checks_canvas.grid(row=0, column=0, sticky="nsew")
         pipeline_scroll = ttk.Scrollbar(
@@ -192,7 +291,14 @@ class ProcessApp(tk.Tk):
         batch_output_frame.grid(row=4, column=1, columnspan=2, sticky="nsew")
         batch_output_frame.columnconfigure(0, weight=1)
         batch_output_frame.rowconfigure(0, weight=1)
-        self.batch_output = tk.Text(batch_output_frame, height=18, state="disabled")
+        self.batch_output = tk.Text(
+            batch_output_frame,
+            height=18,
+            state="disabled",
+            bg=self._text_bg,
+            fg=self._text_fg,
+            insertbackground=self._text_fg,
+        )
         batch_output_scroll = ttk.Scrollbar(
             batch_output_frame, orient="vertical", command=self.batch_output.yview
         )
@@ -218,17 +324,14 @@ class ProcessApp(tk.Tk):
             check = ttk.Checkbutton(
                 self.pipeline_checks_inner, text=pipeline.name, variable=var
             )
-            check.grid(row=idx * 2, column=0, sticky="w", padx=(0, 8))
+            check.grid(row=idx, column=0, sticky="w", padx=(0, 8), pady=(0, 6))
             if pipeline.description:
-                desc = ttk.Label(
-                    self.pipeline_checks_inner,
-                    text=pipeline.description,
-                    wraplength=520,
-                    foreground="#555555",
-                    anchor="w",
-                    justify="left",
+                _Tooltip(
+                    check,
+                    pipeline.description,
+                    bg=self._surface_color,
+                    fg=self._text_fg,
                 )
-                desc.grid(row=idx * 2 + 1, column=0, sticky="w", pady=(0, 8))
             self.pipeline_check_vars[pipeline.name] = var
 
     def _show_placeholder(
