@@ -4,7 +4,7 @@ from typing import Optional, Sequence, Tuple, Union
 import h5py
 import numpy as np
 
-from .base import ProcessResult
+from .base import DatasetValue, ProcessResult
 
 
 def safe_h5_key(name: str) -> str:
@@ -53,18 +53,51 @@ def _write_value_dataset(group: h5py.Group, key: str, value) -> None:
     Falls back to a UTF-8 string representation when the value type
     is not directly supported by h5py.
     """
+    ds_attrs = None
+    data = value
+
+    # Support DatasetValue or tuple(value, attrs) for convenience.
+    if isinstance(value, DatasetValue):
+        data = value.data
+        ds_attrs = value.attrs
+    elif isinstance(value, tuple) and len(value) == 2 and isinstance(value[1], dict):
+        data, ds_attrs = value
+
+    if isinstance(data, str):
+        dataset = group.create_dataset(key, data=data, dtype=h5py.string_dtype(encoding="utf-8"))
+    else:
+        payload = data
+        if isinstance(data, (list, tuple)):
+            payload = np.asarray(data)
+        try:
+            dataset = group.create_dataset(key, data=payload)
+        except (TypeError, ValueError):
+            dataset = group.create_dataset(
+                key, data=str(data), dtype=h5py.string_dtype(encoding="utf-8")
+            )
+
+    if ds_attrs:
+        for attr_key, attr_val in ds_attrs.items():
+            _set_attr_safe(dataset, attr_key, attr_val)
+
+
+def _set_attr_safe(h5obj: Union[h5py.File, h5py.Group], key: str, value) -> None:
+    """
+    Set an attribute on a file or group, falling back to string when the type is unsupported.
+    """
     if isinstance(value, str):
-        group.create_dataset(key, data=value, dtype=h5py.string_dtype(encoding="utf-8"))
+        h5obj.attrs.create(key, value, dtype=h5py.string_dtype(encoding="utf-8"))
         return
     data = value
     if isinstance(value, (list, tuple)):
-        data = np.asarray(value)
+        if all(isinstance(v, str) for v in value):
+            data = np.asarray(value, dtype=h5py.string_dtype(encoding="utf-8"))
+        else:
+            data = np.asarray(value)
     try:
-        group.create_dataset(key, data=data)
+        h5obj.attrs[key] = data
     except (TypeError, ValueError):
-        group.create_dataset(
-            key, data=str(value), dtype=h5py.string_dtype(encoding="utf-8")
-        )
+        h5obj.attrs[key] = str(value)
 
 
 def write_result_h5(
@@ -90,9 +123,19 @@ def write_result_h5(
             f.attrs["pipeline"] = pipeline_name
         if source_file:
             f.attrs["source_file"] = source_file
+        if result.file_attrs:
+            for key, value in result.file_attrs.items():
+                if key in {"pipeline", "source_file"}:
+                    continue
+                _set_attr_safe(f, key, value)
         pipelines_grp = _ensure_pipelines_group(f)
         pipeline_grp = _create_unique_group(pipelines_grp, safe_h5_key(pipeline_name))
         pipeline_grp.attrs["pipeline"] = pipeline_name
+        if result.attrs:
+            for key, value in result.attrs.items():
+                if key == "pipeline":
+                    continue
+                _set_attr_safe(pipeline_grp, key, value)
         metrics_grp = pipeline_grp.create_group("metrics")
         for key, value in result.metrics.items():
             _write_value_dataset(metrics_grp, key, value)
@@ -123,6 +166,11 @@ def write_combined_results_h5(
         for pipeline_name, result in results:
             pipeline_grp = _create_unique_group(pipelines_grp, safe_h5_key(pipeline_name))
             pipeline_grp.attrs["pipeline"] = pipeline_name
+            if result.attrs:
+                for key, value in result.attrs.items():
+                    if key == "pipeline":
+                        continue
+                    _set_attr_safe(pipeline_grp, key, value)
             metrics_grp = pipeline_grp.create_group("metrics")
             for key, value in result.metrics.items():
                 _write_value_dataset(metrics_grp, key, value)
