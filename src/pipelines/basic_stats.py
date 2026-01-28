@@ -3,9 +3,10 @@ from typing import Optional
 import h5py
 import numpy as np
 
-from .core.base import ProcessPipeline, ProcessResult
+from .core.base import ProcessPipeline, ProcessResult, register_pipeline
 
 
+@register_pipeline(name="Basic Stats")
 class BasicStats(ProcessPipeline):
     description = "Min / Max / Mean / Std over the first dataset found in the file."
 
@@ -28,7 +29,13 @@ class BasicStats(ProcessPipeline):
         finite = data[np.isfinite(data)]
         arr = finite if finite.size > 0 else data
         if arr.size == 0:
-            metrics = {"count": 0, "min": float("nan"), "max": float("nan"), "mean": float("nan"), "std": float("nan")}
+            metrics = {
+                "count": 0,
+                "min": float("nan"),
+                "max": float("nan"),
+                "mean": float("nan"),
+                "std": float("nan"),
+            }
         else:
             metrics = {
                 "count": float(arr.size),

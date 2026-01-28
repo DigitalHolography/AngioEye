@@ -1,9 +1,10 @@
 import h5py
 import numpy as np
 
-from .core.base import ProcessPipeline, ProcessResult
+from .core.base import ProcessPipeline, ProcessResult, register_pipeline
 
 
+@register_pipeline(name="VelocityComparison")
 class VelocityComparison(ProcessPipeline):
     description = (
         "Mean of /Artery/CrossSections/velocity_whole_seg_mean and "
