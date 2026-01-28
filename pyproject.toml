@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools >= 77.0.3"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "AngioEye"
+version = "0.1.0"
+description = "Cohort-analysis engine for retinal Doppler holography"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "GPL-3.0-only" }
+
+dependencies = [
+    "numpy>=1.24",
+    "h5py>=3.9",
+    "sv-ttk>=2.6",
+]
