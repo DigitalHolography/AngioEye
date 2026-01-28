@@ -5,7 +5,7 @@ import inspect
 import pkgutil
 from typing import List, Tuple
 
-from .core.base import ProcessPipeline, ProcessResult
+from .core.base import ProcessPipeline, ProcessResult, PIPELINE_REGISTRY
 from .core.utils import write_combined_results_h5, write_result_h5
 
 
@@ -16,16 +16,26 @@ class MissingPipeline(ProcessPipeline):
     missing_deps: List[str]
     requires: List[str]
 
-    def __init__(self, name: str, description: str, missing_deps: List[str], requires: List[str]) -> None:
+    def __init__(
+        self,
+        name: str,
+        description: str,
+        missing_deps: List[str],
+        requires: List[str],
+    ) -> None:
         super().__init__()
         self.name = name
         self.description = description or "Pipeline unavailable (missing dependencies)."
         self.missing_deps = missing_deps
         self.requires = requires
 
-    def run(self, _h5file):
-        missing = ", ".join(self.missing_deps or self.requires or ["unknown dependency"])
-        raise ImportError(f"Pipeline '{self.name}' unavailable. Missing dependencies: {missing}")
+    def run(self, h5file):
+        missing = ", ".join(
+            self.missing_deps or self.requires or ["unknown dependency"]
+        )
+        raise ImportError(
+            f"Pipeline '{self.name}' unavailable. Missing dependencies: {missing}"
+        )
 
 
 def _module_docstring(module_name: str) -> str:
@@ -64,7 +74,9 @@ def _parse_requires_from_source(module_name: str) -> List[str]:
                     if isinstance(node.value, (ast.List, ast.Tuple)):
                         vals = []
                         for elt in node.value.elts:
-                            if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                            if isinstance(elt, ast.Constant) and isinstance(
+                                elt.value, str
+                            ):
                                 vals.append(elt.value)
                         return vals
     return []
@@ -97,49 +109,88 @@ def _discover_pipelines() -> Tuple[List[ProcessPipeline], List[MissingPipeline]]
     for module_info in pkgutil.iter_modules(__path__):
         if module_info.name in {"core"} or module_info.name.startswith("_"):
             continue
+
         module_name = f"{__name__}.{module_info.name}"
-        requires = _parse_requires_from_source(module_name)
-        doc = _module_docstring(module_name)
+
+        # requires = _parse_requires_from_source(module_name)
 
         # First, check for missing requirements before importing heavy modules.
-        pre_missing = _missing_requirements(requires)
-        if pre_missing:
-            missing.append(MissingPipeline(module_info.name, doc, pre_missing, requires))
-            continue
+        # pre_missing = _missing_requirements(requires)
+
+        # if pre_missing:
+        #     doc = _module_docstring(module_name)
+        #     missing.append(
+        #         MissingPipeline(module_info.name, doc, pre_missing, requires)
+        #     )
+        #     continue
 
         try:
             module = importlib.import_module(module_name)
-        except ImportError as exc:
-            # Capture missing dependency if ModuleNotFoundError has a name.
-            missing_deps = []
-            if isinstance(exc, ModuleNotFoundError) and exc.name and exc.name not in {module_name, module_info.name}:
-                missing_deps = [exc.name]
-            if not missing_deps:
-                missing_deps = requires
-            missing.append(MissingPipeline(module_info.name, doc, missing_deps, requires))
-            continue
+        except Exception as e:
+            # Fallback for unknown failures (SyntaxError, etc.)
+            missing.append(
+                MissingPipeline(
+                    module_info.name, f"Error: {e}", ["Unknown"], ["Unknown"]
+                )
+            )
 
-        module_requires = getattr(module, "REQUIRES", requires)
-        post_missing = _missing_requirements(module_requires)
-        if post_missing:
-            missing.append(MissingPipeline(module_info.name, doc, post_missing, module_requires))
-            continue
-        for _, cls in inspect.getmembers(module, inspect.isclass):
-            if not issubclass(cls, ProcessPipeline) or cls is ProcessPipeline:
-                continue
-            if cls.__module__ != module.__name__:
-                continue
-            if cls in seen_classes:
-                continue
-            seen_classes.add(cls)
-            try:
-                inst = cls()
-                inst.available = True  # type: ignore[attr-defined]
-                inst.requires = module_requires  # type: ignore[attr-defined]
-                available.append(inst)
-            except TypeError:
-                # Skip classes requiring constructor args.
-                continue
+    for cls in PIPELINE_REGISTRY:
+        if getattr(cls, "is_available", True):
+            inst = cls()
+            # The GUI needs thoses values
+            inst.name = cls.name
+            inst.available = True
+            inst.requires = cls.required_deps
+            available.append(inst)
+        else:
+            missing.append(
+                MissingPipeline(
+                    name=getattr(cls, "name", cls.__name__),
+                    description=getattr(cls, "description", ""),
+                    missing_deps=getattr(cls, "missing_deps", []),
+                    requires=getattr(cls, "required_deps", []),
+                )
+            )
+
+        # except ImportError as exc:
+        #     # Capture missing dependency if ModuleNotFoundError has a name.
+        #     missing_deps = []
+        #     if (
+        #         isinstance(exc, ModuleNotFoundError)
+        #         and exc.name
+        #         and exc.name not in {module_name, module_info.name}
+        #     ):
+        #         missing_deps = [exc.name]
+        #     if not missing_deps:
+        #         missing_deps = requires
+        #     missing.append(
+        #         MissingPipeline(module_info.name, doc, missing_deps, requires)
+        #     )
+        #     continue
+
+        # module_requires = getattr(module, "REQUIRES", requires)
+        # post_missing = _missing_requirements(module_requires)
+        # if post_missing:
+        #     missing.append(
+        #         MissingPipeline(module_info.name, doc, post_missing, module_requires)
+        #     )
+        #     continue
+        # for _, cls in inspect.getmembers(module, inspect.isclass):
+        #     if not issubclass(cls, ProcessPipeline) or cls is ProcessPipeline:
+        #         continue
+        #     if cls.__module__ != module.__name__:
+        #         continue
+        #     if cls in seen_classes:
+        #         continue
+        #     seen_classes.add(cls)
+        #     try:
+        #         inst = cls()
+        #         inst.available = True  # type: ignore[attr-defined]
+        #         inst.requires = module_requires  # type: ignore[attr-defined]
+        #         available.append(inst)
+        #     except TypeError:
+        #         # Skip classes requiring constructor args.
+        #         continue
 
     available.sort(key=lambda p: p.name.lower())
     missing.sort(key=lambda p: p.name.lower())

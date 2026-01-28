@@ -6,15 +6,18 @@ packages are installed, but it should appear in the UI as disabled with a toolti
 showing the missing deps.
 """
 
-REQUIRES = ["torch>=2.2", "pandas>=2.1"]
+# REQUIRES = ["torch>=2.2", "pandas>=2.1"]
 
-from .core.base import ProcessPipeline, ProcessResult
+from .core.base import ProcessPipeline, ProcessResult, register_pipeline
 
 
+@register_pipeline(
+    name="Dummy Heavy",
+    description="Demo pipeline that requires torch+pandas; computes a trivial metric.",
+    required_deps=["torch>=2.2", "pandas>=2.1"],
+)
 class DummyHeavy(ProcessPipeline):
-    description = "Demo pipeline that requires torch+pandas; computes a trivial metric."
-
-    def run(self, _h5file) -> ProcessResult:
+    def run(self, h5file) -> ProcessResult:
         import torch  # noqa: F401
         import pandas as pd  # noqa: F401
 

@@ -1,8 +1,41 @@
 import csv
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
+import importlib.util
 
 import h5py
+
+# Global Registry of all imports needed by the pipelines
+PIPELINE_REGISTRY = []
+
+
+# Decorator to register all neede pipelines
+def register_pipeline(name: str, description: str = "", required_deps: list[str] = []):
+    def decorator(cls):
+        # metadata for the class
+        cls.name = name
+        cls.description = description or getattr(cls, "description", "")
+        cls.required_deps = required_deps or []
+
+        # Check if requirements are missing in the current environment
+        missing = []
+        for req in cls.required_deps:
+            # TODO: We should maybe include the version check
+            # RM the version "torch>=2.0" -> "torch"
+            pkg = req.split(">=")[0].split("==")[0].strip()
+
+            if importlib.util.find_spec(pkg) is None:
+                missing.append(pkg)
+
+        cls.missing_deps = missing
+        cls.is_available = len(missing) == 0
+
+        # Add to registry
+        if cls not in PIPELINE_REGISTRY:
+            PIPELINE_REGISTRY.append(cls)
+        return cls
+
+    return decorator
 
 
 @dataclass
