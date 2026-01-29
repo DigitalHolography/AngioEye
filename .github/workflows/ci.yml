@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - dev
   pull_request:
     branches:
       - main
@@ -24,7 +23,7 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          pip install .[dev,pipelines]
+          pip install .[dev]
 
       - name: Run Ruff (Lint & Format)
         run: |
