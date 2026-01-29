@@ -1,4 +1,5 @@
 import os
+import shutil
 import tempfile
 import zipfile
 from datetime import datetime
@@ -78,6 +79,8 @@ class ProcessApp(tk.Tk):
         self.last_output_dir: Optional[Path] = None
         self.batch_input_var = tk.StringVar()
         self.batch_output_var = tk.StringVar(value=str(Path.cwd()))
+        self.batch_zip_var = tk.BooleanVar(value=False)
+        self.batch_zip_name_var = tk.StringVar(value="outputs.zip")
 
         self._apply_theme()
         self._build_ui()
@@ -193,22 +196,11 @@ class ProcessApp(tk.Tk):
             row=0, column=2, sticky="w"
         )
 
-        ttk.Label(export_frame, text="Export CSV").grid(
-            row=1, column=0, sticky="w", pady=(6, 0)
-        )
-        self.export_path_var = tk.StringVar(value="process_result.csv")
-        export_entry = ttk.Entry(export_frame, textvariable=self.export_path_var)
-        export_entry.grid(row=1, column=1, sticky="ew", padx=4, pady=(6, 0))
-        ttk.Button(export_frame, text="Browse", command=self.choose_export_path).grid(
-            row=1, column=2, sticky="w", pady=(6, 0)
-        )
-        ttk.Button(
-            export_frame, text="Export", command=self.export_process_result
-        ).grid(row=1, column=3, sticky="w", padx=6, pady=(6, 0))
-
     def _build_batch_tab(self, parent: ttk.Frame) -> None:
         parent.columnconfigure(1, weight=1)
-        parent.rowconfigure(4, weight=1)
+        parent.columnconfigure(2, weight=0)
+        parent.columnconfigure(3, weight=0)
+        parent.rowconfigure(5, weight=1)
 
         ttk.Label(parent, text="Input (folder / .h5 / .hdf5 / .zip)").grid(
             row=0, column=0, sticky="w"
@@ -287,12 +279,31 @@ class ProcessApp(tk.Tk):
 
         run_btn = ttk.Button(parent, text="Run batch", command=self.run_batch)
         run_btn.grid(row=3, column=0, sticky="w", pady=(10, 4))
+        ttk.Checkbutton(
+            parent,
+            text="Zip outputs after run",
+            variable=self.batch_zip_var,
+            command=self._toggle_zip_name_visibility,
+        ).grid(row=3, column=1, sticky="w", pady=(10, 4))
+
+        # Archive name placed on its own row to avoid resizing the log/list area.
+        self.batch_zip_label = ttk.Label(parent, text="Archive name")
+        self.batch_zip_label.grid(
+            row=4, column=0, sticky="w", pady=(2, 8), padx=(0, 4)
+        )
+        self.batch_zip_entry = ttk.Entry(
+            parent, textvariable=self.batch_zip_name_var, width=28
+        )
+        self.batch_zip_entry.grid(
+            row=4, column=1, columnspan=3, sticky="w", pady=(2, 8)
+        )
+        self._toggle_zip_name_visibility()
 
         ttk.Label(parent, text="Batch log").grid(
-            row=4, column=0, sticky="nw", pady=(8, 2)
+            row=5, column=0, sticky="nw", pady=(8, 2)
         )
         batch_output_frame = ttk.Frame(parent)
-        batch_output_frame.grid(row=4, column=1, columnspan=2, sticky="nsew")
+        batch_output_frame.grid(row=5, column=1, columnspan=3, sticky="nsew")
         batch_output_frame.columnconfigure(0, weight=1)
         batch_output_frame.rowconfigure(0, weight=1)
         self.batch_output = tk.Text(
@@ -432,7 +443,6 @@ class ProcessApp(tk.Tk):
             self._write_result_h5(result, output_path, pipeline_name=name)
             result.output_h5_path = output_path
             self.last_output_dir = output_dir
-            self._update_export_default(output_dir)
         except Exception as exc:  # noqa: BLE001
             messagebox.showerror("Output error", f"Cannot write outputs: {exc}")
             return
@@ -486,19 +496,6 @@ class ProcessApp(tk.Tk):
         if path:
             self.batch_output_var.set(path)
 
-    def choose_export_path(self) -> None:
-        initial_dir = self.last_output_dir or Path(
-            self.output_dir_var.get() or Path.cwd()
-        )
-        path = filedialog.asksaveasfilename(
-            defaultextension=".csv",
-            filetypes=[("CSV", "*.csv"), ("All files", "*.*")],
-            initialdir=str(initial_dir),
-            initialfile=Path(self.export_path_var.get()).name,
-        )
-        if path:
-            self.export_path_var.set(Path(path).name)
-
     def choose_output_dir(self) -> None:
         path = filedialog.askdirectory(
             initialdir=self.output_dir_var.get() or None,
@@ -506,31 +503,6 @@ class ProcessApp(tk.Tk):
         )
         if path:
             self.output_dir_var.set(path)
-
-    def export_process_result(self) -> None:
-        if self.last_process_result is None or self.last_process_pipeline is None:
-            messagebox.showwarning("No result", "Run a pipeline before exporting.")
-            return
-        if self.last_output_dir is None:
-            try:
-                self.last_output_dir = self._prepare_output_dir()
-            except Exception as exc:  # noqa: BLE001
-                messagebox.showerror(
-                    "Export failed", f"Cannot prepare output folder: {exc}"
-                )
-                return
-        export_name = Path(self.export_path_var.get() or "process_result.csv").name
-        final_path = self.last_output_dir / export_name
-        self.last_output_dir.mkdir(parents=True, exist_ok=True)
-        try:
-            final_path_str = self.last_process_pipeline.export(
-                self.last_process_result, str(final_path)
-            )
-        except Exception as exc:  # noqa: BLE001
-            messagebox.showerror("Export failed", f"Cannot export: {exc}")
-            return
-        self.export_path_var.set(final_path_str)
-        messagebox.showinfo("Export done", f"Result exported to: {final_path_str}")
 
     def run_batch(self) -> None:
         data_value = (self.batch_input_var.get() or "").strip()
@@ -565,17 +537,19 @@ class ProcessApp(tk.Tk):
             )
             return
 
-        output_dir_value = (self.batch_output_var.get() or "").strip()
-        output_dir = (
-            Path(output_dir_value).expanduser() if output_dir_value else Path.cwd()
+        base_output_value = (self.batch_output_var.get() or "").strip()
+        base_output_dir = (
+            Path(base_output_value).expanduser() if base_output_value else Path.cwd()
         )
-        if not output_dir.is_absolute():
-            output_dir = Path.cwd() / output_dir
-        output_dir.mkdir(parents=True, exist_ok=True)
+        if not base_output_dir.is_absolute():
+            base_output_dir = Path.cwd() / base_output_dir
+        base_output_dir.mkdir(parents=True, exist_ok=True)
 
         self._reset_batch_output("Starting batch run...\n")
 
         tempdir: Optional[tempfile.TemporaryDirectory] = None
+        temp_output_dir: Optional[tempfile.TemporaryDirectory] = None
+        clean_temp_output = False
         try:
             data_root, tempdir = self._prepare_data_root(data_path)
             inputs = self._find_h5_inputs(data_root)
@@ -586,6 +560,11 @@ class ProcessApp(tk.Tk):
                 tempdir.cleanup()
             return
 
+        output_dir = base_output_dir
+        if self.batch_zip_var.get():
+            temp_output_dir = tempfile.TemporaryDirectory(dir=base_output_dir)
+            output_dir = Path(temp_output_dir.name)
+
         failures: List[str] = []
         for h5_path in inputs:
             try:
@@ -594,19 +573,50 @@ class ProcessApp(tk.Tk):
                 failures.append(f"{h5_path}: {exc}")
                 self._log_batch(f"[FAIL] {h5_path.name}: {exc}")
 
-        self._log_batch(f"Completed. Outputs stored under: {output_dir}")
+        summary_msg: str
+        if self.batch_zip_var.get():
+            try:
+                zip_name = self.batch_zip_name_var.get().strip() or "outputs.zip"
+                if not zip_name.lower().endswith(".zip"):
+                    zip_name += ".zip"
+                zip_path = self._zip_output_dir(
+                    output_dir, target_path=base_output_dir / zip_name
+                )
+                self._log_batch(f"[ZIP] Archive created: {zip_path}")
+                summary_msg = f"ZIP archive: {zip_path}"
+                # Mark for cleanup so only the archive remains
+                clean_temp_output = True
+            except Exception as exc:  # noqa: BLE001
+                self._log_batch(f"[ZIP FAIL] {exc}")
+                messagebox.showerror(
+                    "Zip failed", f"Could not create ZIP archive: {exc}"
+                )
+                summary_msg = f"Outputs stored under: {output_dir}"
+        else:
+            summary_msg = f"Outputs stored under: {output_dir}"
+
+        self._log_batch(f"Completed. {summary_msg}")
+
         if failures:
             messagebox.showwarning(
                 "Batch completed with errors",
-                f"{len(failures)} failure(s). See log for details.",
+                f"{len(failures)} failure(s). See log for details.\n\n{summary_msg}",
             )
         else:
-            messagebox.showinfo(
-                "Batch completed", f"Outputs stored under: {output_dir}"
-            )
+            messagebox.showinfo("Batch completed", summary_msg)
 
+        if clean_temp_output and temp_output_dir is not None:
+            temp_output_dir.cleanup()
         if tempdir is not None:
             tempdir.cleanup()
+
+    def _toggle_zip_name_visibility(self) -> None:
+        if self.batch_zip_var.get():
+            self.batch_zip_label.grid()
+            self.batch_zip_entry.grid()
+        else:
+            self.batch_zip_label.grid_remove()
+            self.batch_zip_entry.grid_remove()
 
     def _prepare_data_root(
         self, data_path: Path
@@ -648,9 +658,6 @@ class ProcessApp(tk.Tk):
             for pipeline in pipelines:
                 result = pipeline.run(h5file)
                 pipeline_results.append((pipeline.name, result))
-                suffix = self._safe_pipeline_suffix(pipeline.name)
-                csv_out = data_dir / f"{h5_path.stem}_{suffix}_metrics.csv"
-                pipeline.export(result, str(csv_out))
                 self._log_batch(f"[OK] {h5_path.name} -> {pipeline.name}")
         write_combined_results_h5(
             pipeline_results, combined_h5_out, source_file=str(h5_path)
@@ -686,9 +693,22 @@ class ProcessApp(tk.Tk):
         )
         return str(output_dir / f"{base}_{safe_name}_result.h5")
 
-    def _update_export_default(self, output_dir: Path) -> None:
-        export_name = Path(self.export_path_var.get() or "process_result.csv").name
-        self.export_path_var.set(str(output_dir / export_name))
+    def _zip_output_dir(self, folder: Path, target_path: Optional[Path] = None) -> Path:
+        folder = folder.expanduser().resolve()
+        if not folder.exists() or not folder.is_dir():
+            raise FileNotFoundError(f"Output folder does not exist: {folder}")
+        if target_path is None:
+            zip_name = f"{folder.name}_outputs.zip" if folder.name else "outputs.zip"
+            zip_path = folder.parent / zip_name
+        else:
+            zip_path = target_path.expanduser().resolve()
+        if zip_path.exists():
+            zip_path.unlink()
+        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for file_path in folder.rglob("*"):
+                if file_path.is_file():
+                    zf.write(file_path, file_path.relative_to(folder))
+        return zip_path
 
     def _write_result_h5(
         self, result: ProcessResult, path: str, pipeline_name: str
