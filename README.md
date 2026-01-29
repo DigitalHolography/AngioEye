@@ -42,6 +42,15 @@ pip install -e .
 pip install -e .[pipelines]
 ```
 
+4. **Install dev-specific dependencies** (optional)
+
+```sh
+pip install -e .[dev]
+```
+
+> [!TIP]
+> You can install all depencies in one go with `pip install -e .[dev,pipelines]`
+
 ---
 
 ## Usage
