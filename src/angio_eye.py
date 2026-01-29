@@ -338,7 +338,9 @@ class ProcessApp(tk.Tk):
             )
             check.grid(row=idx, column=0, sticky="w", padx=(0, 8), pady=(0, 6))
             tip_text = pipeline.description or ""
-            missing_deps = getattr(pipeline, "missing_deps", []) or getattr(pipeline, "requires", [])
+            missing_deps = getattr(pipeline, "missing_deps", []) or getattr(
+                pipeline, "requires", []
+            )
             if missing_deps:
                 tip_suffix = f"\nInstall: {', '.join(missing_deps)}"
                 tip_text = (tip_text + tip_suffix) if tip_text else tip_suffix
@@ -701,6 +703,10 @@ class ProcessApp(tk.Tk):
         )
 
 
-if __name__ == "__main__":
+def main():
     app = ProcessApp()
     app.mainloop()
+
+
+if __name__ == "__main__":
+    main()
