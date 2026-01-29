@@ -49,7 +49,7 @@ pip install -e .[dev]
 ```
 
 > [!TIP]
-> You can install all depencies in one go with
+> You can install all dependencies in one go with
 >
 > ```sh
 > pip install -e .[dev,pipelines]
