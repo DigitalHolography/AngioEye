@@ -28,6 +28,8 @@ dev = ["ruff", "pyinstaller"]
 angioeye = "angio_eye:main"
 angioeye-cli = "cli:main"
 
+lint-tool = "scripts.ruff_linter:main"
+
 [tool.setuptools]
 package-dir = { "" = "src" }
 py-modules = ["angio_eye", "cli"]
