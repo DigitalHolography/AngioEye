@@ -108,10 +108,14 @@ To see more complete examples, check out `src/pipelines/basic_stats.py` and `src
 ```python
 from pipelines import ProcessPipeline, ProcessResult
 
+@registerPipeline(
+    name="My Analysis",
+    description="Calculates a custom clinical metric.",
+    required_deps=["torch>=2.2"],
+)
 class MyAnalysis(ProcessPipeline):
-    description = "Calculates a custom clinical metric."
-
     def run(self, h5file):
+        import torch
         # 1. Read data using h5py
         # 2. Perform calculations
         # 3. Return metrics and artifacts
