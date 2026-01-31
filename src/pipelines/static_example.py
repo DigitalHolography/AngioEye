@@ -24,7 +24,12 @@ class StaticExample(ProcessPipeline):
             # Attach dataset-level attributes (min/max/name/unit) using with_attrs.
             "matrix_example": with_attrs(
                 [[1, 2], [3, 4]],
-                {"minimum": [1], "maximum": [4], "nameID": ["matrix_example"], "unit": ["a.u."]},
+                {
+                    "minimum": [1],
+                    "maximum": [4],
+                    "nameID": ["matrix_example"],
+                    "unit": ["a.u."],
+                },
             ),
             "cube_example": with_attrs(
                 np.arange(8).reshape(2, 2, 2),
@@ -39,4 +44,6 @@ class StaticExample(ProcessPipeline):
         attrs = {"pipeline_version": "1.0", "author": "StaticExample"}
         file_attrs = {"example_generated": True}
 
-        return ProcessResult(metrics=metrics, artifacts=artifacts, attrs=attrs, file_attrs=file_attrs)
+        return ProcessResult(
+            metrics=metrics, artifacts=artifacts, attrs=attrs, file_attrs=file_attrs
+        )
