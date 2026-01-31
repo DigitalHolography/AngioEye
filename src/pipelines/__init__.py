@@ -3,7 +3,6 @@ import importlib
 import importlib.util
 import inspect
 import pkgutil
-from typing import List, Tuple
 
 from .core.base import ProcessPipeline, ProcessResult, PIPELINE_REGISTRY
 from .core.utils import write_combined_results_h5, write_result_h5
@@ -13,15 +12,11 @@ class MissingPipeline(ProcessPipeline):
     """Placeholder for pipelines whose dependencies are missing."""
 
     available = False
-    missing_deps: List[str]
-    requires: List[str]
+    missing_deps: list[str]
+    requires: list[str]
 
     def __init__(
-        self,
-        name: str,
-        description: str,
-        missing_deps: List[str],
-        requires: List[str],
+        self, name: str, description: str, missing_deps: list[str], requires: list[str]
     ) -> None:
         super().__init__()
         self.name = name
@@ -47,7 +42,7 @@ def _module_docstring(module_name: str) -> str:
     if not origin.endswith((".py", ".pyw")):
         return ""
     try:
-        with open(origin, "r", encoding="utf-8") as f:
+        with open(origin, encoding="utf-8") as f:
             source = f.read()
     except OSError:
         return ""
@@ -55,7 +50,7 @@ def _module_docstring(module_name: str) -> str:
     return ast.get_docstring(tree) or ""
 
 
-def _parse_requires_from_source(module_name: str) -> List[str]:
+def _parse_requires_from_source(module_name: str) -> list[str]:
     spec = importlib.util.find_spec(module_name)
     if not spec or not spec.origin:
         return []
@@ -63,7 +58,7 @@ def _parse_requires_from_source(module_name: str) -> List[str]:
     if not origin.endswith((".py", ".pyw")):
         return []
     try:
-        with open(origin, "r", encoding="utf-8") as f:
+        with open(origin, encoding="utf-8") as f:
             tree = ast.parse(f.read(), filename=origin)
     except OSError:
         return []
@@ -90,8 +85,8 @@ def _normalize_req_name(req: str) -> str:
     return req
 
 
-def _missing_requirements(requires: List[str]) -> List[str]:
-    missing: List[str] = []
+def _missing_requirements(requires: list[str]) -> list[str]:
+    missing: list[str] = []
     for req in requires:
         pkg = _normalize_req_name(req).strip()
         if not pkg:
@@ -101,9 +96,9 @@ def _missing_requirements(requires: List[str]) -> List[str]:
     return missing
 
 
-def _discover_pipelines() -> Tuple[List[ProcessPipeline], List[MissingPipeline]]:
-    available: List[ProcessPipeline] = []
-    missing: List[MissingPipeline] = []
+def _discover_pipelines() -> tuple[list[ProcessPipeline], list[MissingPipeline]]:
+    available: list[ProcessPipeline] = []
+    missing: list[MissingPipeline] = []
     seen_classes = set()
 
     for module_info in pkgutil.iter_modules(__path__):
@@ -197,7 +192,7 @@ def _discover_pipelines() -> Tuple[List[ProcessPipeline], List[MissingPipeline]]
     return available, missing
 
 
-def load_all_pipelines(include_missing: bool = False) -> List[ProcessPipeline]:
+def load_all_pipelines(include_missing: bool = False) -> list[ProcessPipeline]:
     """
     Discover and instantiate pipelines. Optionally include placeholders for missing deps.
     """
@@ -205,7 +200,7 @@ def load_all_pipelines(include_missing: bool = False) -> List[ProcessPipeline]:
     return available + missing if include_missing else available
 
 
-def load_pipeline_catalog() -> Tuple[List[ProcessPipeline], List[MissingPipeline]]:
+def load_pipeline_catalog() -> tuple[list[ProcessPipeline], list[MissingPipeline]]:
     """Return (available, missing) pipelines for UI/CLI surfaces."""
     return _discover_pipelines()
 

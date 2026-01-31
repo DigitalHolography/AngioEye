@@ -9,18 +9,16 @@ AngioEye is the cohort-analysis engine for retinal Doppler holography. It browse
 ### Prerequisites
 
 - Python 3.10 or higher.
-
-### Manual Setup / Dev
+- It is highly recommended to use a virtual environment.
 
 This project uses a `pyproject.toml` to describe all requirements needed. To start using it, **it is better to use a Python virtual environment (venv)**.
-
-1. **Create a python virtual environment**
 
 ```sh
 # Creates the venv
 python -m venv .venv
 
 # To enter the venv
+# If you are using Windows PowerShell, you might need to activate the "Exceution" policy
 ./.venv/Scripts/activate
 ```
 
@@ -30,29 +28,39 @@ You can easily exit it with the command
 deactivate
 ```
 
-2. **Install the core dependencies**
+### 1. Basic Installation (User)
 
 ```sh
 pip install -e .
+
+# Installs pipeline-specific dependencies (optional)
+pip install -e ".[pipelines]"
 ```
 
-3. **Install pipeline-specific dependencies** (optional)
+### 2. Development Setup (Contributor)
 
 ```sh
-pip install -e .[pipelines]
+# Install all dependencies including dev tools (ruff, pre-commit, pyinstaller)
+pip install -e ".[dev,pipelines]"
+
+# Initialize pre-commit hooks (optionnal)
+pre-commit install
 ```
 
-4. **Install dev-specific dependencies** (optional)
-
-```sh
-pip install -e .[dev]
-```
+> [!NOTE]
+> The pre-commit is really usefull to run automatic checks before pushing code, reducing chances of ugly code being pushed.
+>
+> If a pre-commit hook fails, it will try to fix all needed files, **so you will need to add them again before recreating the commit**.
 
 > [!TIP]
-> You can install all dependencies in one go with
+> You can run the linter easily, once the `dev` dependencies are installed, with the command:
 >
 > ```sh
-> pip install -e .[dev,pipelines]
+> # To only run the checks
+> lint-tool
+>
+> # To let the linter try to fix as much as possible
+> lint-tool --fix
 > ```
 
 ---
@@ -60,6 +68,10 @@ pip install -e .[dev]
 ## Usage
 
 Launch the main application to process files interactively:
+
+### GUI
+
+The GUI is best for interactive analysis and exploring individual HDF5 files.
 
 ```sh
 # Via the entry point
@@ -69,7 +81,9 @@ angioeye
 python src/angio_eye.py
 ```
 
-A CLI version also exists
+### CLI
+
+The CLI is designed for batch processing in headless environments or clusters.
 
 ```sh
 # Via the entry point

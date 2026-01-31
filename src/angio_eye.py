@@ -1,12 +1,11 @@
 import os
-import shutil
 import tempfile
+import tkinter as tk
 import zipfile
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
-import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
-from typing import Dict, List, Optional, Sequence
 
 import h5py
 
@@ -33,7 +32,7 @@ class _Tooltip:
         self.text = text
         self.bg = bg
         self.fg = fg
-        self.tipwindow: Optional[tk.Toplevel] = None
+        self.tipwindow: tk.Toplevel | None = None
         widget.bind("<Enter>", self._show)
         widget.bind("<Leave>", self._hide)
 
@@ -70,13 +69,13 @@ class ProcessApp(tk.Tk):
         super().__init__()
         self.title("HDF5 Process")
         self.geometry("800x600")
-        self.h5_file: Optional[h5py.File] = None
-        self.pipeline_registry: Dict[str, ProcessPipeline] = {}
-        self.pipeline_check_vars: Dict[str, tk.BooleanVar] = {}
-        self.last_process_result: Optional[ProcessResult] = None
-        self.last_process_pipeline: Optional[ProcessPipeline] = None
+        self.h5_file: h5py.File | None = None
+        self.pipeline_registry: dict[str, ProcessPipeline] = {}
+        self.pipeline_check_vars: dict[str, tk.BooleanVar] = {}
+        self.last_process_result: ProcessResult | None = None
+        self.last_process_pipeline: ProcessPipeline | None = None
         self.output_dir_var = tk.StringVar(value=str(Path.cwd()))
-        self.last_output_dir: Optional[Path] = None
+        self.last_output_dir: Path | None = None
         self.batch_input_var = tk.StringVar()
         self.batch_output_var = tk.StringVar(value=str(Path.cwd()))
         self.batch_zip_var = tk.BooleanVar(value=False)
@@ -288,9 +287,7 @@ class ProcessApp(tk.Tk):
 
         # Archive name placed on its own row to avoid resizing the log/list area.
         self.batch_zip_label = ttk.Label(parent, text="Archive name")
-        self.batch_zip_label.grid(
-            row=4, column=0, sticky="w", pady=(2, 8), padx=(0, 4)
-        )
+        self.batch_zip_label.grid(row=4, column=0, sticky="w", pady=(2, 8), padx=(0, 4))
         self.batch_zip_entry = ttk.Entry(
             parent, textvariable=self.batch_zip_name_var, width=28
         )
@@ -332,12 +329,12 @@ class ProcessApp(tk.Tk):
         self._populate_pipeline_checks(available, missing)
 
     def _populate_pipeline_checks(
-        self, available: List[ProcessPipeline], missing: List[ProcessPipeline]
+        self, available: list[ProcessPipeline], missing: list[ProcessPipeline]
     ) -> None:
         for child in self.pipeline_checks_inner.winfo_children():
             child.destroy()
         self.pipeline_check_vars = {}
-        rows: List[ProcessPipeline] = [*available, *missing]
+        rows: list[ProcessPipeline] = [*available, *missing]
         for idx, pipeline in enumerate(rows):
             is_available = getattr(pipeline, "available", True)
             var = tk.BooleanVar(value=is_available)
@@ -525,8 +522,8 @@ class ProcessApp(tk.Tk):
             )
             return
 
-        pipelines: List[ProcessPipeline] = []
-        missing: List[str] = []
+        pipelines: list[ProcessPipeline] = []
+        missing: list[str] = []
         for name in selected_names:
             pipeline = self.pipeline_registry.get(name)
             if pipeline is None:
@@ -549,8 +546,8 @@ class ProcessApp(tk.Tk):
 
         self._reset_batch_output("Starting batch run...\n")
 
-        tempdir: Optional[tempfile.TemporaryDirectory] = None
-        temp_output_dir: Optional[tempfile.TemporaryDirectory] = None
+        tempdir: tempfile.TemporaryDirectory | None = None
+        temp_output_dir: tempfile.TemporaryDirectory | None = None
         clean_temp_output = False
         try:
             data_root, tempdir = self._prepare_data_root(data_path)
@@ -567,7 +564,7 @@ class ProcessApp(tk.Tk):
             temp_output_dir = tempfile.TemporaryDirectory(dir=base_output_dir)
             output_dir = Path(temp_output_dir.name)
 
-        failures: List[str] = []
+        failures: list[str] = []
         for h5_path in inputs:
             try:
                 self._run_pipelines_on_file(h5_path, pipelines, output_dir)
@@ -622,7 +619,7 @@ class ProcessApp(tk.Tk):
 
     def _prepare_data_root(
         self, data_path: Path
-    ) -> tuple[Path, Optional[tempfile.TemporaryDirectory]]:
+    ) -> tuple[Path, tempfile.TemporaryDirectory | None]:
         if data_path.is_file() and data_path.suffix.lower() == ".zip":
             tempdir = tempfile.TemporaryDirectory()
             with zipfile.ZipFile(data_path, "r") as zf:
@@ -630,7 +627,7 @@ class ProcessApp(tk.Tk):
             return Path(tempdir.name), tempdir
         return data_path, None
 
-    def _find_h5_inputs(self, path: Path) -> List[Path]:
+    def _find_h5_inputs(self, path: Path) -> list[Path]:
         if path.is_file():
             if path.suffix.lower() in {".h5", ".hdf5"}:
                 return [path]
@@ -655,7 +652,7 @@ class ProcessApp(tk.Tk):
         data_dir = output_root / h5_path.stem
         data_dir.mkdir(parents=True, exist_ok=True)
         combined_h5_out = data_dir / f"{h5_path.stem}_pipelines_result.h5"
-        pipeline_results: List[tuple[str, ProcessResult]] = []
+        pipeline_results: list[tuple[str, ProcessResult]] = []
         with h5py.File(h5_path, "r") as h5file:
             for pipeline in pipelines:
                 result = pipeline.run(h5file)
@@ -695,7 +692,7 @@ class ProcessApp(tk.Tk):
         )
         return str(output_dir / f"{base}_{safe_name}_result.h5")
 
-    def _zip_output_dir(self, folder: Path, target_path: Optional[Path] = None) -> Path:
+    def _zip_output_dir(self, folder: Path, target_path: Path | None = None) -> Path:
         folder = folder.expanduser().resolve()
         if not folder.exists() or not folder.is_dir():
             raise FileNotFoundError(f"Output folder does not exist: {folder}")

@@ -1,5 +1,3 @@
-from typing import Optional
-
 import h5py
 import numpy as np
 
@@ -10,8 +8,8 @@ from .core.base import ProcessPipeline, ProcessResult, register_pipeline
 class BasicStats(ProcessPipeline):
     description = "Min / Max / Mean / Std over the first dataset found in the file."
 
-    def _first_dataset(self, h5file: h5py.File) -> Optional[h5py.Dataset]:
-        found: Optional[h5py.Dataset] = None
+    def _first_dataset(self, h5file: h5py.File) -> h5py.Dataset | None:
+        found: h5py.Dataset | None = None
 
         def visitor(_name: str, obj: h5py.Dataset) -> None:
             nonlocal found

@@ -11,15 +11,16 @@ Inputs:
     --zip / -z         When set, compress the outputs into a .zip archive after completion.
     --zip-name         Optional filename for the archive (default: outputs.zip).
 """
+
 from __future__ import annotations
 
 import argparse
-import sys
 import shutil
-from pathlib import Path
+import sys
 import tempfile
 import zipfile
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from collections.abc import Iterable, Sequence
+from pathlib import Path
 
 import h5py
 
@@ -27,15 +28,17 @@ from pipelines import ProcessPipeline, ProcessResult, load_all_pipelines
 from pipelines.core.utils import write_combined_results_h5
 
 
-def _build_pipeline_registry() -> Dict[str, ProcessPipeline]:
+def _build_pipeline_registry() -> dict[str, ProcessPipeline]:
     pipelines = load_all_pipelines()
     return {p.name: p for p in pipelines}
 
 
-def _load_pipeline_list(path: Path, registry: Dict[str, ProcessPipeline]) -> List[ProcessPipeline]:
+def _load_pipeline_list(
+    path: Path, registry: dict[str, ProcessPipeline]
+) -> list[ProcessPipeline]:
     raw_lines = path.read_text(encoding="utf-8").splitlines()
-    selected: List[ProcessPipeline] = []
-    missing: List[str] = []
+    selected: list[ProcessPipeline] = []
+    missing: list[str] = []
     for line in raw_lines:
         name = line.strip()
         if not name or name.startswith("#"):
@@ -47,13 +50,17 @@ def _load_pipeline_list(path: Path, registry: Dict[str, ProcessPipeline]) -> Lis
             selected.append(pipeline)
     if missing:
         available = ", ".join(registry.keys())
-        raise ValueError(f"Unknown pipeline(s): {', '.join(missing)}. Available: {available}")
+        raise ValueError(
+            f"Unknown pipeline(s): {', '.join(missing)}. Available: {available}"
+        )
     if not selected:
-        raise ValueError("No pipelines selected (file is empty or only contains comments).")
+        raise ValueError(
+            "No pipelines selected (file is empty or only contains comments)."
+        )
     return selected
 
 
-def _find_h5_inputs(path: Path) -> List[Path]:
+def _find_h5_inputs(path: Path) -> list[Path]:
     if path.is_file():
         if path.suffix.lower() in {".h5", ".hdf5"}:
             return [path]
@@ -71,7 +78,9 @@ def _safe_pipeline_suffix(name: str) -> str:
     return cleaned.strip("_") or "pipeline"
 
 
-def _prepare_data_root(data_path: Path) -> Tuple[Path, Optional[tempfile.TemporaryDirectory]]:
+def _prepare_data_root(
+    data_path: Path,
+) -> tuple[Path, tempfile.TemporaryDirectory | None]:
     """Return a directory containing HDF5 files; extract zip archives when needed."""
     if data_path.is_file() and data_path.suffix.lower() == ".zip":
         tempdir = tempfile.TemporaryDirectory()
@@ -85,18 +94,20 @@ def _run_pipelines_on_file(
     h5_path: Path,
     pipelines: Sequence[ProcessPipeline],
     output_root: Path,
-) -> List[Path]:
-    outputs: List[Path] = []
+) -> list[Path]:
+    outputs: list[Path] = []
     data_dir = output_root / h5_path.stem
     data_dir.mkdir(parents=True, exist_ok=True)
     combined_h5_out = data_dir / f"{h5_path.stem}_pipelines_result.h5"
-    pipeline_results: List[Tuple[str, ProcessResult]] = []
+    pipeline_results: list[tuple[str, ProcessResult]] = []
     with h5py.File(h5_path, "r") as h5file:
         for pipeline in pipelines:
             result = pipeline.run(h5file)
             pipeline_results.append((pipeline.name, result))
             print(f"[OK] {h5_path.name} -> {pipeline.name}")
-    write_combined_results_h5(pipeline_results, combined_h5_out, source_file=str(h5_path))
+    write_combined_results_h5(
+        pipeline_results, combined_h5_out, source_file=str(h5_path)
+    )
     for _, result in pipeline_results:
         result.output_h5_path = str(combined_h5_out)
     outputs.append(combined_h5_out)
@@ -104,7 +115,7 @@ def _run_pipelines_on_file(
     return outputs
 
 
-def _zip_output_dir(folder: Path, target_path: Optional[Path] = None) -> Path:
+def _zip_output_dir(folder: Path, target_path: Path | None = None) -> Path:
     folder = folder.expanduser().resolve()
     if not folder.exists() or not folder.is_dir():
         raise FileNotFoundError(f"Output folder does not exist: {folder}")
@@ -127,12 +138,12 @@ def run_cli(
     pipelines_file: Path,
     output_dir: Path,
     zip_outputs: bool = False,
-    zip_name: Optional[str] = None,
+    zip_name: str | None = None,
 ) -> int:
     registry = _build_pipeline_registry()
     pipelines = _load_pipeline_list(pipelines_file, registry)
     data_root, tempdir = _prepare_data_root(data_path)
-    work_tempdir_path: Optional[Path] = None
+    work_tempdir_path: Path | None = None
     clean_work_output = False
     try:
         inputs = _find_h5_inputs(data_root)
@@ -147,7 +158,7 @@ def run_cli(
             work_tempdir_path = Path(tempfile.mkdtemp(dir=output_root))
             work_root = work_tempdir_path
 
-        failures: List[str] = []
+        failures: list[str] = []
         for h5_path in inputs:
             try:
                 _run_pipelines_on_file(h5_path, pipelines, work_root)
@@ -160,12 +171,16 @@ def run_cli(
                 final_name = (zip_name or "outputs.zip").strip() or "outputs.zip"
                 if not final_name.lower().endswith(".zip"):
                     final_name += ".zip"
-                zip_path = _zip_output_dir(work_root, target_path=output_root / final_name)
+                zip_path = _zip_output_dir(
+                    work_root, target_path=output_root / final_name
+                )
                 print(f"[ZIP] Archive created: {zip_path}")
                 summary_msg = f"ZIP archive: {zip_path}"
                 clean_work_output = True
             except Exception as exc:  # noqa: BLE001
-                print(f"[ZIP FAIL] Could not create ZIP archive: {exc}", file=sys.stderr)
+                print(
+                    f"[ZIP FAIL] Could not create ZIP archive: {exc}", file=sys.stderr
+                )
                 summary_msg = f"Outputs stored under: {work_root}"
         else:
             summary_msg = f"Outputs stored under: {work_root}"
@@ -185,8 +200,10 @@ def run_cli(
             shutil.rmtree(work_tempdir_path, ignore_errors=True)
 
 
-def main(argv: Optional[Iterable[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="Run AngioEye pipelines over a folder of HDF5 files.")
+def main(argv: Iterable[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Run AngioEye pipelines over a folder of HDF5 files."
+    )
     parser.add_argument(
         "-d",
         "--data",

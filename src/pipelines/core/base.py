@@ -40,11 +40,11 @@ def register_pipeline(name: str, description: str = "", required_deps: list[str]
 
 @dataclass
 class ProcessResult:
-    metrics: Dict[str, Any]
-    artifacts: Optional[Dict[str, Any]] = None
-    attrs: Optional[Dict[str, Any]] = None  # attributes stored on the pipeline group
-    file_attrs: Optional[Dict[str, Any]] = None  # attributes stored on the root H5 file
-    output_h5_path: Optional[str] = None
+    metrics: dict[str, Any]
+    artifacts: dict[str, Any] | None = None
+    attrs: dict[str, Any] | None = None  # attributes stored on the pipeline group
+    file_attrs: dict[str, Any] | None = None  # attributes stored on the root H5 file
+    output_h5_path: str | None = None
 
 
 @dataclass
@@ -52,10 +52,10 @@ class DatasetValue:
     """Represents a dataset payload plus optional attributes for that dataset."""
 
     data: Any
-    attrs: Optional[Dict[str, Any]] = None
+    attrs: dict[str, Any] | None = None
 
 
-def with_attrs(data: Any, attrs: Dict[str, Any]) -> DatasetValue:
+def with_attrs(data: Any, attrs: dict[str, Any]) -> DatasetValue:
     """Convenience helper to attach attributes to a dataset value."""
     return DatasetValue(data=data, attrs=attrs)
 

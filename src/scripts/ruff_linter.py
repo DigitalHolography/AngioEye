@@ -1,6 +1,6 @@
+import argparse
 import subprocess
 import sys
-import argparse
 
 
 def run_ruff(fix=False):
@@ -24,7 +24,7 @@ def run_ruff(fix=False):
             print("\nErrors found. Run the script with --fix to resolve style issues.")
             sys.exit(1)
 
-        print("\nCode looks great!")
+        print("\n\033[92mCode looks great!\033[0m")
         sys.exit(0)
 
     except FileNotFoundError:

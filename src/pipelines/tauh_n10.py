@@ -1,6 +1,5 @@
 import math
 from dataclasses import dataclass
-from typing import Dict
 
 import h5py
 import numpy as np
@@ -40,8 +39,8 @@ class TauhN10(ProcessPipeline):
     synthesis_points = 2048  # samples over one cardiac period for V_max estimation
 
     def run(self, h5file: h5py.File) -> ProcessResult:
-        metrics: Dict[str, float] = {}
-        artifacts: Dict[str, float] = {}
+        metrics: dict[str, float] = {}
+        artifacts: dict[str, float] = {}
         for vessel in ("Artery", "Vein"):
             vessel_result = self._compute_for_vessel(h5file, vessel)
             prefix = vessel.lower()

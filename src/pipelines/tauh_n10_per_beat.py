@@ -1,5 +1,4 @@
 import math
-from typing import Dict, List, Tuple
 
 import h5py
 import numpy as np
@@ -19,8 +18,8 @@ class TauhN10PerBeat(ProcessPipeline):
     harmonic_index = 10
 
     def run(self, h5file: h5py.File) -> ProcessResult:
-        metrics: Dict[str, float] = {}
-        artifacts: Dict[str, float] = {}
+        metrics: dict[str, float] = {}
+        artifacts: dict[str, float] = {}
         for vessel in ("Artery", "Vein"):
             vessel_metrics, vessel_artifacts = self._compute_per_beat(h5file, vessel)
             metrics.update(vessel_metrics)
@@ -29,7 +28,7 @@ class TauhN10PerBeat(ProcessPipeline):
 
     def _compute_per_beat(
         self, h5file: h5py.File, vessel: str
-    ) -> Tuple[Dict[str, float], Dict[str, float]]:
+    ) -> tuple[dict[str, float], dict[str, float]]:
         n = self.harmonic_index
         prefix = vessel.lower()
         # Per-beat FFT amplitudes/phases and per-beat Vmax for the band-limited signal.
@@ -71,9 +70,9 @@ class TauhN10PerBeat(ProcessPipeline):
         freq_n_hz = freq_n_raw if is_hz else freq_n_raw / (2 * math.pi)
         omega_n = (2 * math.pi * freq_n_raw) if is_hz else freq_n_raw
 
-        tau_values: List[float] = []
-        x_values: List[float] = []
-        vmax_values: List[float] = []
+        tau_values: list[float] = []
+        x_values: list[float] = []
+        vmax_values: list[float] = []
         beat_count = amps.shape[1]
         for beat_idx in range(beat_count):
             v_max = float(vmax[0, beat_idx])
@@ -95,8 +94,8 @@ class TauhN10PerBeat(ProcessPipeline):
                 float(math.sqrt(denom) / omega_n) if denom > 0 else math.nan
             )
 
-        metrics: Dict[str, float] = {}
-        artifacts: Dict[str, float] = {f"{prefix}_freq_hz_{n}": freq_n_hz}
+        metrics: dict[str, float] = {}
+        artifacts: dict[str, float] = {f"{prefix}_freq_hz_{n}": freq_n_hz}
         for i, tau in enumerate(tau_values):
             metrics[f"{prefix}_tauH_{n}_beat{i}"] = tau
             artifacts[f"{prefix}_vmax_beat{i}"] = vmax_values[i]
