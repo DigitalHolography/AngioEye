@@ -1,5 +1,5 @@
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Optional, Sequence, Tuple, Union
 
 import h5py
 import numpy as np
@@ -16,7 +16,7 @@ def safe_h5_key(name: str) -> str:
     return cleaned or "pipeline"
 
 
-def _copy_input_contents(source_file: Optional[Union[str, Path]], dest: h5py.File) -> None:
+def _copy_input_contents(source_file: str | Path | None, dest: h5py.File) -> None:
     """Copy all attributes and top-level objects from the input H5 into dest."""
     if not source_file:
         return
@@ -32,7 +32,11 @@ def _copy_input_contents(source_file: Optional[Union[str, Path]], dest: h5py.Fil
 
 def _ensure_pipelines_group(h5file: h5py.File) -> h5py.Group:
     """Return a pipelines group, creating it when missing."""
-    return h5file["pipelines"] if "pipelines" in h5file else h5file.create_group("pipelines")
+    return (
+        h5file["pipelines"]
+        if "pipelines" in h5file
+        else h5file.create_group("pipelines")
+    )
 
 
 def _create_unique_group(parent: h5py.Group, base_name: str) -> h5py.Group:
@@ -64,7 +68,9 @@ def _write_value_dataset(group: h5py.Group, key: str, value) -> None:
         data, ds_attrs = value
 
     if isinstance(data, str):
-        dataset = group.create_dataset(key, data=data, dtype=h5py.string_dtype(encoding="utf-8"))
+        dataset = group.create_dataset(
+            key, data=data, dtype=h5py.string_dtype(encoding="utf-8")
+        )
     else:
         payload = data
         if isinstance(data, (list, tuple)):
@@ -81,7 +87,7 @@ def _write_value_dataset(group: h5py.Group, key: str, value) -> None:
             _set_attr_safe(dataset, attr_key, attr_val)
 
 
-def _set_attr_safe(h5obj: Union[h5py.File, h5py.Group], key: str, value) -> None:
+def _set_attr_safe(h5obj: h5py.File | h5py.Group, key: str, value) -> None:
     """
     Set an attribute on a file or group, falling back to string when the type is unsupported.
     """
@@ -102,9 +108,9 @@ def _set_attr_safe(h5obj: Union[h5py.File, h5py.Group], key: str, value) -> None
 
 def write_result_h5(
     result: ProcessResult,
-    path: Union[Path, str],
+    path: Path | str,
     pipeline_name: str,
-    source_file: Optional[str] = None,
+    source_file: str | None = None,
 ) -> str:
     """
     Write pipeline results to an HDF5 file.
@@ -147,9 +153,9 @@ def write_result_h5(
 
 
 def write_combined_results_h5(
-    results: Sequence[Tuple[str, ProcessResult]],
-    path: Union[Path, str],
-    source_file: Optional[str] = None,
+    results: Sequence[tuple[str, ProcessResult]],
+    path: Path | str,
+    source_file: str | None = None,
 ) -> str:
     """
     Write multiple pipeline results into a single HDF5 file.
@@ -164,7 +170,9 @@ def write_combined_results_h5(
             f.attrs["source_file"] = source_file
         pipelines_grp = _ensure_pipelines_group(f)
         for pipeline_name, result in results:
-            pipeline_grp = _create_unique_group(pipelines_grp, safe_h5_key(pipeline_name))
+            pipeline_grp = _create_unique_group(
+                pipelines_grp, safe_h5_key(pipeline_name)
+            )
             pipeline_grp.attrs["pipeline"] = pipeline_name
             if result.attrs:
                 for key, value in result.attrs.items():

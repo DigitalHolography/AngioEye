@@ -1,6 +1,5 @@
 import math
 from dataclasses import dataclass
-from typing import Dict
 
 import h5py
 import numpy as np
@@ -39,8 +38,8 @@ class TauhN10(ProcessPipeline):
     synthesis_points = 2048  # samples over one cardiac period for V_max estimation
 
     def run(self, h5file: h5py.File) -> ProcessResult:
-        metrics: Dict[str, float] = {}
-        artifacts: Dict[str, float] = {}
+        metrics: dict[str, float] = {}
+        artifacts: dict[str, float] = {}
         for vessel in ("Artery", "Vein"):
             vessel_result = self._compute_for_vessel(h5file, vessel)
             prefix = vessel.lower()
@@ -78,12 +77,16 @@ class TauhN10(ProcessPipeline):
         freq_n_hz = freq_n_raw if is_hz else freq_n_raw / (2 * math.pi)
 
         if fundamental_hz <= 0:
-            raise ValueError(f"Invalid fundamental frequency for {vessel}: {fundamental_hz}")
+            raise ValueError(
+                f"Invalid fundamental frequency for {vessel}: {fundamental_hz}"
+            )
 
         # Reconstruct the band-limited waveform (0..n) to get Vmax.
         vmax = self._estimate_vmax(amplitudes, phases, freqs, is_hz, n)
         if not np.isfinite(vmax) or vmax <= 0:
-            return TauHResult(tau=math.nan, x_abs=math.nan, vmax=float(vmax), freq_hz=freq_n_hz)
+            return TauHResult(
+                tau=math.nan, x_abs=math.nan, vmax=float(vmax), freq_hz=freq_n_hz
+            )
 
         v_n = amplitudes[n]
         x_abs = float(abs(v_n) / vmax)
@@ -97,7 +100,9 @@ class TauhN10(ProcessPipeline):
                 tau = math.nan
             else:
                 tau = float(math.sqrt(denom) / omega_n)
-        return TauHResult(tau=tau, x_abs=x_abs, vmax=float(vmax), freq_hz=float(freq_n_hz))
+        return TauHResult(
+            tau=tau, x_abs=x_abs, vmax=float(vmax), freq_hz=float(freq_n_hz)
+        )
 
     def _estimate_vmax(
         self,
@@ -112,7 +117,13 @@ class TauhN10(ProcessPipeline):
         if fundamental_hz <= 0:
             return math.nan
         omega_factor = 2 * math.pi if is_hz else 1.0
-        t = np.linspace(0.0, 1.0 / fundamental_hz, num=self.synthesis_points, endpoint=False, dtype=np.float64)
+        t = np.linspace(
+            0.0,
+            1.0 / fundamental_hz,
+            num=self.synthesis_points,
+            endpoint=False,
+            dtype=np.float64,
+        )
         waveform = np.full_like(t, fill_value=amplitudes[0], dtype=np.float64)
         for k in range(1, n_max + 1):
             # cosine synthesis over one cardiac period
