@@ -53,7 +53,7 @@ pre-commit install
 > If a pre-commit hook fails, it will try to fix all needed files, **so you will need to add them again before recreating the commit**.
 
 > [!TIP]
-> You can run the linter easily once the `dev` dependencies are installed with the command:
+> You can run the linter easily, once the `dev` dependencies are installed, with the command:
 >
 > ```sh
 > # To only run the checks
