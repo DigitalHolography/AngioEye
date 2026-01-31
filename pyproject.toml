@@ -19,7 +19,7 @@ dependencies = ["numpy>=1.24", "h5py>=3.9", "sv-ttk>=2.6"]
 pipelines = ["torch>=2.2", "pandas>=2.1"]
 
 # For developers
-dev = ["ruff", "pyinstaller"]
+dev = ["ruff", "pre-commit", "pyinstaller"]
 
 # =============== [ SCRIPTS ] ===============
 
