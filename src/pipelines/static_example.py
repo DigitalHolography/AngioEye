@@ -1,6 +1,6 @@
 import numpy as np
 
-from .core.base import ProcessPipeline, ProcessResult, with_attrs, register_pipeline
+from .core.base import ProcessPipeline, ProcessResult, register_pipeline, with_attrs
 
 
 @register_pipeline(name="Static Example")

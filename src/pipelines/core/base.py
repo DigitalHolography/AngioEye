@@ -1,7 +1,7 @@
 import csv
-from dataclasses import dataclass
-from typing import Any, Dict, Optional
 import importlib.util
+from dataclasses import dataclass
+from typing import Any
 
 import h5py
 
@@ -10,7 +10,9 @@ PIPELINE_REGISTRY = []
 
 
 # Decorator to register all neede pipelines
-def register_pipeline(name: str, description: str = "", required_deps: list[str] = []):
+def register_pipeline(
+    name: str, description: str = "", required_deps: list[str] | None = None
+):
     def decorator(cls):
         # metadata for the class
         cls.name = name

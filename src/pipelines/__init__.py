@@ -1,10 +1,10 @@
 import ast
 import importlib
 import importlib.util
-import inspect
 import pkgutil
 
-from .core.base import ProcessPipeline, ProcessResult, PIPELINE_REGISTRY
+# import inspect
+from .core.base import PIPELINE_REGISTRY, ProcessPipeline, ProcessResult
 from .core.utils import write_combined_results_h5, write_result_h5
 
 
@@ -99,7 +99,7 @@ def _missing_requirements(requires: list[str]) -> list[str]:
 def _discover_pipelines() -> tuple[list[ProcessPipeline], list[MissingPipeline]]:
     available: list[ProcessPipeline] = []
     missing: list[MissingPipeline] = []
-    seen_classes = set()
+    # seen_classes = set()
 
     for module_info in pkgutil.iter_modules(__path__):
         if module_info.name in {"core"} or module_info.name.startswith("_"):
@@ -120,7 +120,7 @@ def _discover_pipelines() -> tuple[list[ProcessPipeline], list[MissingPipeline]]
         #     continue
 
         try:
-            module = importlib.import_module(module_name)
+            _ = importlib.import_module(module_name)
         except Exception as e:
             # Fallback for unknown failures (SyntaxError, etc.)
             missing.append(
