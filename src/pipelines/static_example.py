@@ -1,9 +1,9 @@
 import numpy as np
 
-from .core.base import ProcessPipeline, ProcessResult, register_pipeline, with_attrs
+from .core.base import ProcessPipeline, ProcessResult, registerPipeline, with_attrs
 
 
-@register_pipeline(name="Static Example")
+@registerPipeline(name="Static Example")
 class StaticExample(ProcessPipeline):
     """
     Tutorial pipeline showing the full surface area of a pipeline:

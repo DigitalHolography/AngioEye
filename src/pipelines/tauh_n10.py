@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import h5py
 import numpy as np
 
-from .core.base import ProcessPipeline, ProcessResult, register_pipeline
+from .core.base import ProcessPipeline, ProcessResult, registerPipeline
 
 
 @dataclass
@@ -27,7 +27,7 @@ def _freq_unit(h5file: h5py.File, path: str) -> str:
     return "hz"
 
 
-@register_pipeline(name="TauhN10")
+@registerPipeline(name="TauhN10")
 class TauhN10(ProcessPipeline):
     """
     Acquisition-level τ|H|,10 using synthetic spectral amplitudes.

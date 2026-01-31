@@ -10,7 +10,7 @@ PIPELINE_REGISTRY = []
 
 
 # Decorator to register all neede pipelines
-def register_pipeline(
+def registerPipeline(
     name: str, description: str = "", required_deps: list[str] | None = None
 ):
     def decorator(cls):
