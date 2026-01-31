@@ -106,7 +106,7 @@ To see more complete examples, check out `src/pipelines/basic_stats.py` and `src
 ### Simple Pipeline Structure
 
 ```python
-from pipelines import ProcessPipeline, ProcessResult
+from pipelines import ProcessPipeline, ProcessResult, registerPipeline
 
 @registerPipeline(
     name="My Analysis",
