@@ -47,7 +47,7 @@ pip install -e ".[dev,pipelines]"
 pre-commit install
 ```
 
-> [!INFO]
+> [!NOTE]
 > The pre-commit is really usefull to run automatic checks before pushing code, reducing chances of ugly code being pushed.
 >
 > If a pre-commit hook fails, it will try to fix all needed files, **so you will need to add them again before recreating the commit**.
