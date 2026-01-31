@@ -49,6 +49,8 @@ pre-commit install
 
 > [!INFO]
 > The pre-commit is really usefull to run automatic checks before pushing code, reducing chances of ugly code being pushed.
+>
+> If a pre-commit hook fails, it will try to fix all needed files, **so you will need to add them again before recreating the commit**.
 
 > [!TIP]
 > You can run the linter easily once the `dev` dependencies are installed with the command:
