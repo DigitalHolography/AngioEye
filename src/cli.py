@@ -19,25 +19,30 @@ import shutil
 import sys
 import tempfile
 import zipfile
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from pathlib import Path
 
 import h5py
 
-from pipelines import ProcessPipeline, ProcessResult, load_all_pipelines
+from pipelines import (
+    PipelineDescriptor,
+    ProcessResult,
+    load_pipeline_catalog,
+)
 from pipelines.core.utils import write_combined_results_h5
 
 
-def _build_pipeline_registry() -> dict[str, ProcessPipeline]:
-    pipelines = load_all_pipelines()
-    return {p.name: p for p in pipelines}
+def _build_pipeline_registry() -> dict[str, PipelineDescriptor]:
+    available, _ = load_pipeline_catalog()
+    # pipelines = load_all_pipelines()
+    return {p.name: p for p in available}
 
 
 def _load_pipeline_list(
-    path: Path, registry: dict[str, ProcessPipeline]
-) -> list[ProcessPipeline]:
+    path: Path, registry: dict[str, PipelineDescriptor]
+) -> list[PipelineDescriptor]:
     raw_lines = path.read_text(encoding="utf-8").splitlines()
-    selected: list[ProcessPipeline] = []
+    selected: list[PipelineDescriptor] = []
     missing: list[str] = []
     for line in raw_lines:
         name = line.strip()
@@ -92,7 +97,7 @@ def _prepare_data_root(
 
 def _run_pipelines_on_file(
     h5_path: Path,
-    pipelines: Sequence[ProcessPipeline],
+    pipelines: Sequence[PipelineDescriptor],
     output_root: Path,
 ) -> list[Path]:
     outputs: list[Path] = []
@@ -101,7 +106,8 @@ def _run_pipelines_on_file(
     combined_h5_out = data_dir / f"{h5_path.stem}_pipelines_result.h5"
     pipeline_results: list[tuple[str, ProcessResult]] = []
     with h5py.File(h5_path, "r") as h5file:
-        for pipeline in pipelines:
+        for pipeline_desc in pipelines:
+            pipeline = pipeline_desc.instantiate()
             result = pipeline.run(h5file)
             pipeline_results.append((pipeline.name, result))
             print(f"[OK] {h5_path.name} -> {pipeline.name}")
@@ -200,7 +206,7 @@ def run_cli(
             shutil.rmtree(work_tempdir_path, ignore_errors=True)
 
 
-def main(argv: Iterable[str] | None = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Run AngioEye pipelines over a folder of HDF5 files."
     )

@@ -15,6 +15,7 @@ except ImportError:  #  optional dependency
     sv_ttk = None
 
 from pipelines import (
+    PipelineDescriptor,
     ProcessPipeline,
     ProcessResult,
     load_pipeline_catalog,
@@ -70,7 +71,7 @@ class ProcessApp(tk.Tk):
         self.title("HDF5 Process")
         self.geometry("800x600")
         self.h5_file: h5py.File | None = None
-        self.pipeline_registry: dict[str, ProcessPipeline] = {}
+        self.pipeline_registry: dict[str, PipelineDescriptor] = {}
         self.pipeline_check_vars: dict[str, tk.BooleanVar] = {}
         self.last_process_result: ProcessResult | None = None
         self.last_process_pipeline: ProcessPipeline | None = None
@@ -329,12 +330,12 @@ class ProcessApp(tk.Tk):
         self._populate_pipeline_checks(available, missing)
 
     def _populate_pipeline_checks(
-        self, available: list[ProcessPipeline], missing: list[ProcessPipeline]
+        self, available: list[PipelineDescriptor], missing: list[PipelineDescriptor]
     ) -> None:
         for child in self.pipeline_checks_inner.winfo_children():
             child.destroy()
         self.pipeline_check_vars = {}
-        rows: list[ProcessPipeline] = [*available, *missing]
+        rows: list[PipelineDescriptor] = [*available, *missing]
         for idx, pipeline in enumerate(rows):
             is_available = getattr(pipeline, "available", True)
             var = tk.BooleanVar(value=is_available)
@@ -422,8 +423,8 @@ class ProcessApp(tk.Tk):
                 "Missing pipeline", "Select a pipeline before running."
             )
             return
-        pipeline = self.pipeline_registry.get(name)
-        if pipeline is None:
+        pipeline_desc = self.pipeline_registry.get(name)
+        if pipeline_desc is None:
             messagebox.showerror(
                 "Pipeline missing", f"Pipeline '{name}' is not registered."
             )
@@ -432,6 +433,7 @@ class ProcessApp(tk.Tk):
             messagebox.showwarning("Missing file", "Load a .h5 file first.")
             return
         try:
+            pipeline = pipeline_desc.instantiate()
             result = pipeline.run(self.h5_file)
         except Exception as exc:  # noqa: BLE001
             messagebox.showerror("Pipeline error", f"Pipeline failed: {exc}")
@@ -522,7 +524,7 @@ class ProcessApp(tk.Tk):
             )
             return
 
-        pipelines: list[ProcessPipeline] = []
+        pipelines: list[PipelineDescriptor] = []
         missing: list[str] = []
         for name in selected_names:
             pipeline = self.pipeline_registry.get(name)
@@ -646,7 +648,7 @@ class ProcessApp(tk.Tk):
     def _run_pipelines_on_file(
         self,
         h5_path: Path,
-        pipelines: Sequence[ProcessPipeline],
+        pipelines: Sequence[PipelineDescriptor],
         output_root: Path,
     ) -> None:
         data_dir = output_root / h5_path.stem
@@ -654,7 +656,8 @@ class ProcessApp(tk.Tk):
         combined_h5_out = data_dir / f"{h5_path.stem}_pipelines_result.h5"
         pipeline_results: list[tuple[str, ProcessResult]] = []
         with h5py.File(h5_path, "r") as h5file:
-            for pipeline in pipelines:
+            for pipeline_desc in pipelines:
+                pipeline = pipeline_desc.instantiate()
                 result = pipeline.run(h5file)
                 pipeline_results.append((pipeline.name, result))
                 self._log_batch(f"[OK] {h5_path.name} -> {pipeline.name}")
