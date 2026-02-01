@@ -120,7 +120,7 @@ def _discover_pipelines() -> tuple[list[ProcessPipeline], list[MissingPipeline]]
         #     continue
 
         try:
-            _ = importlib.import_module(module_name)
+            importlib.import_module(module_name)
         except Exception as e:
             # Fallback for unknown failures (SyntaxError, etc.)
             missing.append(
@@ -129,7 +129,7 @@ def _discover_pipelines() -> tuple[list[ProcessPipeline], list[MissingPipeline]]
                 )
             )
 
-    for cls in PIPELINE_REGISTRY:
+    for _name, cls in PIPELINE_REGISTRY.items():
         if getattr(cls, "is_available", True):
             inst = cls()
             # The GUI needs thoses values

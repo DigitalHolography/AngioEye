@@ -6,7 +6,7 @@ from typing import Any
 import h5py
 
 # Global Registry of all imports needed by the pipelines
-PIPELINE_REGISTRY = []
+PIPELINE_REGISTRY: dict[str, type["ProcessPipeline"]] = {}
 
 
 # Decorator to register all neede pipelines
@@ -24,7 +24,7 @@ def registerPipeline(
         for req in cls.required_deps:
             # TODO: We should maybe include the version check
             # RM the version "torch>=2.0" -> "torch"
-            pkg = req.split(">=")[0].split("==")[0].strip()
+            pkg = req.split(">")[0].split("=")[0].split("<")[0].strip()
 
             if importlib.util.find_spec(pkg) is None:
                 missing.append(pkg)
@@ -33,8 +33,7 @@ def registerPipeline(
         cls.is_available = len(missing) == 0
 
         # Add to registry
-        if cls not in PIPELINE_REGISTRY:
-            PIPELINE_REGISTRY.append(cls)
+        PIPELINE_REGISTRY[name] = cls
         return cls
 
     return decorator

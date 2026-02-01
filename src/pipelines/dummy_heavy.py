@@ -18,7 +18,7 @@ from .core.base import ProcessPipeline, ProcessResult, registerPipeline
 )
 class DummyHeavy(ProcessPipeline):
     def run(self, h5file) -> ProcessResult:
-        import pandas as pd  # noqa: F401
-        import torch  # noqa: F401
+        import pandas as pd  # type: ignore # noqa: F401
+        import torch  # type: ignore # noqa: F401
 
         return ProcessResult(metrics={"dummy": 1})
