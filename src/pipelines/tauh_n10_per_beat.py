@@ -3,10 +3,11 @@ import math
 import h5py
 import numpy as np
 
-from .core.base import ProcessPipeline, ProcessResult
+from .core.base import ProcessPipeline, ProcessResult, registerPipeline
 from .tauh_n10 import _freq_unit
 
 
+@registerPipeline(name="TauhN10PerBeat")
 class TauhN10PerBeat(ProcessPipeline):
     """
     Per-beat τ|H|,10 using per-beat FFT amplitudes and VmaxPerBeatBandLimited.

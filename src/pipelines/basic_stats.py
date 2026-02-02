@@ -1,9 +1,10 @@
 import h5py
 import numpy as np
 
-from .core.base import ProcessPipeline, ProcessResult
+from .core.base import ProcessPipeline, ProcessResult, registerPipeline
 
 
+@registerPipeline(name="Basic Stats")
 class BasicStats(ProcessPipeline):
     description = "Min / Max / Mean / Std over the first dataset found in the file."
 

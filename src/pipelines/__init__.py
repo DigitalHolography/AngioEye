@@ -1,36 +1,17 @@
 import ast
 import importlib
 import importlib.util
-import inspect
 import pkgutil
 
-from .core.base import ProcessPipeline, ProcessResult
+# import inspect
+from .core.base import (
+    PIPELINE_REGISTRY,
+    MissingPipeline,
+    PipelineDescriptor,
+    ProcessPipeline,
+    ProcessResult,
+)
 from .core.utils import write_combined_results_h5, write_result_h5
-
-
-class MissingPipeline(ProcessPipeline):
-    """Placeholder for pipelines whose dependencies are missing."""
-
-    available = False
-    missing_deps: list[str]
-    requires: list[str]
-
-    def __init__(
-        self, name: str, description: str, missing_deps: list[str], requires: list[str]
-    ) -> None:
-        super().__init__()
-        self.name = name
-        self.description = description or "Pipeline unavailable (missing dependencies)."
-        self.missing_deps = missing_deps
-        self.requires = requires
-
-    def run(self, _h5file):
-        missing = ", ".join(
-            self.missing_deps or self.requires or ["unknown dependency"]
-        )
-        raise ImportError(
-            f"Pipeline '{self.name}' unavailable. Missing dependencies: {missing}"
-        )
 
 
 def _module_docstring(module_name: str) -> str:
@@ -96,82 +77,123 @@ def _missing_requirements(requires: list[str]) -> list[str]:
     return missing
 
 
-def _discover_pipelines() -> tuple[list[ProcessPipeline], list[MissingPipeline]]:
-    available: list[ProcessPipeline] = []
-    missing: list[MissingPipeline] = []
-    seen_classes = set()
+def _discover_pipelines() -> tuple[list[PipelineDescriptor], list[PipelineDescriptor]]:
+    available: list[PipelineDescriptor] = []
+    missing: list[PipelineDescriptor] = []
+    # seen_classes = set()
 
     for module_info in pkgutil.iter_modules(__path__):
         if module_info.name in {"core"} or module_info.name.startswith("_"):
             continue
+
         module_name = f"{__name__}.{module_info.name}"
-        requires = _parse_requires_from_source(module_name)
-        doc = _module_docstring(module_name)
+
+        # requires = _parse_requires_from_source(module_name)
 
         # First, check for missing requirements before importing heavy modules.
-        pre_missing = _missing_requirements(requires)
-        if pre_missing:
-            missing.append(
-                MissingPipeline(module_info.name, doc, pre_missing, requires)
-            )
-            continue
+        # pre_missing = _missing_requirements(requires)
+
+        # if pre_missing:
+        #     doc = _module_docstring(module_name)
+        #     missing.append(
+        #         MissingPipeline(module_info.name, doc, pre_missing, requires)
+        #     )
+        #     continue
 
         try:
-            module = importlib.import_module(module_name)
-        except ImportError as exc:
-            # Capture missing dependency if ModuleNotFoundError has a name.
-            missing_deps = []
-            if (
-                isinstance(exc, ModuleNotFoundError)
-                and exc.name
-                and exc.name not in {module_name, module_info.name}
-            ):
-                missing_deps = [exc.name]
-            if not missing_deps:
-                missing_deps = requires
+            importlib.import_module(module_name)
+        except Exception as e:
+            # Fallback for unknown failures (SyntaxError, etc.)
             missing.append(
-                MissingPipeline(module_info.name, doc, missing_deps, requires)
+                PipelineDescriptor(
+                    name=module_info.name,
+                    description=f"Import Error: {e}",
+                    available=False,
+                    error_msg=str(e),
+                )
             )
-            continue
 
-        module_requires = getattr(module, "REQUIRES", requires)
-        post_missing = _missing_requirements(module_requires)
-        if post_missing:
-            missing.append(
-                MissingPipeline(module_info.name, doc, post_missing, module_requires)
-            )
-            continue
-        for _, cls in inspect.getmembers(module, inspect.isclass):
-            if not issubclass(cls, ProcessPipeline) or cls is ProcessPipeline:
-                continue
-            if cls.__module__ != module.__name__:
-                continue
-            if cls in seen_classes:
-                continue
-            seen_classes.add(cls)
-            try:
-                inst = cls()
-                inst.available = True  # type: ignore[attr-defined]
-                inst.requires = module_requires  # type: ignore[attr-defined]
-                available.append(inst)
-            except TypeError:
-                # Skip classes requiring constructor args.
-                continue
+    for _name, cls in PIPELINE_REGISTRY.items():
+        desc = PipelineDescriptor(
+            name=cls.name,
+            description=cls.description,
+            available=cls.available,
+            requires=cls.requires,
+            missing_deps=cls.missing_deps,
+            pipeline_cls=cls,
+        )
+        if getattr(cls, "is_available", True):
+            # inst = cls()
+            # The GUI needs thoses values
+            # inst.name = cls.name
+            # inst.available = True
+            # inst.requires = cls.required_deps
+            available.append(desc)
+        else:
+            missing.append(desc)
+
+        # except ImportError as exc:
+        #     # Capture missing dependency if ModuleNotFoundError has a name.
+        #     missing_deps = []
+        #     if (
+        #         isinstance(exc, ModuleNotFoundError)
+        #         and exc.name
+        #         and exc.name not in {module_name, module_info.name}
+        #     ):
+        #         missing_deps = [exc.name]
+        #     if not missing_deps:
+        #         missing_deps = requires
+        #     missing.append(
+        #         MissingPipeline(module_info.name, doc, missing_deps, requires)
+        #     )
+        #     continue
+
+        # module_requires = getattr(module, "REQUIRES", requires)
+        # post_missing = _missing_requirements(module_requires)
+        # if post_missing:
+        #     missing.append(
+        #         MissingPipeline(module_info.name, doc, post_missing, module_requires)
+        #     )
+        #     continue
+        # for _, cls in inspect.getmembers(module, inspect.isclass):
+        #     if not issubclass(cls, ProcessPipeline) or cls is ProcessPipeline:
+        #         continue
+        #     if cls.__module__ != module.__name__:
+        #         continue
+        #     if cls in seen_classes:
+        #         continue
+        #     seen_classes.add(cls)
+        #     try:
+        #         inst = cls()
+        #         inst.available = True  # type: ignore[attr-defined]
+        #         inst.requires = module_requires  # type: ignore[attr-defined]
+        #         available.append(inst)
+        #     except TypeError:
+        #         # Skip classes requiring constructor args.
+        #         continue
 
     available.sort(key=lambda p: p.name.lower())
     missing.sort(key=lambda p: p.name.lower())
     return available, missing
 
 
-def load_all_pipelines(include_missing: bool = False) -> list[ProcessPipeline]:
-    """
-    Discover and instantiate pipelines. Optionally include placeholders for missing deps.
-    """
-    available, missing = _discover_pipelines()
-    return available + missing if include_missing else available
+# def load_all_pipelines(
+#     include_missing: bool = False,
+# ) -> list[type[ProcessPipeline] | MissingPipeline]:
+#     """
+#     Discover  pipelines. Optionally include placeholders for missing deps.
+#     """
+#     available, missing = _discover_pipelines()
+#     # Cast to a common list type for the type checker
+#     combined: list[type[ProcessPipeline] | MissingPipeline] = list(available)
+#     if include_missing:
+#         combined.extend(missing)
+#     return combined
 
 
-def load_pipeline_catalog() -> tuple[list[ProcessPipeline], list[MissingPipeline]]:
+def load_pipeline_catalog() -> tuple[
+    list[PipelineDescriptor], list[PipelineDescriptor]
+]:
     """Return (available, missing) pipelines for UI/CLI surfaces."""
     return _discover_pipelines()
 
@@ -187,7 +209,7 @@ __all__ = [
     "ProcessResult",
     "write_result_h5",
     "write_combined_results_h5",
-    "load_all_pipelines",
+    # "load_all_pipelines",
     "load_pipeline_catalog",
     "MissingPipeline",
     *[_cls.__name__ for _cls in (p.__class__ for p in _AVAILABLE)],

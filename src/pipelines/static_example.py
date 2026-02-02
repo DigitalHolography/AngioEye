@@ -1,8 +1,9 @@
 import numpy as np
 
-from .core.base import ProcessPipeline, ProcessResult, with_attrs
+from .core.base import ProcessPipeline, ProcessResult, registerPipeline, with_attrs
 
 
+@registerPipeline(name="Static Example")
 class StaticExample(ProcessPipeline):
     """
     Tutorial pipeline showing the full surface area of a pipeline:
@@ -16,7 +17,7 @@ class StaticExample(ProcessPipeline):
 
     description = "Tutorial: metrics + artifacts + dataset attrs + file/pipeline attrs."
 
-    def run(self, _h5file) -> ProcessResult:
+    def run(self, h5file) -> ProcessResult:
         # Metrics are the main numerical outputs; each key becomes a dataset under /pipelines/<name>/metrics.
         metrics = {
             "scalar_example": 42.0,
