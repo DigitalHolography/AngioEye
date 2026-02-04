@@ -21,14 +21,14 @@ class ArterialExample(ProcessPipeline):
     T = "/Artery/VelocityPerBeat/beatPeriodSeconds/value"
 
     def run(self, h5file) -> ProcessResult:
-        vraw_ds = np.asarray(h5file[self.v_raw])
+        
         v_ds = np.asarray(h5file[self.v])
         v_ds_max=np.maximum(v_ds,0)
         t_ds = np.asarray(h5file[self.T])
         
         centroid=[]
         RI=[]
-        RTVI=[]
+        RVTI=[]
         for k in range (len(v_ds_max[0])):
             moment0=np.sum(v_ds_max.T[k])
             moment1=0
@@ -47,13 +47,16 @@ class ArterialExample(ProcessPipeline):
             moitie=len(v_ds_max.T[k])//2
             d1=np.sum(v_ds_max.T[k][:moitie])  
             d2=np.sum(v_ds_max.T[k][moitie:]) 
-            RTVI_k=d1/(d2+epsilon)
-            RTVI.append(RTVI_k)
+            RVTI_k=d1/(d2+epsilon)
+            RVTI.append(RVTI_k)
             
-            
+        
         # Metrics are the main numerical outputs; each key becomes a dataset under /pipelines/<name>/metrics.
-        metrics = {"centroid": np.array(centroid), "RI": np.array(RI), "RTVI": np.array(RTVI)}
-
+        
+        metrics = {"centroid": with_attrs(np.asarray(centroid),{"unit": [""],},),
+                "RI": with_attrs(np.asarray(RI),{"unit": [""],},),
+                "RTVI": with_attrs(np.asarray(RVTI),{"unit": [""],},),
+                }
         # Artifacts can store non-metric outputs (strings, paths, etc.).
 
         return ProcessResult(metrics=metrics)
