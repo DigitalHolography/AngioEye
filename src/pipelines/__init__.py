@@ -54,9 +54,9 @@ def _discover_pipelines() -> tuple[list[PipelineDescriptor], list[PipelineDescri
     return available, missing
 
 
-def load_pipeline_catalog() -> (
-    tuple[list[PipelineDescriptor], list[PipelineDescriptor]]
-):
+def load_pipeline_catalog() -> tuple[
+    list[PipelineDescriptor], list[PipelineDescriptor]
+]:
     """Return (available, missing) pipelines for UI/CLI surfaces."""
     return _discover_pipelines()
 
