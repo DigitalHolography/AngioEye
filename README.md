@@ -71,7 +71,7 @@ Launch the main application to process files interactively:
 
 ### GUI
 
-The GUI is best for interactive analysis and exploring individual HDF5 files.
+The GUI handles batch processing for folders, single .h5/.hdf5 files, or .zip archives and lets you run multiple pipelines at once.
 
 ```sh
 # Via the entry point
