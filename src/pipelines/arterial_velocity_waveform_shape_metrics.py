@@ -65,7 +65,7 @@ class ArterialExample(ProcessPipeline):
 
         # Metrics are the main numerical outputs; each key becomes a dataset under /pipelines/<name>/metrics.
         metrics = {
-            "TMI_raw": np.asarray(TMI_raw),
+            "TMI_raw": with_attrs(np.asarray(TMI_raw), {"unit": [""]}),
             "TMI": np.asarray(TMI),
             "RI": np.asarray(RI),
             "RI_raw": np.asarray(RI_raw),
