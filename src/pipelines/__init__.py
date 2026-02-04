@@ -1,6 +1,4 @@
-import ast
 import importlib
-import importlib.util
 import pkgutil
 
 # import inspect
@@ -14,91 +12,15 @@ from .core.base import (
 from .core.utils import write_combined_results_h5, write_result_h5
 
 
-def _module_docstring(module_name: str) -> str:
-    spec = importlib.util.find_spec(module_name)
-    if not spec or not spec.origin:
-        return ""
-    origin = spec.origin
-    # When frozen with PyInstaller, source files may not be present on disk (only .pyc).
-    if not origin.endswith((".py", ".pyw")):
-        return ""
-    try:
-        with open(origin, encoding="utf-8") as f:
-            source = f.read()
-    except OSError:
-        return ""
-    tree = ast.parse(source)
-    return ast.get_docstring(tree) or ""
-
-
-def _parse_requires_from_source(module_name: str) -> list[str]:
-    spec = importlib.util.find_spec(module_name)
-    if not spec or not spec.origin:
-        return []
-    origin = spec.origin
-    if not origin.endswith((".py", ".pyw")):
-        return []
-    try:
-        with open(origin, encoding="utf-8") as f:
-            tree = ast.parse(f.read(), filename=origin)
-    except OSError:
-        return []
-    for node in tree.body:
-        if isinstance(node, ast.Assign):
-            for target in node.targets:
-                if isinstance(target, ast.Name) and target.id == "REQUIRES":
-                    if isinstance(node.value, (ast.List, ast.Tuple)):
-                        vals = []
-                        for elt in node.value.elts:
-                            if isinstance(elt, ast.Constant) and isinstance(
-                                elt.value, str
-                            ):
-                                vals.append(elt.value)
-                        return vals
-    return []
-
-
-def _normalize_req_name(req: str) -> str:
-    """Extract importable package name from a requirement string."""
-    for sep in ("[", "==", ">=", "<=", "~=", "!=", ">", "<"):
-        if sep in req:
-            return req.split(sep, 1)[0]
-    return req
-
-
-def _missing_requirements(requires: list[str]) -> list[str]:
-    missing: list[str] = []
-    for req in requires:
-        pkg = _normalize_req_name(req).strip()
-        if not pkg:
-            continue
-        if importlib.util.find_spec(pkg) is None:
-            missing.append(pkg)
-    return missing
-
-
 def _discover_pipelines() -> tuple[list[PipelineDescriptor], list[PipelineDescriptor]]:
     available: list[PipelineDescriptor] = []
     missing: list[PipelineDescriptor] = []
-    # seen_classes = set()
 
     for module_info in pkgutil.iter_modules(__path__):
         if module_info.name in {"core"} or module_info.name.startswith("_"):
             continue
 
         module_name = f"{__name__}.{module_info.name}"
-
-        # requires = _parse_requires_from_source(module_name)
-
-        # First, check for missing requirements before importing heavy modules.
-        # pre_missing = _missing_requirements(requires)
-
-        # if pre_missing:
-        #     doc = _module_docstring(module_name)
-        #     missing.append(
-        #         MissingPipeline(module_info.name, doc, pre_missing, requires)
-        #     )
-        #     continue
 
         try:
             importlib.import_module(module_name)
@@ -123,72 +45,13 @@ def _discover_pipelines() -> tuple[list[PipelineDescriptor], list[PipelineDescri
             pipeline_cls=cls,
         )
         if getattr(cls, "is_available", True):
-            # inst = cls()
-            # The GUI needs thoses values
-            # inst.name = cls.name
-            # inst.available = True
-            # inst.requires = cls.required_deps
             available.append(desc)
         else:
             missing.append(desc)
 
-        # except ImportError as exc:
-        #     # Capture missing dependency if ModuleNotFoundError has a name.
-        #     missing_deps = []
-        #     if (
-        #         isinstance(exc, ModuleNotFoundError)
-        #         and exc.name
-        #         and exc.name not in {module_name, module_info.name}
-        #     ):
-        #         missing_deps = [exc.name]
-        #     if not missing_deps:
-        #         missing_deps = requires
-        #     missing.append(
-        #         MissingPipeline(module_info.name, doc, missing_deps, requires)
-        #     )
-        #     continue
-
-        # module_requires = getattr(module, "REQUIRES", requires)
-        # post_missing = _missing_requirements(module_requires)
-        # if post_missing:
-        #     missing.append(
-        #         MissingPipeline(module_info.name, doc, post_missing, module_requires)
-        #     )
-        #     continue
-        # for _, cls in inspect.getmembers(module, inspect.isclass):
-        #     if not issubclass(cls, ProcessPipeline) or cls is ProcessPipeline:
-        #         continue
-        #     if cls.__module__ != module.__name__:
-        #         continue
-        #     if cls in seen_classes:
-        #         continue
-        #     seen_classes.add(cls)
-        #     try:
-        #         inst = cls()
-        #         inst.available = True  # type: ignore[attr-defined]
-        #         inst.requires = module_requires  # type: ignore[attr-defined]
-        #         available.append(inst)
-        #     except TypeError:
-        #         # Skip classes requiring constructor args.
-        #         continue
-
     available.sort(key=lambda p: p.name.lower())
     missing.sort(key=lambda p: p.name.lower())
     return available, missing
-
-
-# def load_all_pipelines(
-#     include_missing: bool = False,
-# ) -> list[type[ProcessPipeline] | MissingPipeline]:
-#     """
-#     Discover  pipelines. Optionally include placeholders for missing deps.
-#     """
-#     available, missing = _discover_pipelines()
-#     # Cast to a common list type for the type checker
-#     combined: list[type[ProcessPipeline] | MissingPipeline] = list(available)
-#     if include_missing:
-#         combined.extend(missing)
-#     return combined
 
 
 def load_pipeline_catalog() -> tuple[
@@ -209,7 +72,6 @@ __all__ = [
     "ProcessResult",
     "write_result_h5",
     "write_combined_results_h5",
-    # "load_all_pipelines",
     "load_pipeline_catalog",
     "MissingPipeline",
     *[_cls.__name__ for _cls in (p.__class__ for p in _AVAILABLE)],

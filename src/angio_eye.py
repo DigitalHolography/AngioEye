@@ -3,7 +3,6 @@ import tempfile
 import tkinter as tk
 import zipfile
 from collections.abc import Sequence
-from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
@@ -14,13 +13,8 @@ try:
 except ImportError:  #  optional dependency
     sv_ttk = None
 
-from pipelines import (
-    PipelineDescriptor,
-    ProcessPipeline,
-    ProcessResult,
-    load_pipeline_catalog,
-)
-from pipelines.core.utils import write_combined_results_h5, write_result_h5
+from pipelines import PipelineDescriptor, ProcessResult, load_pipeline_catalog
+from pipelines.core.utils import write_combined_results_h5
 
 
 class _Tooltip:
@@ -70,13 +64,8 @@ class ProcessApp(tk.Tk):
         super().__init__()
         self.title("HDF5 Process")
         self.geometry("800x600")
-        self.h5_file: h5py.File | None = None
         self.pipeline_registry: dict[str, PipelineDescriptor] = {}
         self.pipeline_check_vars: dict[str, tk.BooleanVar] = {}
-        self.last_process_result: ProcessResult | None = None
-        self.last_process_pipeline: ProcessPipeline | None = None
-        self.output_dir_var = tk.StringVar(value=str(Path.cwd()))
-        self.last_output_dir: Path | None = None
         self.batch_input_var = tk.StringVar()
         self.batch_output_var = tk.StringVar(value=str(Path.cwd()))
         self.batch_zip_var = tk.BooleanVar(value=False)
@@ -85,7 +74,6 @@ class ProcessApp(tk.Tk):
         self._apply_theme()
         self._build_ui()
         self._register_pipelines()
-        self._show_placeholder()
         self._reset_batch_output()
 
     def _apply_theme(self) -> None:
@@ -133,68 +121,9 @@ class ProcessApp(tk.Tk):
         self._accent_color = accent
 
     def _build_ui(self) -> None:
-        notebook = ttk.Notebook(self)
-        notebook.pack(fill="both", expand=True)
-
-        single_tab = ttk.Frame(notebook, padding=10)
-        batch_tab = ttk.Frame(notebook, padding=10)
-        notebook.add(single_tab, text="Single file")
-        notebook.add(batch_tab, text="Batch")
-
-        self._build_single_tab(single_tab)
-        self._build_batch_tab(batch_tab)
-
-    def _build_single_tab(self, parent: ttk.Frame) -> None:
-        parent.columnconfigure(1, weight=1)
-        parent.rowconfigure(2, weight=1)
-
-        top_bar = ttk.Frame(parent)
-        top_bar.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 8))
-        open_btn = ttk.Button(top_bar, text="Open .h5 file", command=self.open_file)
-        open_btn.pack(side="left")
-        self.file_label = ttk.Label(top_bar, text="No file loaded", wraplength=500)
-        self.file_label.pack(side="left", padx=8)
-
-        ttk.Label(parent, text="Pipeline").grid(row=1, column=0, sticky="w")
-        self.pipeline_var = tk.StringVar()
-        self.pipeline_combo = ttk.Combobox(
-            parent, textvariable=self.pipeline_var, state="readonly", width=40
-        )
-        self.pipeline_combo.grid(row=1, column=1, sticky="w")
-        run_btn = ttk.Button(
-            parent, text="Run pipeline", command=self.run_selected_pipeline
-        )
-        run_btn.grid(row=1, column=2, sticky="w", padx=6)
-
-        ttk.Label(parent, text="Result").grid(row=2, column=0, sticky="nw", pady=(8, 2))
-        output_frame = ttk.Frame(parent)
-        output_frame.grid(row=2, column=1, columnspan=2, sticky="nsew")
-        output_frame.columnconfigure(0, weight=1)
-        output_frame.rowconfigure(0, weight=1)
-        self.process_output = tk.Text(
-            output_frame,
-            height=18,
-            state="disabled",
-            bg=self._text_bg,
-            fg=self._text_fg,
-            insertbackground=self._text_fg,
-        )
-        output_scroll = ttk.Scrollbar(
-            output_frame, orient="vertical", command=self.process_output.yview
-        )
-        self.process_output.configure(yscrollcommand=output_scroll.set)
-        self.process_output.grid(row=0, column=0, sticky="nsew")
-        output_scroll.grid(row=0, column=1, sticky="ns")
-
-        export_frame = ttk.Frame(parent, padding=(0, 8, 0, 0))
-        export_frame.grid(row=3, column=0, columnspan=3, sticky="ew")
-        export_frame.columnconfigure(1, weight=1)
-        ttk.Label(export_frame, text="Output folder").grid(row=0, column=0, sticky="w")
-        output_dir_entry = ttk.Entry(export_frame, textvariable=self.output_dir_var)
-        output_dir_entry.grid(row=0, column=1, sticky="ew", padx=4)
-        ttk.Button(export_frame, text="Browse", command=self.choose_output_dir).grid(
-            row=0, column=2, sticky="w"
-        )
+        container = ttk.Frame(self, padding=10)
+        container.pack(fill="both", expand=True)
+        self._build_batch_tab(container)
 
     def _build_batch_tab(self, parent: ttk.Frame) -> None:
         parent.columnconfigure(1, weight=1)
@@ -322,11 +251,6 @@ class ProcessApp(tk.Tk):
     def _register_pipelines(self) -> None:
         available, missing = load_pipeline_catalog()
         self.pipeline_registry = {p.name: p for p in available}
-        self.missing_pipelines = {p.name: p for p in missing}
-        self.pipeline_combo["values"] = list(self.pipeline_registry.keys())
-        if available:
-            self.pipeline_combo.current(0)
-            self.pipeline_var.set(available[0].name)
         self._populate_pipeline_checks(available, missing)
 
     def _populate_pipeline_checks(
@@ -362,14 +286,6 @@ class ProcessApp(tk.Tk):
                 )
             self.pipeline_check_vars[pipeline.name] = var
 
-    def _show_placeholder(
-        self, message: str = "Load a .h5 file then run a pipeline"
-    ) -> None:
-        self.process_output.configure(state="normal")
-        self.process_output.delete("1.0", "end")
-        self.process_output.insert("end", message)
-        self.process_output.configure(state="disabled")
-
     def _reset_batch_output(
         self, message: str = "Select an input path, choose pipelines, then run batch."
     ) -> None:
@@ -396,82 +312,6 @@ class ProcessApp(tk.Tk):
             if getattr(var, "_enabled", True):
                 var.set(False)
 
-    def open_file(self) -> None:
-        path = filedialog.askopenfilename(
-            filetypes=[("HDF5", "*.h5 *.hdf5"), ("All files", "*.*")],
-            initialdir=os.path.abspath("h5_example"),
-        )
-        if not path:
-            return
-        try:
-            if self.h5_file is not None:
-                self.h5_file.close()
-            self.h5_file = h5py.File(path, "r")
-        except Exception as exc:  # noqa: BLE001
-            messagebox.showerror("Error", f"Cannot open {path}: {exc}")
-            return
-        self.file_label.config(text=path)
-        self.last_process_result = None
-        self.last_process_pipeline = None
-        self.last_output_dir = None
-        self._show_placeholder("File loaded. Pick a pipeline and run.")
-
-    def run_selected_pipeline(self) -> None:
-        name = self.pipeline_var.get()
-        if not name:
-            messagebox.showwarning(
-                "Missing pipeline", "Select a pipeline before running."
-            )
-            return
-        pipeline_desc = self.pipeline_registry.get(name)
-        if pipeline_desc is None:
-            messagebox.showerror(
-                "Pipeline missing", f"Pipeline '{name}' is not registered."
-            )
-            return
-        if self.h5_file is None:
-            messagebox.showwarning("Missing file", "Load a .h5 file first.")
-            return
-        try:
-            pipeline = pipeline_desc.instantiate()
-            result = pipeline.run(self.h5_file)
-        except Exception as exc:  # noqa: BLE001
-            messagebox.showerror("Pipeline error", f"Pipeline failed: {exc}")
-            return
-        try:
-            output_dir = self._prepare_output_dir()
-            output_path = self._default_output_path(name, output_dir)
-            self._write_result_h5(result, output_path, pipeline_name=name)
-            result.output_h5_path = output_path
-            self.last_output_dir = output_dir
-        except Exception as exc:  # noqa: BLE001
-            messagebox.showerror("Output error", f"Cannot write outputs: {exc}")
-            return
-        self.last_process_result = result
-        self.last_process_pipeline = pipeline
-        file_label = self.h5_file.filename or "(in-memory file)"
-        self._render_process_result(result, pipeline_name=name, file_path=file_label)
-
-    def _render_process_result(
-        self, result: ProcessResult, pipeline_name: str, file_path: str
-    ) -> None:
-        self.process_output.configure(state="normal")
-        self.process_output.delete("1.0", "end")
-        self.process_output.insert("end", f"Pipeline: {pipeline_name}\n")
-        self.process_output.insert("end", f"File: {file_path}\n\n")
-        self.process_output.insert("end", "Metrics:\n")
-        for key, value in result.metrics.items():
-            self.process_output.insert("end", f" - {key}: {value}\n")
-        if result.artifacts:
-            self.process_output.insert("end", "\nArtifacts:\n")
-            for key, value in result.artifacts.items():
-                self.process_output.insert("end", f" - {key}: {value}\n")
-        if result.output_h5_path:
-            self.process_output.insert(
-                "end", f"\nResult HDF5: {result.output_h5_path}\n"
-            )
-        self.process_output.configure(state="disabled")
-
     def choose_batch_folder(self) -> None:
         path = filedialog.askdirectory(
             initialdir=self.batch_input_var.get() or None,
@@ -496,14 +336,6 @@ class ProcessApp(tk.Tk):
         )
         if path:
             self.batch_output_var.set(path)
-
-    def choose_output_dir(self) -> None:
-        path = filedialog.askdirectory(
-            initialdir=self.output_dir_var.get() or None,
-            title="Select base folder for outputs",
-        )
-        if path:
-            self.output_dir_var.set(path)
 
     def run_batch(self) -> None:
         data_value = (self.batch_input_var.get() or "").strip()
@@ -639,21 +471,21 @@ class ProcessApp(tk.Tk):
             return files
         raise FileNotFoundError(f"Input path does not exist: {path}")
 
-    def _safe_pipeline_suffix(self, name: str) -> str:
-        cleaned = "".join(ch if ch.isalnum() else "_" for ch in name.lower())
-        while "__" in cleaned:
-            cleaned = cleaned.replace("__", "_")
-        return cleaned.strip("_") or "pipeline"
-
     def _run_pipelines_on_file(
         self,
         h5_path: Path,
         pipelines: Sequence[PipelineDescriptor],
         output_root: Path,
     ) -> None:
-        data_dir = output_root / h5_path.stem
-        data_dir.mkdir(parents=True, exist_ok=True)
-        combined_h5_out = data_dir / f"{h5_path.stem}_pipelines_result.h5"
+        # Place combined output directly in the output root (no per-file subfolder).
+        combined_h5_out = output_root / f"{h5_path.stem}_pipelines_result.h5"
+        suffix = 1
+        while combined_h5_out.exists():
+            combined_h5_out = (
+                output_root / f"{h5_path.stem}_{suffix}_pipelines_result.h5"
+            )
+            suffix += 1
+
         pipeline_results: list[tuple[str, ProcessResult]] = []
         with h5py.File(h5_path, "r") as h5file:
             for pipeline_desc in pipelines:
@@ -666,34 +498,7 @@ class ProcessApp(tk.Tk):
         )
         for _, result in pipeline_results:
             result.output_h5_path = str(combined_h5_out)
-        self._log_batch(
-            f"[OK] {h5_path.name}: combined results -> {combined_h5_out.name}"
-        )
-
-    def _prepare_output_dir(self) -> Path:
-        base_dir_value = (self.output_dir_var.get() or "").strip()
-        base_dir = Path(base_dir_value).expanduser() if base_dir_value else Path.cwd()
-        if not base_dir.is_absolute():
-            base_dir = Path.cwd() / base_dir
-        base_dir.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        base_name = (
-            Path(self.h5_file.filename).stem
-            if self.h5_file and self.h5_file.filename
-            else "output"
-        )
-        output_dir = base_dir / f"{base_name}_{timestamp}"
-        output_dir.mkdir(parents=True, exist_ok=True)
-        return output_dir
-
-    def _default_output_path(self, pipeline_name: str, output_dir: Path) -> str:
-        safe_name = self._safe_pipeline_suffix(pipeline_name)
-        base = (
-            Path(self.h5_file.filename).stem
-            if self.h5_file and self.h5_file.filename
-            else "output"
-        )
-        return str(output_dir / f"{base}_{safe_name}_result.h5")
+        self._log_batch(f"[OK] {h5_path.name}: combined results -> {combined_h5_out}")
 
     def _zip_output_dir(self, folder: Path, target_path: Path | None = None) -> Path:
         folder = folder.expanduser().resolve()
@@ -711,16 +516,6 @@ class ProcessApp(tk.Tk):
                 if file_path.is_file():
                     zf.write(file_path, file_path.relative_to(folder))
         return zip_path
-
-    def _write_result_h5(
-        self, result: ProcessResult, path: str, pipeline_name: str
-    ) -> None:
-        source_file = (
-            self.h5_file.filename if self.h5_file and self.h5_file.filename else None
-        )
-        write_result_h5(
-            result, path, pipeline_name=pipeline_name, source_file=source_file
-        )
 
 
 def main():
