@@ -33,9 +33,9 @@ def _copy_input_contents(source_file: str | Path | None, dest: h5py.File) -> Non
 def _ensure_pipelines_group(h5file: h5py.File) -> h5py.Group:
     """Return a pipelines group, creating it when missing."""
     return (
-        h5file["pipelines"]
-        if "pipelines" in h5file
-        else h5file.create_group("pipelines")
+        h5file["Pipelines"]
+        if "Pipelines" in h5file
+        else h5file.create_group("Pipelines")
     )
 
 
