@@ -477,9 +477,15 @@ class ProcessApp(tk.Tk):
         pipelines: Sequence[PipelineDescriptor],
         output_root: Path,
     ) -> None:
-        data_dir = output_root / h5_path.stem
-        data_dir.mkdir(parents=True, exist_ok=True)
-        combined_h5_out = data_dir / f"{h5_path.stem}_pipelines_result.h5"
+        # Place combined output directly in the output root (no per-file subfolder).
+        combined_h5_out = output_root / f"{h5_path.stem}_pipelines_result.h5"
+        suffix = 1
+        while combined_h5_out.exists():
+            combined_h5_out = (
+                output_root / f"{h5_path.stem}_{suffix}_pipelines_result.h5"
+            )
+            suffix += 1
+
         pipeline_results: list[tuple[str, ProcessResult]] = []
         with h5py.File(h5_path, "r") as h5file:
             for pipeline_desc in pipelines:
@@ -492,9 +498,7 @@ class ProcessApp(tk.Tk):
         )
         for _, result in pipeline_results:
             result.output_h5_path = str(combined_h5_out)
-        self._log_batch(
-            f"[OK] {h5_path.name}: combined results -> {combined_h5_out.name}"
-        )
+        self._log_batch(f"[OK] {h5_path.name}: combined results -> {combined_h5_out}")
 
     def _zip_output_dir(self, folder: Path, target_path: Path | None = None) -> Path:
         folder = folder.expanduser().resolve()
