@@ -25,11 +25,7 @@ class WaveForm(ProcessPipeline):
     def run(self, h5file) -> ProcessResult:
         vraw_ds_temp = np.asarray(h5file[self.v_raw])
         vraw_ds = np.maximum(vraw_ds_temp, 0)
-        v_ds_temp = np.asarray(h5file[self.v])
-        v_ds = np.maximum(v_ds_temp, 0)
         t_ds = np.asarray(h5file[self.T_val])
-        V_max = np.asarray(h5file[self.vmax])
-        V_min = np.asarray(h5file[self.vmin])
         N = len(vraw_ds[:, 0])
         # période normalisée (1 beat)
         # pulsation fondamentale
@@ -65,7 +61,7 @@ class WaveForm(ProcessPipeline):
             V_coeff.append(Vn)
             Xn.append(Vn[1:] / Vn[1])
             H2.append(np.abs(Xn[i][1]))
-            phi = np.angle(Xn[i])
+
             absV = np.abs(Vn)
             Delta_Phi_2.append(np.angle(Vn[2] * np.conj(Vn[1]) ** 2))
             Delta_Phi_3.append(np.angle(Vn[3] * np.conj(Vn[1]) ** 3))
