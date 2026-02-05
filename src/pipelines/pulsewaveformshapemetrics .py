@@ -53,7 +53,9 @@ class WaveForm(ProcessPipeline):
         BV = []
         tau_M1 = []
         sigma_M = []
-        TAU_H_N = []
+        TAU_H = []
+        TAU_P_N = []
+        TAU_P = []
         for i in range(len(vraw_ds[0])):
             T = t_ds[0][i]
             omega0 = 2 * np.pi / T
@@ -92,7 +94,7 @@ class WaveForm(ProcessPipeline):
             Sigma_n.append(np.sqrt(np.sum((n - nc_i) ** 2 * p)))
             Hspec.append(-np.sum(p * np.log(p + 1e-12)))
             Fspec.append(np.exp(np.mean(np.log(p + 1e-12))) / np.mean(p))
-            """omega_n = n2 * omega0
+            omega_n = n2 * omega0
 
             tau_phi_n_i = -phi2 / omega_n
             tau_phi_n.append(tau_phi_n_i)
@@ -122,7 +124,7 @@ class WaveForm(ProcessPipeline):
                 tau_M1.append(np.nan)
             if np.sum(w) > 0:
                 t2 = np.sum(w * t**2) / np.sum(w)
-                sigma_M.append(np.sqrt(t2 - tau_M1**2))
+                sigma_M.append(np.sqrt(t2 - tau_M1[-1] ** 2))
             else:
                 sigma_M.append(np.nan)
 
@@ -133,7 +135,20 @@ class WaveForm(ProcessPipeline):
             tau_H_n[idx2] = (1 / (omega_n[idx2])) * np.sqrt(
                 (1 / (absX2[valid2] ** 2)) - 1
             )
-            TAU_H_N.append(tau_H_n)"""
+            TAU_H.append(tau_H_n)
+            tau_P_n = []
+
+            for k in range(len(Xn[i]) - 1):
+                taus = np.linspace(0, 10, 2000)
+                H = 1 / (1 + 1j * omega_n[2] * taus)
+                err = np.abs(Xn[i][k] - H) ** 2
+                tau_P_n.append(taus[np.argmin(err)])
+
+            TAU_P_N.append(tau_P_n)
+            if np.sum(np.isfinite(tau_P_n)) >= 2:
+                TAU_P.append(np.nanmean(tau_P_n))
+            else:
+                TAU_P.append(np.nan)
         # Metrics are the main numerical outputs; each key becomes a dataset under /pipelines/<name>/metrics.
         metrics = {
             "Xn": with_attrs(
@@ -239,7 +254,7 @@ class WaveForm(ProcessPipeline):
                 {
                     "unit": [""],
                     "description": [
-                        "Peakedness vs flatness of the harmonic distribution; low values indicate dominance of few harmonics, high values indicate flatter spectra "
+                        "Amplitude-insensitive timing descriptor from harmonic phases: robust aggregate of per-harmonic delays "
                     ],
                 },
             ),
@@ -247,9 +262,7 @@ class WaveForm(ProcessPipeline):
                 np.asarray(tau_phi_n),
                 {
                     "unit": [""],
-                    "description": [
-                        "Peakedness vs flatness of the harmonic distribution; low values indicate dominance of few harmonics, high values indicate flatter spectra "
-                    ],
+                    "description": [""],
                 },
             ),
             "tau_G": with_attrs(
@@ -257,7 +270,7 @@ class WaveForm(ProcessPipeline):
                 {
                     "unit": [""],
                     "description": [
-                        "Peakedness vs flatness of the harmonic distribution; low values indicate dominance of few harmonics, high values indicate flatter spectra "
+                        "Robust global delay estimated as the slope of (unwrapped) arg (Xn) vs ωn "
                     ],
                 },
             ),
@@ -265,9 +278,7 @@ class WaveForm(ProcessPipeline):
                 np.asarray(BV),
                 {
                     "unit": [""],
-                    "description": [
-                        "Peakedness vs flatness of the harmonic distribution; low values indicate dominance of few harmonics, high values indicate flatter spectra "
-                    ],
+                    "description": [""],
                 },
             ),
             "tau_M1": with_attrs(
@@ -275,7 +286,7 @@ class WaveForm(ProcessPipeline):
                 {
                     "unit": [""],
                     "description": [
-                        "Peakedness vs flatness of the harmonic distribution; low values indicate dominance of few harmonics, high values indicate flatter spectra "
+                        "Point-free timing: centroid (center-of-mass) of the systolic lobe from a band-limited waveform using a positive weight w(t) within a fixed systolic window"
                     ],
                 },
             ),
@@ -283,25 +294,34 @@ class WaveForm(ProcessPipeline):
                 np.asarray(sigma_M),
                 {
                     "unit": [""],
-                    "description": [
-                        "Peakedness vs flatness of the harmonic distribution; low values indicate dominance of few harmonics, high values indicate flatter spectra "
-                    ],
+                    "description": ["dispersion proxy "],
                 },
             ),
             "TAU_H_N": with_attrs(
-                np.asarray(TAU_H_N),
+                np.asarray(TAU_H),
                 {
                     "unit": [""],
                     "description": [
-                        "Peakedness vs flatness of the harmonic distribution; low values indicate dominance of few harmonics, high values indicate flatter spectra "
+                        "Scalar proxy of low-pass damping from harmonic magnitudes only. Larger τH indicates stronger attenuation of higher harmonics"
                     ],
                 },
             ),
-            # "TMI": np.asarray(),
-            # "RI": np.asarray(),
-            # "RI_raw": np.asarray(),
-            # "RTVI": np.asarray(),
-            # "RTVI_raw": np.asarray(),
+            "TAU_P_N": with_attrs(
+                np.asarray(TAU_P_N),
+                {
+                    "unit": [""],
+                    "description": [""],
+                },
+            ),
+            "TAU_P": with_attrs(
+                np.asarray(TAU_P),
+                {
+                    "unit": [""],
+                    "description": [
+                        "Phase-aware scalar summary of vascular damping and phase lag, estimated from complex harmonics under explicit validity gates"
+                    ],
+                },
+            ),
         }
 
         # Artifacts can store non-metric outputs (strings, paths, etc.).
