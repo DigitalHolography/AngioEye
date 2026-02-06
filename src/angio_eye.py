@@ -14,6 +14,7 @@ except ImportError:  #  optional dependency
     sv_ttk = None
 
 from pipelines import PipelineDescriptor, ProcessResult, load_pipeline_catalog
+from pipelines.core.errors import format_pipeline_exception
 from pipelines.core.utils import write_combined_results_h5
 
 
@@ -490,7 +491,12 @@ class ProcessApp(tk.Tk):
         with h5py.File(h5_path, "r") as h5file:
             for pipeline_desc in pipelines:
                 pipeline = pipeline_desc.instantiate()
-                result = pipeline.run(h5file)
+                try:
+                    result = pipeline.run(h5file)
+                except Exception as exc:  # noqa: BLE001
+                    raise RuntimeError(
+                        format_pipeline_exception(exc, pipeline)
+                    ) from exc
                 pipeline_results.append((pipeline.name, result))
                 self._log_batch(f"[OK] {h5_path.name} -> {pipeline.name}")
         write_combined_results_h5(
