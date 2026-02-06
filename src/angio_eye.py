@@ -303,6 +303,39 @@ class ProcessApp(tk.Tk):
         self.batch_output.update_idletasks()
         self.update_idletasks()
 
+    def _export_batch_log(self, initial_dir: Path | None = None) -> Path | None:
+        if initial_dir is None:
+            initial_dir = Path(self.batch_output_var.get() or Path.cwd())
+        if not initial_dir.exists():
+            initial_dir = Path.cwd()
+        path = filedialog.asksaveasfilename(
+            defaultextension=".txt",
+            filetypes=[("Text file", "*.txt"), ("All files", "*.*")],
+            initialdir=str(initial_dir),
+            initialfile="batch_log.txt",
+            title="Export batch log",
+        )
+        if not path:
+            return None
+        try:
+            log_text = self.batch_output.get("1.0", "end").rstrip()
+            Path(path).write_text(log_text, encoding="utf-8")
+            self._log_batch(f"[LOG] Exported batch log -> {path}")
+            return Path(path)
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror("Export failed", f"Could not save log: {exc}")
+            return None
+
+    def _show_batch_error_dialog(self, message: str, initial_dir: Path) -> None:
+        self.bell()
+        export = messagebox.askyesno(
+            "Batch completed with errors",
+            f"{message}\n\nExport log to .txt?",
+            icon="warning",
+        )
+        if export:
+            self._export_batch_log(initial_dir)
+
     def select_all_pipelines(self) -> None:
         for var in self.pipeline_check_vars.values():
             if getattr(var, "_enabled", True):
@@ -432,9 +465,9 @@ class ProcessApp(tk.Tk):
         self._log_batch(f"Completed. {summary_msg}")
 
         if failures:
-            messagebox.showwarning(
-                "Batch completed with errors",
+            self._show_batch_error_dialog(
                 f"{len(failures)} failure(s). See log for details.\n\n{summary_msg}",
+                initial_dir=base_output_dir,
             )
         else:
             messagebox.showinfo("Batch completed", summary_msg)
