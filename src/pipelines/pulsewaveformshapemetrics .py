@@ -52,6 +52,12 @@ class WaveForm(ProcessPipeline):
         TAU_H = []
         TAU_P_N = []
         TAU_P = []
+        AVTI = []
+        VTI_0_T2 = []
+        VTI_T2_T = []
+        FVTI = []
+        IVTI=[]
+        RVTI=[]
         for i in range(len(vraw_ds[0])):
             T = t_ds[0][i]
             omega0 = 2 * np.pi / T
@@ -145,7 +151,30 @@ class WaveForm(ProcessPipeline):
                 TAU_P.append(np.nanmean(tau_P_n))
             else:
                 TAU_P.append(np.nan)
+            dt = t[1] - t[0]
+            AVTI_i = np.sum(w) * dt
+            AVTI.append(AVTI_i)
+            mid = len(t) // 2
+
+            VTI_early = np.sum(w[:mid]) * dt
+            VTI_late = np.sum(w[mid:]) * dt
+
+            VTI_0_T2.append(VTI_early)
+            VTI_T2_T.append(VTI_late)
+            if AVTI_i > 0:
+                FVTI.append(VTI_early / AVTI_i)
+            else:
+                FVTI.append(np.nan)
+            den = VTI_early + VTI_late
+            if den > 0:
+                IVTI.append((VTI_early - VTI_late) / den)
+            else:
+                IVTI.append(np.nan)
+            eps = 1e-12
+            RVTI.append(VTI_early / (VTI_late + eps))
+            
         # Metrics are the main numerical outputs; each key becomes a dataset under /pipelines/<name>/metrics.
+
         metrics = {
             "Xn": with_attrs(
                 np.asarray(Xn),
@@ -316,6 +345,50 @@ class WaveForm(ProcessPipeline):
                     "description": [
                         "Phase-aware scalar summary of vascular damping and phase lag, estimated from complex harmonics under explicit validity gates"
                     ],
+                },
+            ),
+            "AVTI": with_attrs(
+                np.asarray(AVTI),
+                {
+                    "unit": [""],
+                    "description": [
+                        "Primary arterial stroke-distance proxy (non-negative)"
+                    ],
+                },
+            ),
+            "VTI_0_T2": with_attrs(
+                np.asarray(VTI_0_T2),
+                {
+                    "unit": [""],
+                    "description": ["Early-cycle stroke distance"],
+                },
+            ),
+            "VTI_T2_T": with_attrs(
+                np.asarray(VTI_T2_T),
+                {
+                    "unit": [""],
+                    "description": ["Late-cycle stroke distance"],
+                },
+            ),
+            "FVTI": with_attrs(
+                np.asarray(FVTI),
+                {
+                    "unit": [""],
+                    "description": ["Scale-free partition"],
+                },
+            ),
+            "IVTI": with_attrs(
+                np.asarray(IVTI),
+                {
+                    "unit": [""],
+                    "description": ["Signed asymmetry in [−1, 1] (renamed to avoid symbol collision)"],
+                },
+            ),
+            "RVTI": with_attrs(
+                np.asarray(RVTI),
+                {
+                    "unit": [""],
+                    "description": ["Partition imbalance"],
                 },
             ),
         }
