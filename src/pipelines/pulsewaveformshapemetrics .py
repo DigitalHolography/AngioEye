@@ -56,8 +56,8 @@ class WaveForm(ProcessPipeline):
         VTI_0_T2 = []
         VTI_T2_T = []
         FVTI = []
-        IVTI=[]
-        RVTI=[]
+        IVTI = []
+        RVTI = []
         for i in range(len(vraw_ds[0])):
             T = t_ds[0][i]
             omega0 = 2 * np.pi / T
@@ -172,7 +172,7 @@ class WaveForm(ProcessPipeline):
                 IVTI.append(np.nan)
             eps = 1e-12
             RVTI.append(VTI_early / (VTI_late + eps))
-            
+
         # Metrics are the main numerical outputs; each key becomes a dataset under /pipelines/<name>/metrics.
 
         metrics = {
@@ -381,7 +381,9 @@ class WaveForm(ProcessPipeline):
                 np.asarray(IVTI),
                 {
                     "unit": [""],
-                    "description": ["Signed asymmetry in [−1, 1] (renamed to avoid symbol collision)"],
+                    "description": [
+                        "Signed asymmetry in [−1, 1] (renamed to avoid symbol collision)"
+                    ],
                 },
             ),
             "RVTI": with_attrs(
