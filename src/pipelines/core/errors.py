@@ -61,10 +61,5 @@ def format_pipeline_exception(
     line = (target.line or linecache.getline(target.filename, target.lineno)).strip()
 
     if line:
-        return (
-            f"{label} failed: {summary}\n"
-            f"  at {location}\n"
-            f"    {line}\n"
-            f"    ^"
-        )
+        return f"{label} failed: {summary}\n  at {location}\n    {line}\n    ^"
     return f"{label} failed: {summary}\n  at {location}"
