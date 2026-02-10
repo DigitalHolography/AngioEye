@@ -59,7 +59,7 @@ class WaveForm(ProcessPipeline):
         IVTI = []
         RVTI = []
         for i in range(len(vraw_ds[0])):
-            T = t_ds[0][i]
+            T = t_ds[0, i]
             omega0 = 2 * np.pi / T
             t = np.linspace(0, T, N, endpoint=False)
             Vfft = np.fft.fft(vraw_ds[:, i]) / N
