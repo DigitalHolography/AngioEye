@@ -19,16 +19,12 @@ class TauhN10PerBeat(ProcessPipeline):
 
     def run(self, h5file: h5py.File) -> ProcessResult:
         metrics: dict[str, float] = {}
-        artifacts: dict[str, float] = {}
         for vessel in ("Artery", "Vein"):
-            vessel_metrics, vessel_artifacts = self._compute_per_beat(h5file, vessel)
+            vessel_metrics = self._compute_per_beat(h5file, vessel)
             metrics.update(vessel_metrics)
-            artifacts.update(vessel_artifacts)
-        return ProcessResult(metrics=metrics, artifacts=artifacts)
+        return ProcessResult(metrics=metrics)
 
-    def _compute_per_beat(
-        self, h5file: h5py.File, vessel: str
-    ) -> tuple[dict[str, float], dict[str, float]]:
+    def _compute_per_beat(self, h5file: h5py.File, vessel: str) -> dict[str, float]:
         n = self.harmonic_index
         prefix = vessel.lower()
         # Per-beat FFT amplitudes/phases and per-beat Vmax for the band-limited signal.
@@ -94,16 +90,15 @@ class TauhN10PerBeat(ProcessPipeline):
                 float(math.sqrt(denom) / omega_n) if denom > 0 else math.nan
             )
 
-        metrics: dict[str, float] = {}
-        artifacts: dict[str, float] = {f"{prefix}_freq_hz_{n}": freq_n_hz}
+        metrics: dict[str, float] = {f"{prefix}_freq_hz_{n}": freq_n_hz}
         for i, tau in enumerate(tau_values):
             metrics[f"{prefix}_tauH_{n}_beat{i}"] = tau
-            artifacts[f"{prefix}_vmax_beat{i}"] = vmax_values[i]
-            artifacts[f"{prefix}_X_abs_{n}_beat{i}"] = x_values[i]
+            metrics[f"{prefix}_vmax_beat{i}"] = vmax_values[i]
+            metrics[f"{prefix}_X_abs_{n}_beat{i}"] = x_values[i]
         metrics[f"{prefix}_tauH_{n}_median"] = (
             float(np.nanmedian(tau_values)) if tau_values else math.nan
         )
         metrics[f"{prefix}_tauH_{n}_mean"] = (
             float(np.nanmean(tau_values)) if tau_values else math.nan
         )
-        return metrics, artifacts
+        return metrics
