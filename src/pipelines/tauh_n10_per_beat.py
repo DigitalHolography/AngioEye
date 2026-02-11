@@ -24,9 +24,7 @@ class TauhN10PerBeat(ProcessPipeline):
             metrics.update(vessel_metrics)
         return ProcessResult(metrics=metrics)
 
-    def _compute_per_beat(
-        self, h5file: h5py.File, vessel: str
-    ) -> dict[str, float]:
+    def _compute_per_beat(self, h5file: h5py.File, vessel: str) -> dict[str, float]:
         n = self.harmonic_index
         prefix = vessel.lower()
         # Per-beat FFT amplitudes/phases and per-beat Vmax for the band-limited signal.
