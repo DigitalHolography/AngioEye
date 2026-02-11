@@ -42,4 +42,4 @@ class BasicStats(ProcessPipeline):
                 "mean": float(np.mean(arr)),
                 "std": float(np.std(arr)),
             }
-        return ProcessResult(metrics=metrics, artifacts={"dataset": dataset.name})
+        return ProcessResult(metrics=metrics, attrs={"dataset": dataset.name})
