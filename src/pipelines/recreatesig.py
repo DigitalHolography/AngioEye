@@ -27,17 +27,17 @@ class Reconstruct(ProcessPipeline):
 
     def run(self, h5file) -> ProcessResult:
         v_seg = np.asarray(h5file[self.v_profile])
-        t_ds = np.asarray(h5file[self.T_val])
+        # t_ds = np.asarray(h5file[self.T_val])
 
         V = []
         threshold = 3
 
         V_corrected = []
         V_ceil = []
-        V_gauss = []
+        # V_gauss = []
 
         for k in range(len(v_seg[0, :, 0, 0])):
-            VIT_Time = 0
+            # VIT_Time = 0
             Vit_br = []
             for br in range(len(v_seg[0, k, :, 0])):
                 v_branch = np.nanmean(v_seg[:, k, br, :], axis=1)
@@ -74,15 +74,16 @@ class Reconstruct(ProcessPipeline):
                             ) :
                         ]
                         Vit_br.append(np.nanmean(temp + test))
-                    except:
+                    except Exception:  # noqa: BLE001
                         Vit_br.append(np.nan)
+                        return None
 
                 Vit.append(np.nanmean(Vit_br))
 
             V_corrected.append(np.nanmean(Vit))
         for k in range(len(v_seg[0, :, 0, 0])):
             Vit = []
-            Vit_gauss = []
+            # Vit_gauss = []
             for br in range(len(v_seg[0, k, :, 0])):
                 Vit_br = []
                 for seg in range(len(v_seg[0, k, br, :])):
@@ -112,8 +113,9 @@ class Reconstruct(ProcessPipeline):
                                 + values[last - threshold :]
                             )
                         )
-                    except:
+                    except Exception:  # noqa: BLE001
                         Vit_br.append(np.nan)
+                        return None
 
                 Vit.append(np.nanmean(Vit_br))
 
