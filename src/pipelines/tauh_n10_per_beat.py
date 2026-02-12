@@ -28,9 +28,9 @@ class TauhN10PerBeat(ProcessPipeline):
         n = self.harmonic_index
         prefix = vessel.lower()
         # Per-beat FFT amplitudes/phases and per-beat Vmax for the band-limited signal.
-        amp_path = f"{vessel}/PerBeat/VelocitySignalPerBeatFFT_abs/value"
-        phase_path = f"{vessel}/PerBeat/VelocitySignalPerBeatFFT_arg/value"
-        vmax_path = f"{vessel}/PerBeat/VmaxPerBeatBandLimited/value"
+        amp_path = f"{vessel}/VelocityPerBeat/VelocitySignalPerBeatFFT_abs/value"
+        phase_path = f"{vessel}/VelocityPerBeat/VelocitySignalPerBeatFFT_arg/value"
+        vmax_path = f"{vessel}/VelocityPerBeat/VmaxPerBeatBandLimited/value"
         freq_path = (
             f"{vessel}/Velocity/WaveformAnalysis/syntheticSpectralAnalysis/"
             f"{'Arterial' if vessel.lower().startswith('arter') else 'Venous'}PeakFrequencies/value"
