@@ -118,23 +118,18 @@ class MyAnalysis(ProcessPipeline):
         import torch
         # 1. Read data using h5py
         # 2. Perform calculations
-        # 3. Return metrics and artifacts
+        # 3. Return metrics
 
         metrics={"peak_flow": 12.5}
-        artifacts = {"note": "Static data for demonstration"}
 
-        # Optional attributes applied to the pipeline group and the root file.
+        # Optional attributes applied to the pipeline group.
         attrs = {
             "pipeline_version": "1.0",
             "author": "StaticExample"
         }
 
-        file_attrs = {"example_generated": True}
-
         return ProcessResult(
             metrics=metrics,
-            artifacts=artifacts,
-            attrs=attrs,
-            file_attrs=file_attrs
+            attrs=attrs
         )
 ```

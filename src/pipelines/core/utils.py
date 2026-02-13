@@ -51,7 +51,7 @@ def _create_unique_group(parent: h5py.Group, base_name: str) -> h5py.Group:
 
 def _resolve_dataset_target(root_group: h5py.Group, key: str) -> tuple[h5py.Group, str]:
     """
-    Resolve a metric/artifact key to (parent_group, dataset_name).
+    Resolve a metric key to (parent_group, dataset_name).
 
     Supports nested paths like "vesselA/tauH_10" under the provided root group.
     Intermediate groups are created on demand.
@@ -149,8 +149,8 @@ def write_result_h5(
     Attributes:
         pipeline: pipeline display name.
         source_file: optional path to the originating HDF5 input.
-        metrics: stored under /metrics/<name>, supporting nested paths in keys.
-        artifacts: stored under /artifacts/<name> when present, also supporting nested paths.
+        metrics: stored under /Pipelines/<safe_pipeline_name>/<name>,
+            supporting nested paths in keys.
     """
     out_path = Path(path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -160,11 +160,6 @@ def write_result_h5(
             f.attrs["pipeline"] = pipeline_name
         if source_file:
             f.attrs["source_file"] = source_file
-        if result.file_attrs:
-            for key, value in result.file_attrs.items():
-                if key in {"pipeline", "source_file"}:
-                    continue
-                _set_attr_safe(f, key, value)
         pipelines_grp = _ensure_pipelines_group(f)
         pipeline_grp = _create_unique_group(pipelines_grp, safe_h5_key(pipeline_name))
         pipeline_grp.attrs["pipeline"] = pipeline_name
@@ -173,13 +168,8 @@ def write_result_h5(
                 if key == "pipeline":
                     continue
                 _set_attr_safe(pipeline_grp, key, value)
-        metrics_grp = pipeline_grp.create_group("metrics")
         for key, value in result.metrics.items():
-            _write_value_dataset(metrics_grp, key, value)
-        if result.artifacts:
-            artifacts_grp = pipeline_grp.create_group("artifacts")
-            for key, value in result.artifacts.items():
-                _write_value_dataset(artifacts_grp, key, value)
+            _write_value_dataset(pipeline_grp, key, value)
     return str(out_path)
 
 
@@ -191,7 +181,7 @@ def write_combined_results_h5(
     """
     Write multiple pipeline results into a single HDF5 file.
 
-    The file groups results under /pipelines/<safe_pipeline_name>/{metrics,artifacts}.
+    The file groups results under /Pipelines/<safe_pipeline_name>/<metric_name>.
     """
     out_path = Path(path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -210,11 +200,6 @@ def write_combined_results_h5(
                     if key == "pipeline":
                         continue
                     _set_attr_safe(pipeline_grp, key, value)
-            metrics_grp = pipeline_grp.create_group("metrics")
             for key, value in result.metrics.items():
-                _write_value_dataset(metrics_grp, key, value)
-            if result.artifacts:
-                artifacts_grp = pipeline_grp.create_group("artifacts")
-                for key, value in result.artifacts.items():
-                    _write_value_dataset(artifacts_grp, key, value)
+                _write_value_dataset(pipeline_grp, key, value)
     return str(out_path)
