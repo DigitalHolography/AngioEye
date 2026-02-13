@@ -42,9 +42,7 @@ def registerPipeline(
 @dataclass
 class ProcessResult:
     metrics: dict[str, Any]
-    artifacts: dict[str, Any] | None = None
     attrs: dict[str, Any] | None = None  # attributes stored on the pipeline group
-    file_attrs: dict[str, Any] | None = None  # attributes stored on the root H5 file
     output_h5_path: str | None = None
 
 

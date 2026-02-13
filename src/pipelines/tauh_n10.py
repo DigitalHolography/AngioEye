@@ -40,15 +40,14 @@ class TauhN10(ProcessPipeline):
 
     def run(self, h5file: h5py.File) -> ProcessResult:
         metrics: dict[str, float] = {}
-        artifacts: dict[str, float] = {}
         for vessel in ("Artery", "Vein"):
             vessel_result = self._compute_for_vessel(h5file, vessel)
             prefix = vessel.lower()
             metrics[f"{prefix}_tauH_{self.harmonic_index}"] = vessel_result.tau
             metrics[f"{prefix}_X_abs_{self.harmonic_index}"] = vessel_result.x_abs
-            artifacts[f"{prefix}_vmax"] = vessel_result.vmax
-            artifacts[f"{prefix}_freq_hz_{self.harmonic_index}"] = vessel_result.freq_hz
-        return ProcessResult(metrics=metrics, artifacts=artifacts)
+            metrics[f"{prefix}_vmax"] = vessel_result.vmax
+            metrics[f"{prefix}_freq_hz_{self.harmonic_index}"] = vessel_result.freq_hz
+        return ProcessResult(metrics=metrics)
 
     def _compute_for_vessel(self, h5file: h5py.File, vessel: str) -> TauHResult:
         spectral_prefix = "Arterial" if vessel.lower().startswith("arter") else "Venous"
