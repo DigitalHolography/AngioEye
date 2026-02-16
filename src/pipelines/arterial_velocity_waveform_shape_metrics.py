@@ -73,8 +73,8 @@ class ArterialExample(ProcessPipeline):
                     ) :
                 ]
             )
-            R_VTI_bandlimited.append(D2_bandlimited / (D1_bandlimited + 10 ** (-12)))
-            R_VTI_raw.append(D2_raw / (D1_raw + 10 ** (-12)))
+            R_VTI_bandlimited.append(D1_bandlimited / (D2_bandlimited + 10 ** (-12)))
+            R_VTI_raw.append(D1_raw / (D2_raw + 10 ** (-12)))
             M_0 = np.sum(v_raw.T[beat_idx])
             M_1 = 0
             for time_idx in range(len(v_raw.T[beat_idx])):
