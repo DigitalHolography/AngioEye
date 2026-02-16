@@ -3,7 +3,7 @@ import numpy as np
 from .core.base import ProcessPipeline, ProcessResult, registerPipeline, with_attrs
 
 
-@registerPipeline(name="segment_waveform_shape_metrics")
+@registerPipeline(name="segment_waveform_shape_metrics_test")
 class ArterialSegExample(ProcessPipeline):
     """
     Waveform-shape metrics on per-beat, per-branch, per-radius velocity waveforms.
@@ -35,12 +35,14 @@ class ArterialSegExample(ProcessPipeline):
         D1 = sum(v[0:k]), D2 = sum(v[k:n_t]), k = ceil(n_t * ratio), ratio=0.5
     """
 
-    description = "Segment waveform shape metrics (tau, RI, RVTI) + branch/global aggregates."
-
-    v_raw_input = "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegment/value"
-    v_bandlimited_input = (
-        "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegmentBandLimited/value"
+    description = (
+        "Segment waveform shape metrics (tau, RI, RVTI) + branch/global aggregates."
     )
+
+    v_raw_input = (
+        "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegment/value"
+    )
+    v_bandlimited_input = "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegmentBandLimited/value"
     T_input = "/Artery/VelocityPerBeat/beatPeriodSeconds/value"
 
     @staticmethod
@@ -51,13 +53,13 @@ class ArterialSegExample(ProcessPipeline):
     @staticmethod
     def _safe_nanmean(x: np.ndarray) -> float:
         if x.size == 0 or not np.any(np.isfinite(x)):
-            return 0.0
+            return np.nan
         return float(np.nanmean(x))
 
     @staticmethod
     def _safe_nanmedian(x: np.ndarray) -> float:
         if x.size == 0 or not np.any(np.isfinite(x)):
-            return 0.0
+            return np.nan
         return float(np.nanmedian(x))
 
     @staticmethod
@@ -75,51 +77,53 @@ class ArterialSegExample(ProcessPipeline):
 
         # tau_M1 and tau_M1/T (PER WAVEFORM ONLY)
         if (not np.isfinite(Tbeat)) or Tbeat <= 0:
-            tau_M1 = 0.0
-            tau_M1_over_T = 0.0
+            tau_M1 = np.nan
+            tau_M1_over_T = np.nan
         else:
             m0 = np.nansum(v)
             if (not np.isfinite(m0)) or m0 <= 0:
-                tau_M1 = 0.0
-                tau_M1_over_T = 0.0
+                tau_M1 = np.nan
+                tau_M1_over_T = np.nan
             else:
                 dt = Tbeat / n
                 t = np.arange(n, dtype=float) * dt
                 m1 = np.nansum(v * t)
-                tau_M1 = (m1 / m0) if np.isfinite(m1) else 0.0
+                tau_M1 = (m1 / m0) if np.isfinite(m1) else np.nan
                 tau_M1_over_T = tau_M1 / Tbeat
 
         # RI robust
         if not np.any(np.isfinite(v)):
-            RI = 0.0
+            RI = np.nan
         else:
             vmax = np.nanmax(v)
             if (not np.isfinite(vmax)) or vmax <= 0:
-                RI = 0.0
+                RI = np.nan
             else:
                 vmin = np.nanmin(v)
                 RI = 1.0 - (vmin / vmax)
                 if not np.isfinite(RI):
-                    RI = 0.0
+                    RI = np.nan
                 else:
                     RI = float(np.clip(RI, 0.0, 1.0))
 
         # RVTI (paper): D1/(D2+eps)
         k = int(np.ceil(n * ratio))
         k = max(0, min(n, k))
-        D1 = np.nansum(v[:k]) if k > 0 else 0.0
-        D2 = np.nansum(v[k:]) if k < n else 0.0
-        if not np.isfinite(D1):
-            D1 = 0.0
-        if not np.isfinite(D2):
-            D2 = 0.0
+        D1 = np.nansum(v[:k]) if k > 0 else np.nan
+        D2 = np.nansum(v[k:]) if k < n else np.nan
+        if not np.isfinite(D1) or D1 == 0.0:
+            D1 = np.nan
+        if not np.isfinite(D2) or D2 == 0.0:
+            D2 = np.nan
         RVTI = float(D1 / (D2 + eps))
 
         return float(tau_M1), float(tau_M1_over_T), float(RI), RVTI
 
     def _compute_block(self, v_block: np.ndarray, T: np.ndarray, ratio: float):
         if v_block.ndim != 4:
-            raise ValueError(f"Expected (n_t,n_beats,n_branches,n_radii), got {v_block.shape}")
+            raise ValueError(
+                f"Expected (n_t,n_beats,n_branches,n_radii), got {v_block.shape}"
+            )
 
         n_t, n_beats, n_branches, n_radii = v_block.shape
         n_segments = n_branches * n_radii
@@ -180,10 +184,16 @@ class ArterialSegExample(ProcessPipeline):
                     RVTI_vals.append(rvti)
 
                 # Branch aggregates: MEDIAN over radii
-                tau_branch[beat_idx, branch_idx] = self._safe_nanmedian(np.asarray(tau_b))
-                tauT_branch[beat_idx, branch_idx] = self._safe_nanmedian(np.asarray(tauT_b))
+                tau_branch[beat_idx, branch_idx] = self._safe_nanmedian(
+                    np.asarray(tau_b)
+                )
+                tauT_branch[beat_idx, branch_idx] = self._safe_nanmedian(
+                    np.asarray(tauT_b)
+                )
                 RI_branch[beat_idx, branch_idx] = self._safe_nanmedian(np.asarray(RI_b))
-                RVTI_branch[beat_idx, branch_idx] = self._safe_nanmedian(np.asarray(RVTI_b))
+                RVTI_branch[beat_idx, branch_idx] = self._safe_nanmedian(
+                    np.asarray(RVTI_b)
+                )
 
             # Global aggregates: MEAN over all branches & radii
             tau_global[beat_idx] = self._safe_nanmean(np.asarray(tau_vals))
@@ -192,10 +202,20 @@ class ArterialSegExample(ProcessPipeline):
             RVTI_global[beat_idx] = self._safe_nanmean(np.asarray(RVTI_vals))
 
         return (
-            tau_seg, tauT_seg, RI_seg, RVTI_seg,
-            tau_branch, tauT_branch, RI_branch, RVTI_branch,
-            tau_global, tauT_global, RI_global, RVTI_global,
-            n_branches, n_radii
+            tau_seg,
+            tauT_seg,
+            RI_seg,
+            RVTI_seg,
+            tau_branch,
+            tauT_branch,
+            RI_branch,
+            RVTI_branch,
+            tau_global,
+            tauT_global,
+            RI_global,
+            RVTI_global,
+            n_branches,
+            n_radii,
         )
 
     def run(self, h5file) -> ProcessResult:
@@ -209,21 +229,43 @@ class ArterialSegExample(ProcessPipeline):
         ratio_systole_diastole_R_VTI = 0.5
 
         (
-            tau_seg_b, tauT_seg_b, RI_seg_b, RVTI_seg_b,
-            tau_br_b, tauT_br_b, RI_br_b, RVTI_br_b,
-            tau_gl_b, tauT_gl_b, RI_gl_b, RVTI_gl_b,
-            n_branches_b, n_radii_b
+            tau_seg_b,
+            tauT_seg_b,
+            RI_seg_b,
+            RVTI_seg_b,
+            tau_br_b,
+            tauT_br_b,
+            RI_br_b,
+            RVTI_br_b,
+            tau_gl_b,
+            tauT_gl_b,
+            RI_gl_b,
+            RVTI_gl_b,
+            n_branches_b,
+            n_radii_b,
         ) = self._compute_block(v_band, T, ratio_systole_diastole_R_VTI)
 
         (
-            tau_seg_r, tauT_seg_r, RI_seg_r, RVTI_seg_r,
-            tau_br_r, tauT_br_r, RI_br_r, RVTI_br_r,
-            tau_gl_r, tauT_gl_r, RI_gl_r, RVTI_gl_r,
-            n_branches_r, n_radii_r
+            tau_seg_r,
+            tauT_seg_r,
+            RI_seg_r,
+            RVTI_seg_r,
+            tau_br_r,
+            tauT_br_r,
+            RI_br_r,
+            RVTI_br_r,
+            tau_gl_r,
+            tauT_gl_r,
+            RI_gl_r,
+            RVTI_gl_r,
+            n_branches_r,
+            n_radii_r,
         ) = self._compute_block(v_raw, T, ratio_systole_diastole_R_VTI)
 
         # Consistency attributes (optional but useful)
-        seg_order_note = "seg_idx = branch_idx * n_radii + radius_idx (branch-major flattening)"
+        seg_order_note = (
+            "seg_idx = branch_idx * n_radii + radius_idx (branch-major flattening)"
+        )
         if n_radii_b != n_radii_r or n_branches_b != n_branches_r:
             seg_order_note += " | WARNING: raw/bandlimited branch/radius dims differ."
 
@@ -231,89 +273,165 @@ class ArterialSegExample(ProcessPipeline):
             # --- Existing datasets (unchanged names/shapes) ---
             "tau_M1_bandlimited_segment": with_attrs(
                 tau_seg_b,
-                {"unit": ["s"], "definition": ["tau_M1 = M1/M0 on rectified waveform"], "segment_indexing": [seg_order_note]},
+                {
+                    "unit": ["s"],
+                    "definition": ["tau_M1 = M1/M0 on rectified waveform"],
+                    "segment_indexing": [seg_order_note],
+                },
             ),
             "tau_M1_over_T_bandlimited_segment": with_attrs(
                 tauT_seg_b,
-                {"unit": [""], "definition": ["tau_M1_over_T = (M1/M0)/T"], "segment_indexing": [seg_order_note]},
+                {
+                    "unit": [""],
+                    "definition": ["tau_M1_over_T = (M1/M0)/T"],
+                    "segment_indexing": [seg_order_note],
+                },
             ),
             "RI_bandlimited_segment": with_attrs(
                 RI_seg_b,
-                {"unit": [""], "definition": ["RI = 1 - vmin/vmax (robust, rectified)"], "segment_indexing": [seg_order_note]},
+                {
+                    "unit": [""],
+                    "definition": ["RI = 1 - vmin/vmax (robust, rectified)"],
+                    "segment_indexing": [seg_order_note],
+                },
             ),
             "R_VTI_bandlimited_segment": with_attrs(
                 RVTI_seg_b,
-                {"unit": [""], "definition": ["paper RVTI = D1/(D2+eps)"], "segment_indexing": [seg_order_note]},
+                {
+                    "unit": [""],
+                    "definition": ["paper RVTI = D1/(D2+eps)"],
+                    "segment_indexing": [seg_order_note],
+                },
             ),
-
             "tau_M1_raw_segment": with_attrs(
                 tau_seg_r,
-                {"unit": ["s"], "definition": ["tau_M1 = M1/M0 on rectified waveform"], "segment_indexing": [seg_order_note]},
+                {
+                    "unit": ["s"],
+                    "definition": ["tau_M1 = M1/M0 on rectified waveform"],
+                    "segment_indexing": [seg_order_note],
+                },
             ),
             "tau_M1_over_T_raw_segment": with_attrs(
                 tauT_seg_r,
-                {"unit": [""], "definition": ["tau_M1_over_T = (M1/M0)/T"], "segment_indexing": [seg_order_note]},
+                {
+                    "unit": [""],
+                    "definition": ["tau_M1_over_T = (M1/M0)/T"],
+                    "segment_indexing": [seg_order_note],
+                },
             ),
             "RI_raw_segment": with_attrs(
                 RI_seg_r,
-                {"unit": [""], "definition": ["RI = 1 - vmin/vmax (robust, rectified)"], "segment_indexing": [seg_order_note]},
+                {
+                    "unit": [""],
+                    "definition": ["RI = 1 - vmin/vmax (robust, rectified)"],
+                    "segment_indexing": [seg_order_note],
+                },
             ),
             "R_VTI_raw_segment": with_attrs(
                 RVTI_seg_r,
-                {"unit": [""], "definition": ["paper RVTI = D1/(D2+eps)"], "segment_indexing": [seg_order_note]},
+                {
+                    "unit": [""],
+                    "definition": ["paper RVTI = D1/(D2+eps)"],
+                    "segment_indexing": [seg_order_note],
+                },
             ),
-
-            "ratio_systole_diastole_R_VTI": np.asarray(ratio_systole_diastole_R_VTI, dtype=float),
-
+            "ratio_systole_diastole_R_VTI": np.asarray(
+                ratio_systole_diastole_R_VTI, dtype=float
+            ),
             # --- New aggregated outputs ---
             "tau_M1_bandlimited_branch": with_attrs(
-                tau_br_b, {"unit": ["s"], "definition": ["median over radii: tau_M1 per branch"]}
+                tau_br_b,
+                {"unit": ["s"], "definition": ["median over radii: tau_M1 per branch"]},
             ),
             "tau_M1_over_T_bandlimited_branch": with_attrs(
-                tauT_br_b, {"unit": [""], "definition": ["median over radii: tau_M1/T per branch"]}
+                tauT_br_b,
+                {
+                    "unit": [""],
+                    "definition": ["median over radii: tau_M1/T per branch"],
+                },
             ),
             "RI_bandlimited_branch": with_attrs(
-                RI_br_b, {"unit": [""], "definition": ["median over radii: RI per branch"]}
+                RI_br_b,
+                {"unit": [""], "definition": ["median over radii: RI per branch"]},
             ),
             "R_VTI_bandlimited_branch": with_attrs(
-                RVTI_br_b, {"unit": [""], "definition": ["median over radii: paper RVTI per branch"]}
+                RVTI_br_b,
+                {
+                    "unit": [""],
+                    "definition": ["median over radii: paper RVTI per branch"],
+                },
             ),
             "tau_M1_bandlimited_global": with_attrs(
-                tau_gl_b, {"unit": ["s"], "definition": ["mean over branches & radii: tau_M1 global"]}
+                tau_gl_b,
+                {
+                    "unit": ["s"],
+                    "definition": ["mean over branches & radii: tau_M1 global"],
+                },
             ),
             "tau_M1_over_T_bandlimited_global": with_attrs(
-                tauT_gl_b, {"unit": [""], "definition": ["mean over branches & radii: tau_M1/T global"]}
+                tauT_gl_b,
+                {
+                    "unit": [""],
+                    "definition": ["mean over branches & radii: tau_M1/T global"],
+                },
             ),
             "RI_bandlimited_global": with_attrs(
-                RI_gl_b, {"unit": [""], "definition": ["mean over branches & radii: RI global"]}
+                RI_gl_b,
+                {"unit": [""], "definition": ["mean over branches & radii: RI global"]},
             ),
             "R_VTI_bandlimited_global": with_attrs(
-                RVTI_gl_b, {"unit": [""], "definition": ["mean over branches & radii: paper RVTI global"]}
+                RVTI_gl_b,
+                {
+                    "unit": [""],
+                    "definition": ["mean over branches & radii: paper RVTI global"],
+                },
             ),
-
             "tau_M1_raw_branch": with_attrs(
-                tau_br_r, {"unit": ["s"], "definition": ["median over radii: tau_M1 per branch"]}
+                tau_br_r,
+                {"unit": ["s"], "definition": ["median over radii: tau_M1 per branch"]},
             ),
             "tau_M1_over_T_raw_branch": with_attrs(
-                tauT_br_r, {"unit": [""], "definition": ["median over radii: tau_M1/T per branch"]}
+                tauT_br_r,
+                {
+                    "unit": [""],
+                    "definition": ["median over radii: tau_M1/T per branch"],
+                },
             ),
             "RI_raw_branch": with_attrs(
-                RI_br_r, {"unit": [""], "definition": ["median over radii: RI per branch"]}
+                RI_br_r,
+                {"unit": [""], "definition": ["median over radii: RI per branch"]},
             ),
             "R_VTI_raw_branch": with_attrs(
-                RVTI_br_r, {"unit": [""], "definition": ["median over radii: paper RVTI per branch"]}
+                RVTI_br_r,
+                {
+                    "unit": [""],
+                    "definition": ["median over radii: paper RVTI per branch"],
+                },
             ),
             "tau_M1_raw_global": with_attrs(
-                tau_gl_r, {"unit": ["s"], "definition": ["mean over branches & radii: tau_M1 global"]}
+                tau_gl_r,
+                {
+                    "unit": ["s"],
+                    "definition": ["mean over branches & radii: tau_M1 global"],
+                },
             ),
             "tau_M1_over_T_raw_global": with_attrs(
-                tauT_gl_r, {"unit": [""], "definition": ["mean over branches & radii: tau_M1/T global"]}
+                tauT_gl_r,
+                {
+                    "unit": [""],
+                    "definition": ["mean over branches & radii: tau_M1/T global"],
+                },
             ),
             "RI_raw_global": with_attrs(
-                RI_gl_r, {"unit": [""], "definition": ["mean over branches & radii: RI global"]}
+                RI_gl_r,
+                {"unit": [""], "definition": ["mean over branches & radii: RI global"]},
             ),
             "R_VTI_raw_global": with_attrs(
-                RVTI_gl_r, {"unit": [""], "definition": ["mean over branches & radii: paper RVTI global"]}
+                RVTI_gl_r,
+                {
+                    "unit": [""],
+                    "definition": ["mean over branches & radii: paper RVTI global"],
+                },
             ),
         }
 
