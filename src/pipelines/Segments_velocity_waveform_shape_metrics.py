@@ -39,10 +39,16 @@ class ArterialSegExample(ProcessPipeline):
         "Segment waveform shape metrics (tau, RI, RVTI) + branch/global aggregates."
     )
 
-    v_raw_input = (
-        "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegment/value"
+    v_raw_global_input = "/Artery/VelocityPerBeat/VelocitySignalPerBeat/value"
+    v_bandlimited_global_input = (
+        "/Artery/VelocityPerBeat/VelocitySignalPerBeatBandLimited/value"
     )
-    v_bandlimited_input = "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegmentBandLimited/value"
+    v_bandlimited_global_max_input = (
+        "/Artery/VelocityPerBeat/VmaxPerBeatBandLimited/value"
+    )
+    v_bandlimited_global_min_input = (
+        "/Artery/VelocityPerBeat/VminPerBeatBandLimited/value"
+    )
     T_input = "/Artery/VelocityPerBeat/beatPeriodSeconds/value"
 
     @staticmethod
@@ -219,220 +225,338 @@ class ArterialSegExample(ProcessPipeline):
         )
 
     def run(self, h5file) -> ProcessResult:
-        v_raw = np.asarray(h5file[self.v_raw_input])
-        v_band = np.asarray(h5file[self.v_bandlimited_input])
         T = np.asarray(h5file[self.T_input])
+        ratio_systole_diastole_R_VTI = 0.5
+        segment = False
+        try:
+            v_raw_input = (
+                "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegment/value"
+            )
+            v_bandlimited_input = "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegmentBandLimited/value"
+            segment = True
+        except Exception:  # noqa: BLE001
+            segment = False
+        if segment:
+            v_raw = np.asarray(h5file[v_raw_input])
+            v_band = np.asarray(h5file[v_bandlimited_input])
+            v_raw = self._rectify_keep_nan(v_raw)
+            v_band = self._rectify_keep_nan(v_band)
 
-        v_raw = self._rectify_keep_nan(v_raw)
-        v_band = self._rectify_keep_nan(v_band)
+            (
+                tau_seg_b,
+                tauT_seg_b,
+                RI_seg_b,
+                RVTI_seg_b,
+                tau_br_b,
+                tauT_br_b,
+                RI_br_b,
+                RVTI_br_b,
+                tau_gl_b,
+                tauT_gl_b,
+                RI_gl_b,
+                RVTI_gl_b,
+                n_branches_b,
+                n_radii_b,
+            ) = self._compute_block(v_band, T, ratio_systole_diastole_R_VTI)
+
+            (
+                tau_seg_r,
+                tauT_seg_r,
+                RI_seg_r,
+                RVTI_seg_r,
+                tau_br_r,
+                tauT_br_r,
+                RI_br_r,
+                RVTI_br_r,
+                tau_gl_r,
+                tauT_gl_r,
+                RI_gl_r,
+                RVTI_gl_r,
+                n_branches_r,
+                n_radii_r,
+            ) = self._compute_block(v_raw, T, ratio_systole_diastole_R_VTI)
+
+            # Consistency attributes (optional but useful)
+            seg_order_note = (
+                "seg_idx = branch_idx * n_radii + radius_idx (branch-major flattening)"
+            )
+            if n_radii_b != n_radii_r or n_branches_b != n_branches_r:
+                seg_order_note += (
+                    " | WARNING: raw/bandlimited branch/radius dims differ."
+                )
+
+            metrics = {
+                # --- Existing datasets (unchanged names/shapes) ---
+                "computed_by_segment/tau_M1_bandlimited_segment": with_attrs(
+                    tau_seg_b,
+                    {
+                        "unit": ["s"],
+                        "definition": ["tau_M1 = M1/M0 on rectified waveform"],
+                        "segment_indexing": [seg_order_note],
+                    },
+                ),
+                "computed_by_segment/tau_M1_over_T_bandlimited_segment": with_attrs(
+                    tauT_seg_b,
+                    {
+                        "unit": [""],
+                        "definition": ["tau_M1_over_T = (M1/M0)/T"],
+                        "segment_indexing": [seg_order_note],
+                    },
+                ),
+                "computed_by_segment/RI_bandlimited_segment": with_attrs(
+                    RI_seg_b,
+                    {
+                        "unit": [""],
+                        "definition": ["RI = 1 - vmin/vmax (robust, rectified)"],
+                        "segment_indexing": [seg_order_note],
+                    },
+                ),
+                "computed_by_segment/R_VTI_bandlimited_segment": with_attrs(
+                    RVTI_seg_b,
+                    {
+                        "unit": [""],
+                        "definition": ["paper RVTI = D1/(D2+eps)"],
+                        "segment_indexing": [seg_order_note],
+                    },
+                ),
+                "computed_by_segment/tau_M1_raw_segment": with_attrs(
+                    tau_seg_r,
+                    {
+                        "unit": ["s"],
+                        "definition": ["tau_M1 = M1/M0 on rectified waveform"],
+                        "segment_indexing": [seg_order_note],
+                    },
+                ),
+                "computed_by_segment/tau_M1_over_T_raw_segment": with_attrs(
+                    tauT_seg_r,
+                    {
+                        "unit": [""],
+                        "definition": ["tau_M1_over_T = (M1/M0)/T"],
+                        "segment_indexing": [seg_order_note],
+                    },
+                ),
+                "computed_by_segment/RI_raw_segment": with_attrs(
+                    RI_seg_r,
+                    {
+                        "unit": [""],
+                        "definition": ["RI = 1 - vmin/vmax (robust, rectified)"],
+                        "segment_indexing": [seg_order_note],
+                    },
+                ),
+                "computed_by_segment/R_VTI_raw_segment": with_attrs(
+                    RVTI_seg_r,
+                    {
+                        "unit": [""],
+                        "definition": ["paper RVTI = D1/(D2+eps)"],
+                        "segment_indexing": [seg_order_note],
+                    },
+                ),
+                "computed_by_segment/ratio_systole_diastole_R_VTI": np.asarray(
+                    ratio_systole_diastole_R_VTI, dtype=float
+                ),
+                # --- New aggregated outputs ---
+                "computed_by_segment/tau_M1_bandlimited_branch": with_attrs(
+                    tau_br_b,
+                    {
+                        "unit": ["s"],
+                        "definition": ["median over radii: tau_M1 per branch"],
+                    },
+                ),
+                "computed_by_segment/tau_M1_over_T_bandlimited_branch": with_attrs(
+                    tauT_br_b,
+                    {
+                        "unit": [""],
+                        "definition": ["median over radii: tau_M1/T per branch"],
+                    },
+                ),
+                "computed_by_segment/RI_bandlimited_branch": with_attrs(
+                    RI_br_b,
+                    {"unit": [""], "definition": ["median over radii: RI per branch"]},
+                ),
+                "computed_by_segment/R_VTI_bandlimited_branch": with_attrs(
+                    RVTI_br_b,
+                    {
+                        "unit": [""],
+                        "definition": ["median over radii: paper RVTI per branch"],
+                    },
+                ),
+                "computed_by_segment/tau_M1_bandlimited_global": with_attrs(
+                    tau_gl_b,
+                    {
+                        "unit": ["s"],
+                        "definition": ["mean over branches & radii: tau_M1 global"],
+                    },
+                ),
+                "computed_by_segment/tau_M1_over_T_bandlimited_global": with_attrs(
+                    tauT_gl_b,
+                    {
+                        "unit": [""],
+                        "definition": ["mean over branches & radii: tau_M1/T global"],
+                    },
+                ),
+                "computed_by_segment/RI_bandlimited_global": with_attrs(
+                    RI_gl_b,
+                    {
+                        "unit": [""],
+                        "definition": ["mean over branches & radii: RI global"],
+                    },
+                ),
+                "computed_by_segment/R_VTI_bandlimited_global": with_attrs(
+                    RVTI_gl_b,
+                    {
+                        "unit": [""],
+                        "definition": ["mean over branches & radii: paper RVTI global"],
+                    },
+                ),
+                "computed_by_segment/tau_M1_raw_branch": with_attrs(
+                    tau_br_r,
+                    {
+                        "unit": ["s"],
+                        "definition": ["median over radii: tau_M1 per branch"],
+                    },
+                ),
+                "computed_by_segment/tau_M1_over_T_raw_branch": with_attrs(
+                    tauT_br_r,
+                    {
+                        "unit": [""],
+                        "definition": ["median over radii: tau_M1/T per branch"],
+                    },
+                ),
+                "computed_by_segment/RI_raw_branch": with_attrs(
+                    RI_br_r,
+                    {"unit": [""], "definition": ["median over radii: RI per branch"]},
+                ),
+                "computed_by_segment/R_VTI_raw_branch": with_attrs(
+                    RVTI_br_r,
+                    {
+                        "unit": [""],
+                        "definition": ["median over radii: paper RVTI per branch"],
+                    },
+                ),
+                "computed_by_segment/tau_M1_raw_global": with_attrs(
+                    tau_gl_r,
+                    {
+                        "unit": ["s"],
+                        "definition": ["mean over branches & radii: tau_M1 global"],
+                    },
+                ),
+                "computed_by_segment/tau_M1_over_T_raw_global": with_attrs(
+                    tauT_gl_r,
+                    {
+                        "unit": [""],
+                        "definition": ["mean over branches & radii: tau_M1/T global"],
+                    },
+                ),
+                "computed_by_segment/RI_raw_global": with_attrs(
+                    RI_gl_r,
+                    {
+                        "unit": [""],
+                        "definition": ["mean over branches & radii: RI global"],
+                    },
+                ),
+                "computed_by_segment/R_VTI_raw_global": with_attrs(
+                    RVTI_gl_r,
+                    {
+                        "unit": [""],
+                        "definition": ["mean over branches & radii: paper RVTI global"],
+                    },
+                ),
+            }
+        else:
+            metrics = {}
+        v_raw = np.asarray(h5file[self.v_raw_global_input])
+        v_raw = np.maximum(v_raw, 0)
+        v_bandlimited = np.asarray(h5file[self.v_bandlimited_global_input])
+        v_bandlimited = np.maximum(v_bandlimited, 0)
+        v_bandlimited_max = np.asarray(h5file[self.v_bandlimited_global_max_input])
+        v_bandlimited_max = np.maximum(v_bandlimited_max, 0)
+        v_bandlimited_min = np.asarray(h5file[self.v_bandlimited_global_min_input])
+        v_bandlimited_min = np.maximum(v_bandlimited_min, 0)
+        tau_M1_raw = []
+        tau_M1_over_T_raw = []
+        tau_M1_bandlimited = []
+        tau_M1_over_T_bandlimited = []
+
+        R_VTI_bandlimited = []
+        R_VTI_raw = []
+
+        RI_bandlimited = []
+        RI_raw = []
 
         ratio_systole_diastole_R_VTI = 0.5
 
-        (
-            tau_seg_b,
-            tauT_seg_b,
-            RI_seg_b,
-            RVTI_seg_b,
-            tau_br_b,
-            tauT_br_b,
-            RI_br_b,
-            RVTI_br_b,
-            tau_gl_b,
-            tauT_gl_b,
-            RI_gl_b,
-            RVTI_gl_b,
-            n_branches_b,
-            n_radii_b,
-        ) = self._compute_block(v_band, T, ratio_systole_diastole_R_VTI)
+        for beat_idx in range(len(T[0])):
+            t = T[0][beat_idx] / len(v_raw.T[beat_idx])
+            D1_raw = np.sum(
+                v_raw.T[beat_idx][
+                    : int(np.ceil(len(v_raw.T[0]) * ratio_systole_diastole_R_VTI))
+                ]
+            )
+            D2_raw = np.sum(
+                v_raw.T[beat_idx][
+                    int(np.ceil(len(v_raw.T[0]) * ratio_systole_diastole_R_VTI)) :
+                ]
+            )
+            D1_bandlimited = np.sum(
+                v_bandlimited.T[beat_idx][
+                    : int(
+                        np.ceil(len(v_bandlimited.T[0]) * ratio_systole_diastole_R_VTI)
+                    )
+                ]
+            )
+            D2_bandlimited = np.sum(
+                v_bandlimited.T[beat_idx][
+                    int(
+                        np.ceil(len(v_bandlimited.T[0]) * ratio_systole_diastole_R_VTI)
+                    ) :
+                ]
+            )
+            R_VTI_bandlimited.append(D1_bandlimited / (D2_bandlimited + 10 ** (-12)))
+            R_VTI_raw.append(D1_raw / (D2_raw + 10 ** (-12)))
+            M_0 = np.sum(v_raw.T[beat_idx])
+            M_1 = 0
+            for time_idx in range(len(v_raw.T[beat_idx])):
+                M_1 += v_raw[time_idx][beat_idx] * time_idx * t
+            TM1 = M_1 / M_0
+            tau_M1_raw.append(TM1)
+            tau_M1_over_T_raw.append(TM1 / T[0][beat_idx])
 
-        (
-            tau_seg_r,
-            tauT_seg_r,
-            RI_seg_r,
-            RVTI_seg_r,
-            tau_br_r,
-            tauT_br_r,
-            RI_br_r,
-            RVTI_br_r,
-            tau_gl_r,
-            tauT_gl_r,
-            RI_gl_r,
-            RVTI_gl_r,
-            n_branches_r,
-            n_radii_r,
-        ) = self._compute_block(v_raw, T, ratio_systole_diastole_R_VTI)
+        for beat_idx in range(len(T[0])):
+            t = T[0][beat_idx] / len(v_raw.T[beat_idx])
+            M_0 = np.sum(v_bandlimited.T[beat_idx])
+            M_1 = 0
+            for time_idx in range(len(v_raw.T[beat_idx])):
+                M_1 += v_bandlimited[time_idx][beat_idx] * time_idx * t
+            TM1 = M_1 / M_0
+            tau_M1_bandlimited.append(TM1)
+            tau_M1_over_T_bandlimited.append(TM1 / T[0][beat_idx])
 
-        # Consistency attributes (optional but useful)
-        seg_order_note = (
-            "seg_idx = branch_idx * n_radii + radius_idx (branch-major flattening)"
+        for beat_idx in range(len(v_bandlimited_max[0])):
+            RI_bandlimited_temp = 1 - (
+                v_bandlimited_min[0][beat_idx] / v_bandlimited_max[0][beat_idx]
+            )
+            RI_bandlimited.append(RI_bandlimited_temp)
+
+        for beat_idx in range(len(v_bandlimited_max[0])):
+            RI_raw_temp = 1 - (np.min(v_raw.T[beat_idx]) / np.max(v_raw.T[beat_idx]))
+            RI_raw.append(RI_raw_temp)
+        metrics.update(
+            {
+                "global/tau_M1_raw": with_attrs(np.asarray(tau_M1_raw), {"unit": [""]}),
+                "global/tau_M1_bandlimited": np.asarray(tau_M1_bandlimited),
+                "global/tau_M1_over_T_raw": with_attrs(
+                    np.asarray(tau_M1_over_T_raw), {"unit": [""]}
+                ),
+                "global/tau_M1_over_T_bandlimited": np.asarray(
+                    tau_M1_over_T_bandlimited
+                ),
+                "global/RI_bandlimited": np.asarray(RI_bandlimited),
+                "global/RI_raw": np.asarray(RI_raw),
+                "global/R_VTI_bandlimited": np.asarray(R_VTI_bandlimited),
+                "global/R_VTI_raw": np.asarray(R_VTI_raw),
+                "global/ratio_systole_diastole_R_VTI": np.asarray(
+                    ratio_systole_diastole_R_VTI
+                ),
+            }
         )
-        if n_radii_b != n_radii_r or n_branches_b != n_branches_r:
-            seg_order_note += " | WARNING: raw/bandlimited branch/radius dims differ."
-
-        metrics = {
-            # --- Existing datasets (unchanged names/shapes) ---
-            "tau_M1_bandlimited_segment": with_attrs(
-                tau_seg_b,
-                {
-                    "unit": ["s"],
-                    "definition": ["tau_M1 = M1/M0 on rectified waveform"],
-                    "segment_indexing": [seg_order_note],
-                },
-            ),
-            "tau_M1_over_T_bandlimited_segment": with_attrs(
-                tauT_seg_b,
-                {
-                    "unit": [""],
-                    "definition": ["tau_M1_over_T = (M1/M0)/T"],
-                    "segment_indexing": [seg_order_note],
-                },
-            ),
-            "RI_bandlimited_segment": with_attrs(
-                RI_seg_b,
-                {
-                    "unit": [""],
-                    "definition": ["RI = 1 - vmin/vmax (robust, rectified)"],
-                    "segment_indexing": [seg_order_note],
-                },
-            ),
-            "R_VTI_bandlimited_segment": with_attrs(
-                RVTI_seg_b,
-                {
-                    "unit": [""],
-                    "definition": ["paper RVTI = D1/(D2+eps)"],
-                    "segment_indexing": [seg_order_note],
-                },
-            ),
-            "tau_M1_raw_segment": with_attrs(
-                tau_seg_r,
-                {
-                    "unit": ["s"],
-                    "definition": ["tau_M1 = M1/M0 on rectified waveform"],
-                    "segment_indexing": [seg_order_note],
-                },
-            ),
-            "tau_M1_over_T_raw_segment": with_attrs(
-                tauT_seg_r,
-                {
-                    "unit": [""],
-                    "definition": ["tau_M1_over_T = (M1/M0)/T"],
-                    "segment_indexing": [seg_order_note],
-                },
-            ),
-            "RI_raw_segment": with_attrs(
-                RI_seg_r,
-                {
-                    "unit": [""],
-                    "definition": ["RI = 1 - vmin/vmax (robust, rectified)"],
-                    "segment_indexing": [seg_order_note],
-                },
-            ),
-            "R_VTI_raw_segment": with_attrs(
-                RVTI_seg_r,
-                {
-                    "unit": [""],
-                    "definition": ["paper RVTI = D1/(D2+eps)"],
-                    "segment_indexing": [seg_order_note],
-                },
-            ),
-            "ratio_systole_diastole_R_VTI": np.asarray(
-                ratio_systole_diastole_R_VTI, dtype=float
-            ),
-            # --- New aggregated outputs ---
-            "tau_M1_bandlimited_branch": with_attrs(
-                tau_br_b,
-                {"unit": ["s"], "definition": ["median over radii: tau_M1 per branch"]},
-            ),
-            "tau_M1_over_T_bandlimited_branch": with_attrs(
-                tauT_br_b,
-                {
-                    "unit": [""],
-                    "definition": ["median over radii: tau_M1/T per branch"],
-                },
-            ),
-            "RI_bandlimited_branch": with_attrs(
-                RI_br_b,
-                {"unit": [""], "definition": ["median over radii: RI per branch"]},
-            ),
-            "R_VTI_bandlimited_branch": with_attrs(
-                RVTI_br_b,
-                {
-                    "unit": [""],
-                    "definition": ["median over radii: paper RVTI per branch"],
-                },
-            ),
-            "tau_M1_bandlimited_global": with_attrs(
-                tau_gl_b,
-                {
-                    "unit": ["s"],
-                    "definition": ["mean over branches & radii: tau_M1 global"],
-                },
-            ),
-            "tau_M1_over_T_bandlimited_global": with_attrs(
-                tauT_gl_b,
-                {
-                    "unit": [""],
-                    "definition": ["mean over branches & radii: tau_M1/T global"],
-                },
-            ),
-            "RI_bandlimited_global": with_attrs(
-                RI_gl_b,
-                {"unit": [""], "definition": ["mean over branches & radii: RI global"]},
-            ),
-            "R_VTI_bandlimited_global": with_attrs(
-                RVTI_gl_b,
-                {
-                    "unit": [""],
-                    "definition": ["mean over branches & radii: paper RVTI global"],
-                },
-            ),
-            "tau_M1_raw_branch": with_attrs(
-                tau_br_r,
-                {"unit": ["s"], "definition": ["median over radii: tau_M1 per branch"]},
-            ),
-            "tau_M1_over_T_raw_branch": with_attrs(
-                tauT_br_r,
-                {
-                    "unit": [""],
-                    "definition": ["median over radii: tau_M1/T per branch"],
-                },
-            ),
-            "RI_raw_branch": with_attrs(
-                RI_br_r,
-                {"unit": [""], "definition": ["median over radii: RI per branch"]},
-            ),
-            "R_VTI_raw_branch": with_attrs(
-                RVTI_br_r,
-                {
-                    "unit": [""],
-                    "definition": ["median over radii: paper RVTI per branch"],
-                },
-            ),
-            "tau_M1_raw_global": with_attrs(
-                tau_gl_r,
-                {
-                    "unit": ["s"],
-                    "definition": ["mean over branches & radii: tau_M1 global"],
-                },
-            ),
-            "tau_M1_over_T_raw_global": with_attrs(
-                tauT_gl_r,
-                {
-                    "unit": [""],
-                    "definition": ["mean over branches & radii: tau_M1/T global"],
-                },
-            ),
-            "RI_raw_global": with_attrs(
-                RI_gl_r,
-                {"unit": [""], "definition": ["mean over branches & radii: RI global"]},
-            ),
-            "R_VTI_raw_global": with_attrs(
-                RVTI_gl_r,
-                {
-                    "unit": [""],
-                    "definition": ["mean over branches & radii: paper RVTI global"],
-                },
-            ),
-        }
-
         return ProcessResult(metrics=metrics)
