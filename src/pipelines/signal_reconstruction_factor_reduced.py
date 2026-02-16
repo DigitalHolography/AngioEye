@@ -229,12 +229,12 @@ class Reconstruct(ProcessPipeline):
                                     int(
                                         np.minimum(
                                             first + threshold_idx,
-                                            np.floor(len_signal / 3),
+                                            first + np.floor(len_signal / 3),
                                         )
                                     ) : int(
                                         np.maximum(
                                             last - threshold_idx,
-                                            np.ceil(len_signal * 2 / 3),
+                                            last - np.ceil(len_signal * 2 / 3),
                                         )
                                     )
                                 ]
@@ -244,7 +244,7 @@ class Reconstruct(ProcessPipeline):
                                     first : int(
                                         np.minimum(
                                             first + threshold_idx,
-                                            np.floor(len_signal / 3),
+                                            first + np.floor(len_signal / 3),
                                         )
                                     )
                                 ]
@@ -253,7 +253,7 @@ class Reconstruct(ProcessPipeline):
                                     int(
                                         np.maximum(
                                             last - threshold_idx,
-                                            np.ceil(len_signal * 2 / 3),
+                                            last - np.ceil(len_signal * 2 / 3),
                                         )
                                     ) : last
                                 ]
@@ -261,10 +261,10 @@ class Reconstruct(ProcessPipeline):
                             vit_seg_cropped.append(
                                 np.nanmean(
                                     values[
-                                        first : int(
+                                        : int(
                                             np.minimum(
                                                 first + threshold_idx,
-                                                np.floor(len_signal / 3),
+                                                first + np.floor(len_signal / 3),
                                             )
                                         )
                                     ]
@@ -272,9 +272,9 @@ class Reconstruct(ProcessPipeline):
                                         int(
                                             np.maximum(
                                                 last - threshold_idx,
-                                                np.ceil(len_signal * 2 / 3),
+                                                last - np.ceil(len_signal * 2 / 3),
                                             )
-                                        ) : last
+                                        ) :
                                     ]
                                 )
                             )

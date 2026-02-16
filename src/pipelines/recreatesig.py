@@ -16,11 +16,9 @@ class Reconstruct(ProcessPipeline):
     """
 
     description = "Tutorial: metrics + artifacts + dataset attrs + file/pipeline attrs."
-    v_profile = "/Artery/Velocity/VelocityProfiles/value"
+    v_profile = "/Artery/CrossSections/VelocityProfileSeg/value"
     vsystol = "/Artery/Velocity/SystolicAccelerationPeakIndexes"
     T_val = "/Artery/VelocityPerBeat/beatPeriodSeconds/value"
-    vmax = "/Artery/VelocityPerBeat/VmaxPerBeatBandLimited/value"
-    vmin = "/Artery/VelocityPerBeat/VminPerBeatBandLimited/value"
 
     def gaussian(x, A, mu, sigma, c):
         return A * np.exp(-((x - mu) ** 2) / (2 * sigma**2)) + c
@@ -34,10 +32,10 @@ class Reconstruct(ProcessPipeline):
 
         V_corrected = []
         V_ceil = []
-        # V_gauss = []
+        V_gauss = []
 
         for k in range(len(v_seg[0, :, 0, 0])):
-            # VIT_Time = 0
+            VIT_Time = 0
             Vit_br = []
             for br in range(len(v_seg[0, k, :, 0])):
                 v_branch = np.nanmean(v_seg[:, k, br, :], axis=1)
@@ -81,9 +79,69 @@ class Reconstruct(ProcessPipeline):
                 Vit.append(np.nanmean(Vit_br))
 
             V_corrected.append(np.nanmean(Vit))
+
+        '''vraw_ds = np.asarray(v_threshold_beat_segment)
+        vraw_ds_temp = vraw_ds.transpose(1, 0, 2, 3)
+        vraw_ds = np.maximum(vraw_ds_temp, 0)
+        v_ds = vraw_ds
+        t_ds = np.asarray(h5file[self.T_input])
+
+        TMI_seg = []
+        TMI_seg_band = []
+        RTVI_seg = []
+        RTVI_seg_band = []
+        RI_seg = []
+        RI_seg_band = []
+        M0_seg = 0
+        M1_seg = 0
+        M0_seg_band = 0
+        M1_seg_band = 0
+        for k in range(len(vraw_ds[0, :, 0, 0])):
+            TMI_branch = []
+            TMI_branch_band = []
+            RTVI_band_branch = []
+            RTVI_branch = []
+            RI_branch = []
+            RI_branch_band = []
+            for i in range(len(vraw_ds[0, k, :, 0])):
+                avg_speed_band = np.nanmean(v_ds[:, k, i, :], axis=1)
+                avg_speed = np.nanmean(vraw_ds[:, k, i, :], axis=1)
+                vmin = np.min(avg_speed)
+                vmax = np.max(avg_speed)
+                vmin_band = np.min(avg_speed_band)
+                vmax_band = np.max(avg_speed_band)
+
+                RI_branch.append(1 - (vmin / (vmax + 10 ** (-14))))
+                RI_branch_band.append(1 - (vmin_band / (vmax_band + 10 ** (-14))))
+                D1_raw = np.sum(avg_speed[:31])
+                D2_raw = np.sum(avg_speed[32:])
+                D1 = np.sum(avg_speed_band[:31])
+                D2 = np.sum(avg_speed_band[32:])
+                RTVI_band_branch.append(D1 / (D2 + 10 ** (-12)))
+                RTVI_branch.append(D1_raw / (D2_raw + 10 ** (-12)))
+                M0_seg += np.sum(avg_speed)
+                M0_seg_band += np.sum(avg_speed_band)
+                for j in range(len(avg_speed)):
+                    M1_seg += avg_speed[j] * j * t_ds[0][k] / 64
+                    M1_seg_band += avg_speed_band[j] * j * t_ds[0][k] / 64
+                if M0_seg != 0:
+                    TMI_branch.append(M1_seg / (t_ds[0][k] * M0_seg))
+                else:
+                    TMI_branch.append(0)
+                if M0_seg_band != 0:
+                    TMI_branch_band.append(M1_seg_band / (t_ds[0][k] * M0_seg_band))
+                else:
+                    TMI_branch_band.append(0)
+
+            TMI_seg.append(TMI_branch)
+            TMI_seg_band.append(TMI_branch_band)
+            RI_seg.append(RI_branch)
+            RI_seg_band.append(RI_branch_band)
+            RTVI_seg.append(RTVI_branch)
+            RTVI_seg_band.append(RTVI_band_branch)''''
         for k in range(len(v_seg[0, :, 0, 0])):
             Vit = []
-            # Vit_gauss = []
+            Vit_gauss = []
             for br in range(len(v_seg[0, k, :, 0])):
                 Vit_br = []
                 for seg in range(len(v_seg[0, k, br, :])):
@@ -113,7 +171,7 @@ class Reconstruct(ProcessPipeline):
                                 + values[last - threshold :]
                             )
                         )
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         Vit_br.append(np.nan)
                         return None
 
@@ -123,27 +181,9 @@ class Reconstruct(ProcessPipeline):
         # Metrics are the main numerical outputs; each key becomes a dataset under /pipelines/<name>/metrics.
 
         metrics = {
-            "Xn": with_attrs(
-                np.asarray(V),
-                {
-                    "unit": [""],
-                    "description": [""],
-                },
-            ),
-            "Xn_correc": with_attrs(
-                np.asarray(V_corrected),
-                {
-                    "unit": [""],
-                    "description": [""],
-                },
-            ),
-            "Xn_ceil": with_attrs(
-                np.asarray(V_ceil),
-                {
-                    "unit": [""],
-                    "description": [""],
-                },
-            ),
+            "Xn": np.asarray(V),
+            "Xn_correc": np.asarray(V_corrected),
+            "Xn_ceil": np.asarray(V_ceil),
         }
 
         # Artifacts can store non-metric outputs (strings, paths, etc.).
