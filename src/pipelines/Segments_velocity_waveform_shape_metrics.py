@@ -227,16 +227,13 @@ class ArterialSegExample(ProcessPipeline):
     def run(self, h5file) -> ProcessResult:
         T = np.asarray(h5file[self.T_input])
         ratio_systole_diastole_R_VTI = 0.5
-        segment = False
+
         try:
             v_raw_input = (
                 "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegment/value"
             )
             v_bandlimited_input = "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegmentBandLimited/value"
-            segment = True
-        except Exception:  # noqa: BLE001
-            segment = False
-        if segment:
+
             v_raw = np.asarray(h5file[v_raw_input])
             v_band = np.asarray(h5file[v_bandlimited_input])
             v_raw = self._rectify_keep_nan(v_raw)
@@ -527,7 +524,7 @@ class ArterialSegExample(ProcessPipeline):
                 ),
             }
 
-        else:
+        except Exception:  # noqa: BLE001
             metrics = {}
         v_raw = np.asarray(h5file[self.v_raw_global_input])
         v_raw = np.maximum(v_raw, 0)
