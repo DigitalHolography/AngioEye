@@ -284,6 +284,14 @@ class ArterialSegExample(ProcessPipeline):
                 seg_order_note += (
                     " | WARNING: raw/bandlimited branch/radius dims differ."
                 )
+            std_tau_seg_b = np.nanstd(tau_seg_b)
+            std_tau_seg_r = np.nanstd(tau_seg_r)
+            std_tauT_seg_b = np.nanstd(tauT_seg_b)
+            std_tauT_seg_r = np.nanstd(tauT_seg_r)
+            std_RI_seg_b = np.nanstd(RI_seg_b)
+            std_RI_seg_r = np.nanstd(RI_seg_r)
+            std_RVTI_seg_b = np.nanstd(RVTI_seg_b)
+            std_RVTI_seg_r = np.nanstd(RVTI_seg_r)
 
             metrics = {
                 # --- Existing datasets (unchanged names/shapes) ---
@@ -461,7 +469,64 @@ class ArterialSegExample(ProcessPipeline):
                         "definition": ["mean over branches & radii: paper RVTI global"],
                     },
                 ),
+                "computed_by_segment/standard_deviation/std_tau_M1_segment_bandlimited": with_attrs(
+                    std_tau_seg_b,
+                    {
+                        "unit": [""],
+                        "definition": [""],
+                    },
+                ),
+                "computed_by_segment/standard_deviation/std_tau_M1_segment_raw": with_attrs(
+                    std_tau_seg_r,
+                    {
+                        "unit": [""],
+                        "definition": [""],
+                    },
+                ),
+                "computed_by_segment/standard_deviation/std_tau_M1_overT_segment_bandlimited": with_attrs(
+                    std_tauT_seg_b,
+                    {
+                        "unit": [""],
+                        "definition": [""],
+                    },
+                ),
+                "computed_by_segment/standard_deviation/std_tau_M1_overT_segment_raw": with_attrs(
+                    std_tauT_seg_r,
+                    {
+                        "unit": [""],
+                        "definition": [""],
+                    },
+                ),
+                "computed_by_segment/standard_deviation/std_RI_segment_raw": with_attrs(
+                    std_RI_seg_r,
+                    {
+                        "unit": [""],
+                        "definition": [""],
+                    },
+                ),
+                "computed_by_segment/standard_deviation/std_RI_segment_bandlimited": with_attrs(
+                    std_RI_seg_b,
+                    {
+                        "unit": [""],
+                        "definition": [""],
+                    },
+                ),
+                "computed_by_segment/standard_deviation/std_R_VTI_segment_raw": with_attrs(
+                    std_RVTI_seg_r,
+                    {
+                        "unit": [""],
+                        "definition": [""],
+                    },
+                ),
+                "computed_by_segment/standard_deviation/std_R_VTI_segment_bandlimited": with_attrs(
+                    std_RVTI_seg_b,
+                    {
+                        "unit": [""],
+                        "definition": [""],
+                    },
+                ),
             }
+
         else:
             metrics = {}
         v_raw = np.asarray(h5file[self.v_raw_global_input])
