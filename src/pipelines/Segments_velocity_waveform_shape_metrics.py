@@ -2,55 +2,97 @@ import numpy as np
 
 from .core.base import ProcessPipeline, ProcessResult, registerPipeline, with_attrs
 
-
 @registerPipeline(name="waveform_shape_metrics")
 class ArterialSegExample(ProcessPipeline):
     """
     Waveform-shape metrics on per-beat, per-branch, per-radius velocity waveforms.
 
-    Expected v_block layout:
-        v_block[:, beat_idx, branch_idx, radius_idx]
-    i.e. v_block shape: (n_t, n_beats, n_branches, n_radii)
+    Expected segment layout:
+        v_seg[t, beat, branch, radius]
+    i.e. v_seg shape: (n_t, n_beats, n_branches, n_radii)
 
     Outputs
     -------
-    A) Per-segment (flattened branch×radius):
-        *_segment : shape (n_beats, n_segments)
-        where n_segments = n_branches * n_radii and
-              seg_idx = branch_idx * n_radii + radius_idx   (branch-major)
+    A) Per-segment (flattened branch x radius):
+        by_segment/*_segment : shape (n_beats, n_segments)
+        n_segments = n_branches * n_radii
+        seg_idx = branch_idx * n_radii + radius_idx   (branch-major)
 
     B) Aggregated:
-        *_branch : shape (n_beats, n_branches)   (median over radii)
-        *_global : shape (n_beats,)              (mean over all branches & radii)
+        by_segment/*_branch : shape (n_beats, n_branches)  (median over radii)
+        by_segment/*_global : shape (n_beats,)             (mean over all branches & radii)
 
-    Metric definitions
-    ------------------
-    - Rectification: v <- max(v, 0) (NaNs preserved)
-    - tau_M1: first moment time / zeroth moment on rectified waveform
-        tau_M1 = M1/M0,  M0 = sum(v), M1 = sum(v * t_k), t_k = k * (Tbeat/n_t)
-    - tau_M1_over_T: (tau_M1 / Tbeat)
-    - RI (robust): RI = 1 - vmin/vmax with guards for vmax<=0 or all-NaN
-    - R_VTI_*: kept dataset name for compatibility, but uses PAPER convention:
-        RVTI = D1 / (D2 + eps)
-        D1 = sum(v[0:k]), D2 = sum(v[k:n_t]), k = ceil(n_t * ratio), ratio=0.5
+    C) Independent global metrics (from global waveform path):
+        global/* : shape (n_beats,)
+
+    Definitions (gain-invariant / shape metrics)
+    --------------------------------------------
+    Rectification:
+        v <- max(v, 0) with NaNs preserved
+
+    Basic:
+        tau_M1        = M1 / M0
+        tau_M1_over_T = (M1/M0) / T
+
+        RI = 1 - vmin/vmax (robust)
+        PI = (vmax - vmin) / mean(v) (robust)
+
+        RVTI (paper) = D1 / (D2 + eps), split at 1/2 T (ratio_rvti = 0.5)
+
+    New:
+        SF (systolic fraction) = D1_1/3 / (D1_1/3 + D2_2/3 + eps)
+            where D1_1/3 is integral over first 1/3 of samples, D2_2/3 over remaining 2/3
+
+        Normalized central moments (shape, not scale):
+            mu2_norm = mu2 / (M0 * T^2 + eps)   (variance-like)
+            mu3_norm = mu3 / (M0 * T^3 + eps)   (skewness-like)
+
+            with central moments around t_bar = tau_M1:
+                mu2 = sum(v * (t - t_bar)^2)
+                mu3 = sum(v * (t - t_bar)^3)
+
+        Quantile timing (on cumulative integral):
+            C(t) = cumsum(v) / sum(v)
+            t10_over_T, t50_over_T, t90_over_T
+
+        Spectral shape ratios (per beat):
+            Compute FFT power P(f) of v(t). Define harmonic index h = f * T (cycles/beat).
+            E_total = sum_{h>=0} P
+            E_low   = sum_{h in [1..H_LOW]} P
+            E_high  = sum_{h in [H_HIGH1..H_HIGH2]} P
+            Return E_low_over_E_total and E_high_over_E_total
+
+            Default bands:
+                low:  1..3 harmonics
+                high: 4..8 harmonics
     """
 
-    description = (
-        "Segment waveform shape metrics (tau, RI, RVTI) + branch/global aggregates."
-    )
+    description = "Waveform shape metrics (segment + aggregates + global), gain-invariant and robust."
 
+    # Segment inputs
+    v_raw_segment_input = "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegment/value"
+    v_band_segment_input = "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegmentBandLimited/value"
+
+    # Global inputs
     v_raw_global_input = "/Artery/VelocityPerBeat/VelocitySignalPerBeat/value"
-    v_bandlimited_global_input = (
-        "/Artery/VelocityPerBeat/VelocitySignalPerBeatBandLimited/value"
-    )
-    v_bandlimited_global_max_input = (
-        "/Artery/VelocityPerBeat/VmaxPerBeatBandLimited/value"
-    )
-    v_bandlimited_global_min_input = (
-        "/Artery/VelocityPerBeat/VminPerBeatBandLimited/value"
-    )
+    v_band_global_input = "/Artery/VelocityPerBeat/VelocitySignalPerBeatBandLimited/value"
+
+    # Beat period
     T_input = "/Artery/VelocityPerBeat/beatPeriodSeconds/value"
 
+    # Parameters
+    eps = 1e-12
+    ratio_rvti = 0.5         # split for RVTI
+    ratio_sf = 1.0 / 3.0     # split for SF
+
+    # Spectral bands (harmonic indices, inclusive)
+    H_LOW_MAX = 3
+    H_HIGH_MIN = 4
+    H_HIGH_MAX = 8
+
+    # -------------------------
+    # Helpers
+    # -------------------------
     @staticmethod
     def _rectify_keep_nan(x: np.ndarray) -> np.ndarray:
         x = np.asarray(x, dtype=float)
@@ -69,566 +111,371 @@ class ArterialSegExample(ProcessPipeline):
         return float(np.nanmedian(x))
 
     @staticmethod
-    def _metrics_from_waveform(
-        v: np.ndarray,
-        Tbeat: float,
-        ratio: float = 0.5,
-        eps: float = 1e-12,
-    ):
-        v = ArterialSegExample._rectify_keep_nan(v)
+    def _ensure_time_by_beat(v2: np.ndarray, n_beats: int) -> np.ndarray:
+        """
+        Ensure v2 is shaped (n_t, n_beats). If it is (n_beats, n_t), transpose.
+        """
+        v2 = np.asarray(v2, dtype=float)
+        if v2.ndim != 2:
+            raise ValueError(f"Expected 2D global waveform, got shape {v2.shape}")
 
+        if v2.shape[1] == n_beats:
+            return v2
+        if v2.shape[0] == n_beats and v2.shape[1] != n_beats:
+            return v2.T
+
+        # Fallback: if ambiguous, assume (n_t, n_beats)
+        return v2
+
+    def _quantile_time_over_T(self, v: np.ndarray, Tbeat: float, q: float) -> float:
+        """
+        v: rectified 1D waveform (NaNs allowed)
+        Returns t_q / Tbeat where C(t_q) >= q, with C = cumsum(v)/sum(v).
+        """
+        if (not np.isfinite(Tbeat)) or Tbeat <= 0:
+            return np.nan
+
+        if v.size == 0 or not np.any(np.isfinite(v)):
+            return np.nan
+
+        vv = np.where(np.isfinite(v), v, 0.0)
+        m0 = float(np.sum(vv))
+        if m0 <= 0:
+            return np.nan
+
+        c = np.cumsum(vv) / m0
+        idx = int(np.searchsorted(c, q, side="left"))
+        idx = max(0, min(v.size - 1, idx))
+
+        dt = Tbeat / v.size
+        t_q = idx * dt
+        return float(t_q / Tbeat)
+
+    def _spectral_ratios(self, v: np.ndarray, Tbeat: float) -> tuple[float, float]:
+        """
+        Return (E_low/E_total, E_high/E_total) using harmonic-index bands.
+        """
+        if (not np.isfinite(Tbeat)) or Tbeat <= 0:
+            return np.nan, np.nan
+
+        if v.size == 0 or not np.any(np.isfinite(v)):
+            return np.nan, np.nan
+
+        vv = np.where(np.isfinite(v), v, 0.0)
+
+        n = vv.size
+        if n < 2:
+            return np.nan, np.nan
+
+        # Remove DC? For "shape" we typically keep DC in total energy but exclude it from low/high
+        # Here: total includes all bins (including DC). Low/high exclude DC by construction (harmonics >= 1).
+        fs = n / Tbeat  # Hz
+        X = np.fft.rfft(vv)
+        P = (np.abs(X) ** 2)
+
+        f = np.fft.rfftfreq(n, d=1.0 / fs)  # Hz
+        h = f * Tbeat  # cycles per beat (harmonic index, continuous)
+
+        E_total = float(np.sum(P))
+        if not np.isfinite(E_total) or E_total <= 0:
+            return np.nan, np.nan
+
+        low_mask = (h >= 1.0) & (h <= float(self.H_LOW_MAX))
+        high_mask = (h >= float(self.H_HIGH_MIN)) & (h <= float(self.H_HIGH_MAX))
+
+        E_low = float(np.sum(P[low_mask]))
+        E_high = float(np.sum(P[high_mask]))
+
+        return float(E_low / E_total), float(E_high / E_total)
+
+    def _compute_metrics_1d(self, v: np.ndarray, Tbeat: float) -> dict:
+        """
+        Canonical metric kernel: compute all waveform-shape metrics from a single 1D waveform v(t).
+        Returns a dict of scalar metrics (floats).
+        """
+        v = self._rectify_keep_nan(v)
         n = int(v.size)
         if n <= 0:
-            return 0.0, 0.0, 0.0, 0.0
+            return {k: np.nan for k in self._metric_keys()}
 
-        # tau_M1 and tau_M1/T (PER WAVEFORM ONLY)
+        # If Tbeat invalid, many metrics become NaN
         if (not np.isfinite(Tbeat)) or Tbeat <= 0:
-            tau_M1 = np.nan
-            tau_M1_over_T = np.nan
-        else:
-            m0 = np.nansum(v)
-            if (not np.isfinite(m0)) or m0 <= 0:
-                tau_M1 = np.nan
-                tau_M1_over_T = np.nan
-            else:
-                dt = Tbeat / n
-                t = np.arange(n, dtype=float) * dt
-                m1 = np.nansum(v * t)
-                tau_M1 = (m1 / m0) if np.isfinite(m1) else np.nan
-                tau_M1_over_T = tau_M1 / Tbeat
+            return {k: np.nan for k in self._metric_keys()}
 
-        # RI robust
-        if not np.any(np.isfinite(v)):
+        vv = np.where(np.isfinite(v), v, 0.0)
+        m0 = float(np.sum(vv))
+        if m0 <= 0:
+            return {k: np.nan for k in self._metric_keys()}
+
+        dt = Tbeat / n
+        t = np.arange(n, dtype=float) * dt
+
+        # First moment
+        m1 = float(np.sum(vv * t))
+        tau_M1 = m1 / m0
+        tau_M1_over_T = tau_M1 / Tbeat
+
+        # RI / PI robust
+        vmax = float(np.max(vv))
+        vmin = float(np.min(vv))
+        meanv = float(np.mean(vv))
+
+        if vmax <= 0:
             RI = np.nan
             PI = np.nan
         else:
-            vmax = np.nanmax(v)
-            mean = np.nanmean(v)
-            if (not np.isfinite(vmax)) or vmax <= 0:
-                RI = np.nan
+            RI = 1.0 - (vmin / vmax)
+            RI = float(np.clip(RI, 0.0, 1.0)) if np.isfinite(RI) else np.nan
+
+            if (not np.isfinite(meanv)) or meanv <= 0:
                 PI = np.nan
             else:
-                vmin = np.nanmin(v)
-                RI = 1.0 - (vmin / vmax)
-                PI = (vmax - vmin) / mean
-                if not np.isfinite(RI):
-                    RI = np.nan
-                    PI = np.nan
-                else:
-                    RI = float(np.clip(RI, 0.0, 1.0))
-                    PI = float(PI)
-        # RVTI (paper): D1/(D2+eps)
-        k = int(np.ceil(n * ratio))
-        k = max(0, min(n, k))
-        D1 = np.nansum(v[:k]) if k > 0 else np.nan
-        D2 = np.nansum(v[k:]) if k < n else np.nan
-        if not np.isfinite(D1) or D1 == 0.0:
-            D1 = np.nan
-        if not np.isfinite(D2) or D2 == 0.0:
-            D2 = np.nan
-        RVTI = float(D1 / (D2 + eps))
+                PI = (vmax - vmin) / meanv
+                PI = float(PI) if np.isfinite(PI) else np.nan
 
-        return float(tau_M1), float(tau_M1_over_T), float(RI), RVTI, float(PI)
+        # RVTI (paper, split 1/2)
+        k_rvti = int(np.ceil(n * self.ratio_rvti))
+        k_rvti = max(0, min(n, k_rvti))
+        D1_rvti = float(np.sum(vv[:k_rvti])) if k_rvti > 0 else 0.0
+        D2_rvti = float(np.sum(vv[k_rvti:])) if k_rvti < n else 0.0
+        RVTI = D1_rvti / (D2_rvti + self.eps)
 
-    def _compute_block(self, v_block: np.ndarray, T: np.ndarray, ratio: float):
+        # SF (split 1/3 vs 2/3)
+        k_sf = int(np.ceil(n * self.ratio_sf))
+        k_sf = max(0, min(n, k_sf))
+        D1_sf = float(np.sum(vv[:k_sf])) if k_sf > 0 else 0.0
+        D2_sf = float(np.sum(vv[k_sf:])) if k_sf < n else 0.0
+        SF = D1_sf / (D1_sf + D2_sf + self.eps)
+
+        # Central moments around tau_M1 (t_bar)
+        # mu2 = sum(v*(t-tau)^2), mu3 = sum(v*(t-tau)^3)
+        dtau = t - tau_M1
+        mu2 = float(np.sum(vv * (dtau ** 2)))
+        mu3 = float(np.sum(vv * (dtau ** 3)))
+
+        mu2_norm = mu2 / (m0 * (Tbeat ** 2) + self.eps)
+        mu3_norm = mu3 / (m0 * (Tbeat ** 3) + self.eps)
+
+        # Quantile timing features (on cumulative integral)
+        t10_over_T = self._quantile_time_over_T(vv, Tbeat, 0.10)
+        t50_over_T = self._quantile_time_over_T(vv, Tbeat, 0.50)
+        t90_over_T = self._quantile_time_over_T(vv, Tbeat, 0.90)
+
+        # Spectral ratios
+        E_low_over_E_total, E_high_over_E_total = self._spectral_ratios(vv, Tbeat)
+
+        return {
+            "tau_M1": float(tau_M1),
+            "tau_M1_over_T": float(tau_M1_over_T),
+            "RI": float(RI) if np.isfinite(RI) else np.nan,
+            "PI": float(PI) if np.isfinite(PI) else np.nan,
+            "R_VTI": float(RVTI),
+            "SF": float(SF),
+            "mu2_norm": float(mu2_norm),
+            "mu3_norm": float(mu3_norm),
+            "t10_over_T": float(t10_over_T),
+            "t50_over_T": float(t50_over_T),
+            "t90_over_T": float(t90_over_T),
+            "E_low_over_E_total": float(E_low_over_E_total),
+            "E_high_over_E_total": float(E_high_over_E_total),
+        }
+
+    @staticmethod
+    def _metric_keys() -> list[str]:
+        return [
+            "tau_M1",
+            "tau_M1_over_T",
+            "RI",
+            "PI",
+            "R_VTI",
+            "SF",
+            "mu2_norm",
+            "mu3_norm",
+            "t10_over_T",
+            "t50_over_T",
+            "t90_over_T",
+            "E_low_over_E_total",
+            "E_high_over_E_total",
+        ]
+
+    def _compute_block_segment(self, v_block: np.ndarray, T: np.ndarray):
+        """
+        v_block: (n_t, n_beats, n_branches, n_radii)
+        Returns:
+          per-segment arrays: (n_beats, n_segments)
+          per-branch arrays:  (n_beats, n_branches)   (median over radii)
+          global arrays:      (n_beats,)              (mean over all branches & radii)
+        """
         if v_block.ndim != 4:
-            raise ValueError(
-                f"Expected (n_t,n_beats,n_branches,n_radii), got {v_block.shape}"
-            )
+            raise ValueError(f"Expected (n_t,n_beats,n_branches,n_radii), got {v_block.shape}")
 
         n_t, n_beats, n_branches, n_radii = v_block.shape
         n_segments = n_branches * n_radii
 
-        # Per-segment flattened (beat, segment)
-        tau_seg = np.zeros((n_beats, n_segments), dtype=float)
-        tauT_seg = np.zeros((n_beats, n_segments), dtype=float)
-        RI_seg = np.zeros((n_beats, n_segments), dtype=float)
-        PI_seg = np.zeros((n_beats, n_segments), dtype=float)
-        RVTI_seg = np.zeros((n_beats, n_segments), dtype=float)
-
-        # Aggregated
-        tau_branch = np.zeros((n_beats, n_branches), dtype=float)
-        tauT_branch = np.zeros((n_beats, n_branches), dtype=float)
-        RI_branch = np.zeros((n_beats, n_branches), dtype=float)
-        PI_branch = np.zeros((n_beats, n_branches), dtype=float)
-        RVTI_branch = np.zeros((n_beats, n_branches), dtype=float)
-
-        tau_global = np.zeros((n_beats,), dtype=float)
-        tauT_global = np.zeros((n_beats,), dtype=float)
-        RI_global = np.zeros((n_beats,), dtype=float)
-        PI_global = np.zeros((n_beats,), dtype=float)
-        RVTI_global = np.zeros((n_beats,), dtype=float)
+        # Allocate per metric
+        seg = {k: np.full((n_beats, n_segments), np.nan, dtype=float) for k in self._metric_keys()}
+        br = {k: np.full((n_beats, n_branches), np.nan, dtype=float) for k in self._metric_keys()}
+        gl = {k: np.full((n_beats,), np.nan, dtype=float) for k in self._metric_keys()}
 
         for beat_idx in range(n_beats):
             Tbeat = float(T[0][beat_idx])
 
-            # Global accumulators for this beat
-            tau_vals = []
-            tauT_vals = []
-            RI_vals = []
-            PI_vals = []
-            RVTI_vals = []
+            # For global aggregate at this beat
+            gl_vals = {k: [] for k in self._metric_keys()}
 
             for branch_idx in range(n_branches):
-                # Branch accumulators across radii
-                tau_b = []
-                tauT_b = []
-                RI_b = []
-                PI_b = []
-                RVTI_b = []
+                # For branch aggregate over radii
+                br_vals = {k: [] for k in self._metric_keys()}
 
                 for radius_idx in range(n_radii):
                     v = v_block[:, beat_idx, branch_idx, radius_idx]
-                    tM1, tM1T, ri, rvti, pi = self._metrics_from_waveform(
-                        v=v, Tbeat=Tbeat, ratio=ratio, eps=1e-12
-                    )
+                    m = self._compute_metrics_1d(v, Tbeat)
 
                     seg_idx = branch_idx * n_radii + radius_idx
-                    tau_seg[beat_idx, seg_idx] = tM1
-                    tauT_seg[beat_idx, seg_idx] = tM1T
-                    RI_seg[beat_idx, seg_idx] = ri
-                    RVTI_seg[beat_idx, seg_idx] = rvti
-                    PI_seg[beat_idx, seg_idx] = pi
+                    for k in self._metric_keys():
+                        seg[k][beat_idx, seg_idx] = m[k]
+                        br_vals[k].append(m[k])
+                        gl_vals[k].append(m[k])
 
-                    tau_b.append(tM1)
-                    tauT_b.append(tM1T)
-                    RI_b.append(ri)
-                    RVTI_b.append(rvti)
-                    PI_b.append(pi)
+                # Branch aggregates: median over radii (nanmedian)
+                for k in self._metric_keys():
+                    br[k][beat_idx, branch_idx] = self._safe_nanmedian(np.asarray(br_vals[k], dtype=float))
 
-                    tau_vals.append(tM1)
-                    tauT_vals.append(tM1T)
-                    RI_vals.append(ri)
-                    RVTI_vals.append(rvti)
-                    PI_vals.append(pi)
+            # Global aggregates: mean over all branches & radii (nanmean)
+            for k in self._metric_keys():
+                gl[k][beat_idx] = self._safe_nanmean(np.asarray(gl_vals[k], dtype=float))
 
-                # Branch aggregates: MEDIAN over radii
-                tau_branch[beat_idx, branch_idx] = self._safe_nanmedian(
-                    np.asarray(tau_b)
-                )
-                tauT_branch[beat_idx, branch_idx] = self._safe_nanmedian(
-                    np.asarray(tauT_b)
-                )
-                RI_branch[beat_idx, branch_idx] = self._safe_nanmedian(np.asarray(RI_b))
-                PI_branch[beat_idx, branch_idx] = self._safe_nanmedian(np.asarray(PI_b))
-                RVTI_branch[beat_idx, branch_idx] = self._safe_nanmedian(
-                    np.asarray(RVTI_b)
-                )
+        seg_order_note = "seg_idx = branch_idx * n_radii + radius_idx (branch-major flattening)"
+        return seg, br, gl, n_branches, n_radii, seg_order_note
 
-            # Global aggregates: MEAN over all branches & radii
-            tau_global[beat_idx] = self._safe_nanmean(np.asarray(tau_vals))
-            tauT_global[beat_idx] = self._safe_nanmean(np.asarray(tauT_vals))
-            RI_global[beat_idx] = self._safe_nanmean(np.asarray(RI_vals))
-            RVTI_global[beat_idx] = self._safe_nanmean(np.asarray(RVTI_vals))
-            PI_global[beat_idx] = self._safe_nanmean(np.asarray(PI_vals))
+    def _compute_block_global(self, v_global: np.ndarray, T: np.ndarray):
+        """
+        v_global: (n_t, n_beats) after _ensure_time_by_beat
+        Returns dict of arrays each shaped (n_beats,)
+        """
+        n_beats = int(T.shape[1])
+        v_global = self._ensure_time_by_beat(v_global, n_beats)
+        v_global = self._rectify_keep_nan(v_global)
 
-        return (
-            tau_seg,
-            tauT_seg,
-            RI_seg,
-            PI_seg,
-            RVTI_seg,
-            tau_branch,
-            tauT_branch,
-            RI_branch,
-            PI_branch,
-            RVTI_branch,
-            tau_global,
-            tauT_global,
-            RI_global,
-            PI_global,
-            RVTI_global,
-            n_branches,
-            n_radii,
-        )
+        out = {k: np.full((n_beats,), np.nan, dtype=float) for k in self._metric_keys()}
 
+        for beat_idx in range(n_beats):
+            Tbeat = float(T[0][beat_idx])
+            v = v_global[:, beat_idx]
+            m = self._compute_metrics_1d(v, Tbeat)
+            for k in self._metric_keys():
+                out[k][beat_idx] = m[k]
+
+        return out
+
+    # -------------------------
+    # Pipeline entrypoint
+    # -------------------------
     def run(self, h5file) -> ProcessResult:
         T = np.asarray(h5file[self.T_input])
-        ratio_systole_diastole_R_VTI = 0.5
+        metrics = {}
 
-        try:
-            v_raw_input = (
-                "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegment/value"
+        # -------------------------
+        # Segment metrics (raw + bandlimited)
+        # -------------------------
+        have_seg = (self.v_raw_segment_input in h5file) and (self.v_band_segment_input in h5file)
+        if have_seg:
+            v_raw_seg = np.asarray(h5file[self.v_raw_segment_input])
+            v_band_seg = np.asarray(h5file[self.v_band_segment_input])
+
+            seg_b, br_b, gl_b, nb_b, nr_b, seg_note_b = self._compute_block_segment(v_band_seg, T)
+            seg_r, br_r, gl_r, nb_r, nr_r, seg_note_r = self._compute_block_segment(v_raw_seg, T)
+
+            seg_note = seg_note_b
+            if (nb_b != nb_r) or (nr_b != nr_r):
+                seg_note = seg_note_b + " | WARNING: raw/band branch/radius dims differ."
+
+            # Helper to pack dict-of-arrays into HDF5 metric keys
+            def pack(prefix: str, d: dict, attrs_common: dict):
+                for k, arr in d.items():
+                    metrics[f"{prefix}/{k}"] = with_attrs(arr, attrs_common)
+
+            # Per-segment outputs (compat dataset names)
+            pack(
+                "by_segment/bandlimited_segment",
+                {
+                    "tau_M1": seg_b["tau_M1"],
+                    "tau_M1_over_T": seg_b["tau_M1_over_T"],
+                    "RI": seg_b["RI"],
+                    "PI": seg_b["PI"],
+                    "R_VTI": seg_b["R_VTI"],
+                    "SF": seg_b["SF"],
+                    "mu2_norm": seg_b["mu2_norm"],
+                    "mu3_norm": seg_b["mu3_norm"],
+                    "t10_over_T": seg_b["t10_over_T"],
+                    "t50_over_T": seg_b["t50_over_T"],
+                    "t90_over_T": seg_b["t90_over_T"],
+                    "E_low_over_E_total": seg_b["E_low_over_E_total"],
+                    "E_high_over_E_total": seg_b["E_high_over_E_total"],
+                },
+                {
+                    "segment_indexing": [seg_note],
+                },
             )
-            v_bandlimited_input = "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegmentBandLimited/value"
-
-            v_raw = np.asarray(h5file[v_raw_input])
-            v_band = np.asarray(h5file[v_bandlimited_input])
-            v_raw = self._rectify_keep_nan(v_raw)
-            v_band = self._rectify_keep_nan(v_band)
-
-            (
-                tau_seg_b,
-                tauT_seg_b,
-                RI_seg_b,
-                PI_seg_b,
-                RVTI_seg_b,
-                tau_br_b,
-                tauT_br_b,
-                RI_br_b,
-                PI_br_b,
-                RVTI_br_b,
-                tau_gl_b,
-                tauT_gl_b,
-                RI_gl_b,
-                PI_gl_b,
-                RVTI_gl_b,
-                n_branches_b,
-                n_radii_b,
-            ) = self._compute_block(v_band, T, ratio_systole_diastole_R_VTI)
-
-            (
-                tau_seg_r,
-                tauT_seg_r,
-                RI_seg_r,
-                PI_seg_r,
-                RVTI_seg_r,
-                tau_br_r,
-                tauT_br_r,
-                RI_br_r,
-                PI_br_r,
-                RVTI_br_r,
-                tau_gl_r,
-                tauT_gl_r,
-                RI_gl_r,
-                PI_gl_r,
-                RVTI_gl_r,
-                n_branches_r,
-                n_radii_r,
-            ) = self._compute_block(v_raw, T, ratio_systole_diastole_R_VTI)
-
-            # Consistency attributes (optional but useful)
-            seg_order_note = (
-                "seg_idx = branch_idx * n_radii + radius_idx (branch-major flattening)"
+            pack(
+                "by_segment/raw_segment",
+                {
+                    "tau_M1": seg_r["tau_M1"],
+                    "tau_M1_over_T": seg_r["tau_M1_over_T"],
+                    "RI": seg_r["RI"],
+                    "PI": seg_r["PI"],
+                    "R_VTI": seg_r["R_VTI"],
+                    "SF": seg_r["SF"],
+                    "mu2_norm": seg_r["mu2_norm"],
+                    "mu3_norm": seg_r["mu3_norm"],
+                    "t10_over_T": seg_r["t10_over_T"],
+                    "t50_over_T": seg_r["t50_over_T"],
+                    "t90_over_T": seg_r["t90_over_T"],
+                    "E_low_over_E_total": seg_r["E_low_over_E_total"],
+                    "E_high_over_E_total": seg_r["E_high_over_E_total"],
+                },
+                {
+                    "segment_indexing": [seg_note],
+                },
             )
-            if n_radii_b != n_radii_r or n_branches_b != n_branches_r:
-                seg_order_note += (
-                    " | WARNING: raw/bandlimited branch/radius dims differ."
-                )
 
-            metrics = {
-                # --- Existing datasets (unchanged names/shapes) ---
-                "by_segment/tau_M1_bandlimited_segment": with_attrs(
-                    tau_seg_b,
-                    {
-                        "unit": ["s"],
-                        "definition": ["tau_M1 = M1/M0 on rectified waveform"],
-                        "segment_indexing": [seg_order_note],
-                    },
-                ),
-                "by_segment/tau_M1_over_T_bandlimited_segment": with_attrs(
-                    tauT_seg_b,
-                    {
-                        "unit": [""],
-                        "definition": ["tau_M1_over_T = (M1/M0)/T"],
-                        "segment_indexing": [seg_order_note],
-                    },
-                ),
-                "by_segment/RI_bandlimited_segment": with_attrs(
-                    RI_seg_b,
-                    {
-                        "unit": [""],
-                        "definition": ["RI = 1 - vmin/vmax (robust, rectified)"],
-                        "segment_indexing": [seg_order_note],
-                    },
-                ),
-                "by_segment/PI_bandlimited_segment": with_attrs(
-                    PI_seg_b,
-                    {
-                        "unit": [""],
-                        "definition": ["RI = 1 - vmin/vmax (robust, rectified)"],
-                        "segment_indexing": [seg_order_note],
-                    },
-                ),
-                "by_segment/R_VTI_bandlimited_segment": with_attrs(
-                    RVTI_seg_b,
-                    {
-                        "unit": [""],
-                        "definition": ["paper RVTI = D1/(D2+eps)"],
-                        "segment_indexing": [seg_order_note],
-                    },
-                ),
-                "by_segment/tau_M1_raw_segment": with_attrs(
-                    tau_seg_r,
-                    {
-                        "unit": ["s"],
-                        "definition": ["tau_M1 = M1/M0 on rectified waveform"],
-                        "segment_indexing": [seg_order_note],
-                    },
-                ),
-                "by_segment/tau_M1_over_T_raw_segment": with_attrs(
-                    tauT_seg_r,
-                    {
-                        "unit": [""],
-                        "definition": ["tau_M1_over_T = (M1/M0)/T"],
-                        "segment_indexing": [seg_order_note],
-                    },
-                ),
-                "by_segment/RI_raw_segment": with_attrs(
-                    RI_seg_r,
-                    {
-                        "unit": [""],
-                        "definition": ["RI = 1 - vmin/vmax (robust, rectified)"],
-                        "segment_indexing": [seg_order_note],
-                    },
-                ),
-                "by_segment/PI_raw_segment": with_attrs(
-                    PI_seg_r,
-                    {
-                        "unit": [""],
-                        "definition": ["RI = 1 - vmin/vmax (robust, rectified)"],
-                        "segment_indexing": [seg_order_note],
-                    },
-                ),
-                "by_segment/R_VTI_raw_segment": with_attrs(
-                    RVTI_seg_r,
-                    {
-                        "unit": [""],
-                        "definition": ["paper RVTI = D1/(D2+eps)"],
-                        "segment_indexing": [seg_order_note],
-                    },
-                ),
-                "by_segment/ratio_systole_diastole_R_VTI": np.asarray(
-                    ratio_systole_diastole_R_VTI, dtype=float
-                ),
-                # --- New aggregated outputs ---
-                "by_segment/tau_M1_bandlimited_branch": with_attrs(
-                    tau_br_b,
-                    {
-                        "unit": ["s"],
-                        "definition": ["median over radii: tau_M1 per branch"],
-                    },
-                ),
-                "by_segment/tau_M1_over_T_bandlimited_branch": with_attrs(
-                    tauT_br_b,
-                    {
-                        "unit": [""],
-                        "definition": ["median over radii: tau_M1/T per branch"],
-                    },
-                ),
-                "by_segment/RI_bandlimited_branch": with_attrs(
-                    RI_br_b,
-                    {"unit": [""], "definition": ["median over radii: RI per branch"]},
-                ),
-                "by_segment/PI_bandlimited_branch": with_attrs(
-                    PI_br_b,
-                    {"unit": [""], "definition": ["median over radii: RI per branch"]},
-                ),
-                "by_segment/R_VTI_bandlimited_branch": with_attrs(
-                    RVTI_br_b,
-                    {
-                        "unit": [""],
-                        "definition": ["median over radii: paper RVTI per branch"],
-                    },
-                ),
-                "by_segment/tau_M1_bandlimited_global": with_attrs(
-                    tau_gl_b,
-                    {
-                        "unit": ["s"],
-                        "definition": ["mean over branches & radii: tau_M1 global"],
-                    },
-                ),
-                "by_segment/tau_M1_over_T_bandlimited_global": with_attrs(
-                    tauT_gl_b,
-                    {
-                        "unit": [""],
-                        "definition": ["mean over branches & radii: tau_M1/T global"],
-                    },
-                ),
-                "by_segment/RI_bandlimited_global": with_attrs(
-                    RI_gl_b,
-                    {
-                        "unit": [""],
-                        "definition": ["mean over branches & radii: RI global"],
-                    },
-                ),
-                "by_segment/PI_bandlimited_global": with_attrs(
-                    PI_gl_b,
-                    {
-                        "unit": [""],
-                        "definition": ["mean over branches & radii: RI global"],
-                    },
-                ),
-                "by_segment/R_VTI_bandlimited_global": with_attrs(
-                    RVTI_gl_b,
-                    {
-                        "unit": [""],
-                        "definition": ["mean over branches & radii: paper RVTI global"],
-                    },
-                ),
-                "by_segment/tau_M1_raw_branch": with_attrs(
-                    tau_br_r,
-                    {
-                        "unit": ["s"],
-                        "definition": ["median over radii: tau_M1 per branch"],
-                    },
-                ),
-                "by_segment/tau_M1_over_T_raw_branch": with_attrs(
-                    tauT_br_r,
-                    {
-                        "unit": [""],
-                        "definition": ["median over radii: tau_M1/T per branch"],
-                    },
-                ),
-                "by_segment/RI_raw_branch": with_attrs(
-                    RI_br_r,
-                    {"unit": [""], "definition": ["median over radii: RI per branch"]},
-                ),
-                "by_segment/PI_raw_branch": with_attrs(
-                    PI_br_r,
-                    {"unit": [""], "definition": ["median over radii: RI per branch"]},
-                ),
-                "by_segment/R_VTI_raw_branch": with_attrs(
-                    RVTI_br_r,
-                    {
-                        "unit": [""],
-                        "definition": ["median over radii: paper RVTI per branch"],
-                    },
-                ),
-                "by_segment/tau_M1_raw_global": with_attrs(
-                    tau_gl_r,
-                    {
-                        "unit": ["s"],
-                        "definition": ["mean over branches & radii: tau_M1 global"],
-                    },
-                ),
-                "by_segment/tau_M1_over_T_raw_global": with_attrs(
-                    tauT_gl_r,
-                    {
-                        "unit": [""],
-                        "definition": ["mean over branches & radii: tau_M1/T global"],
-                    },
-                ),
-                "by_segment/RI_raw_global": with_attrs(
-                    RI_gl_r,
-                    {
-                        "unit": [""],
-                        "definition": ["mean over branches & radii: RI global"],
-                    },
-                ),
-                "by_segment/PI_raw_global": with_attrs(
-                    PI_gl_r,
-                    {
-                        "unit": [""],
-                        "definition": ["mean over branches & radii: RI global"],
-                    },
-                ),
-                "by_segment/R_VTI_raw_global": with_attrs(
-                    RVTI_gl_r,
-                    {
-                        "unit": [""],
-                        "definition": ["mean over branches & radii: paper RVTI global"],
-                    },
-                ),
-            }
+            # Branch aggregates (median over radii)
+            pack("by_segment/bandlimited_branch", br_b, {"definition": ["median over radii per branch"]})
+            pack("by_segment/raw_branch", br_r, {"definition": ["median over radii per branch"]})
 
-        except Exception:  # noqa: BLE001
-            metrics = {}
-        v_raw = np.asarray(h5file[self.v_raw_global_input])
-        v_raw = np.maximum(v_raw, 0)
-        v_bandlimited = np.asarray(h5file[self.v_bandlimited_global_input])
-        v_bandlimited = np.maximum(v_bandlimited, 0)
-        v_bandlimited_max = np.asarray(h5file[self.v_bandlimited_global_max_input])
-        v_bandlimited_max = np.maximum(v_bandlimited_max, 0)
-        v_bandlimited_min = np.asarray(h5file[self.v_bandlimited_global_min_input])
-        v_bandlimited_min = np.maximum(v_bandlimited_min, 0)
-        tau_M1_raw = []
-        tau_M1_over_T_raw = []
-        tau_M1_bandlimited = []
-        tau_M1_over_T_bandlimited = []
+            # Global aggregates (mean over all branches & radii)
+            pack("by_segment/bandlimited_global", gl_b, {"definition": ["mean over branches and radii"]})
+            pack("by_segment/raw_global", gl_r, {"definition": ["mean over branches and radii"]})
 
-        R_VTI_bandlimited = []
-        R_VTI_raw = []
+            # Store parameters used (for provenance)
+            metrics["by_segment/params/ratio_rvti"] = np.asarray(self.ratio_rvti, dtype=float)
+            metrics["by_segment/params/ratio_sf"] = np.asarray(self.ratio_sf, dtype=float)
+            metrics["by_segment/params/eps"] = np.asarray(self.eps, dtype=float)
+            metrics["by_segment/params/H_LOW_MAX"] = np.asarray(self.H_LOW_MAX, dtype=int)
+            metrics["by_segment/params/H_HIGH_MIN"] = np.asarray(self.H_HIGH_MIN, dtype=int)
+            metrics["by_segment/params/H_HIGH_MAX"] = np.asarray(self.H_HIGH_MAX, dtype=int)
 
-        RI_bandlimited = []
-        RI_raw = []
-        PI_bandlimited = []
-        PI_raw = []
+        # -------------------------
+        # Independent global metrics (raw + bandlimited)
+        # -------------------------
+        have_glob = (self.v_raw_global_input in h5file) and (self.v_band_global_input in h5file)
+        if have_glob:
+            v_raw_gl = np.asarray(h5file[self.v_raw_global_input])
+            v_band_gl = np.asarray(h5file[self.v_band_global_input])
 
-        ratio_systole_diastole_R_VTI = 0.5
+            out_raw = self._compute_block_global(v_raw_gl, T)
+            out_band = self._compute_block_global(v_band_gl, T)
 
-        for beat_idx in range(len(T[0])):
-            t = T[0][beat_idx] / len(v_raw.T[beat_idx])
-            D1_raw = np.sum(
-                v_raw.T[beat_idx][
-                    : int(np.ceil(len(v_raw.T[0]) * ratio_systole_diastole_R_VTI))
-                ]
-            )
-            D2_raw = np.sum(
-                v_raw.T[beat_idx][
-                    int(np.ceil(len(v_raw.T[0]) * ratio_systole_diastole_R_VTI)) :
-                ]
-            )
-            D1_bandlimited = np.sum(
-                v_bandlimited.T[beat_idx][
-                    : int(
-                        np.ceil(len(v_bandlimited.T[0]) * ratio_systole_diastole_R_VTI)
-                    )
-                ]
-            )
-            D2_bandlimited = np.sum(
-                v_bandlimited.T[beat_idx][
-                    int(
-                        np.ceil(len(v_bandlimited.T[0]) * ratio_systole_diastole_R_VTI)
-                    ) :
-                ]
-            )
-            R_VTI_bandlimited.append(D1_bandlimited / (D2_bandlimited + 10 ** (-12)))
-            R_VTI_raw.append(D1_raw / (D2_raw + 10 ** (-12)))
-            M_0 = np.sum(v_raw.T[beat_idx])
-            M_1 = 0
-            for time_idx in range(len(v_raw.T[beat_idx])):
-                M_1 += v_raw[time_idx][beat_idx] * time_idx * t
-            TM1 = M_1 / M_0
-            tau_M1_raw.append(TM1)
-            tau_M1_over_T_raw.append(TM1 / T[0][beat_idx])
+            for k in self._metric_keys():
+                metrics[f"global/raw/{k}"] = out_raw[k]
+                metrics[f"global/bandlimited/{k}"] = out_band[k]
 
-        for beat_idx in range(len(T[0])):
-            t = T[0][beat_idx] / len(v_raw.T[beat_idx])
-            M_0 = np.sum(v_bandlimited.T[beat_idx])
-            M_1 = 0
-            for time_idx in range(len(v_raw.T[beat_idx])):
-                M_1 += v_bandlimited[time_idx][beat_idx] * time_idx * t
-            TM1 = M_1 / M_0
-            tau_M1_bandlimited.append(TM1)
-            tau_M1_over_T_bandlimited.append(TM1 / T[0][beat_idx])
+            # provenance
+            metrics["global/params/ratio_rvti"] = np.asarray(self.ratio_rvti, dtype=float)
+            metrics["global/params/ratio_sf"] = np.asarray(self.ratio_sf, dtype=float)
+            metrics["global/params/eps"] = np.asarray(self.eps, dtype=float)
+            metrics["global/params/H_LOW_MAX"] = np.asarray(self.H_LOW_MAX, dtype=int)
+            metrics["global/params/H_HIGH_MIN"] = np.asarray(self.H_HIGH_MIN, dtype=int)
+            metrics["global/params/H_HIGH_MAX"] = np.asarray(self.H_HIGH_MAX, dtype=int)
 
-        for beat_idx in range(len(v_bandlimited_max[0])):
-            RI_bandlimited_temp = 1 - (
-                np.min(v_bandlimited.T[beat_idx]) / np.max(v_bandlimited.T[beat_idx])
-            )
-            RI_bandlimited.append(RI_bandlimited_temp)
-            PI_bandlimited_temp = (
-                np.max(v_bandlimited.T[beat_idx]) - np.min(v_bandlimited.T[beat_idx])
-            ) / np.mean(v_bandlimited.T[beat_idx])
-            PI_bandlimited.append(PI_bandlimited_temp)
-
-        for beat_idx in range(len(v_bandlimited_max[0])):
-            RI_raw_temp = 1 - (np.min(v_raw.T[beat_idx]) / np.max(v_raw.T[beat_idx]))
-            RI_raw.append(RI_raw_temp)
-            PI_raw_temp = (
-                np.max(v_raw.T[beat_idx]) - np.min(v_raw.T[beat_idx])
-            ) / np.mean(v_raw.T[beat_idx])
-            PI_raw.append(PI_raw_temp)
-        metrics.update(
-            {
-                "global/tau_M1_raw": with_attrs(np.asarray(tau_M1_raw), {"unit": [""]}),
-                "global/tau_M1_bandlimited": np.asarray(tau_M1_bandlimited),
-                "global/tau_M1_over_T_raw": with_attrs(
-                    np.asarray(tau_M1_over_T_raw), {"unit": [""]}
-                ),
-                "global/tau_M1_over_T_bandlimited": np.asarray(
-                    tau_M1_over_T_bandlimited
-                ),
-                "global/RI_bandlimited": np.asarray(RI_bandlimited),
-                "global/RI_raw": np.asarray(RI_raw),
-                "global/PI_raw": np.asarray(PI_raw),
-                "global/PI_bandlimited": np.asarray(PI_bandlimited),
-                "global/R_VTI_bandlimited": np.asarray(R_VTI_bandlimited),
-                "global/R_VTI_raw": np.asarray(R_VTI_raw),
-                "global/ratio_systole_diastole_R_VTI": np.asarray(
-                    ratio_systole_diastole_R_VTI
-                ),
-            }
-        )
         return ProcessResult(metrics=metrics)
