@@ -1,5 +1,5 @@
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Optional, Sequence, Tuple, Union
 
 import h5py
 import numpy as np
@@ -16,7 +16,7 @@ def safe_h5_key(name: str) -> str:
     return cleaned or "pipeline"
 
 
-def _copy_input_contents(source_file: Optional[Union[str, Path]], dest: h5py.File) -> None:
+def _copy_input_contents(source_file: str | Path | None, dest: h5py.File) -> None:
     """Copy all attributes and top-level objects from the input H5 into dest."""
     if not source_file:
         return
@@ -32,7 +32,11 @@ def _copy_input_contents(source_file: Optional[Union[str, Path]], dest: h5py.Fil
 
 def _ensure_pipelines_group(h5file: h5py.File) -> h5py.Group:
     """Return a pipelines group, creating it when missing."""
-    return h5file["pipelines"] if "pipelines" in h5file else h5file.create_group("pipelines")
+    return (
+        h5file["Pipelines"]
+        if "Pipelines" in h5file
+        else h5file.create_group("Pipelines")
+    )
 
 
 def _create_unique_group(parent: h5py.Group, base_name: str) -> h5py.Group:
@@ -43,6 +47,35 @@ def _create_unique_group(parent: h5py.Group, base_name: str) -> h5py.Group:
         candidate = f"{base_name}_{idx}"
         idx += 1
     return parent.create_group(candidate)
+
+
+def _resolve_dataset_target(root_group: h5py.Group, key: str) -> tuple[h5py.Group, str]:
+    """
+    Resolve a metric key to (parent_group, dataset_name).
+
+    Supports nested paths like "vesselA/tauH_10" under the provided root group.
+    Intermediate groups are created on demand.
+    """
+    normalized_key = str(key).replace("\\", "/").strip("/")
+    parts = [part for part in normalized_key.split("/") if part]
+    if not parts:
+        raise ValueError("Dataset key cannot be empty.")
+
+    parent = root_group
+    for part in parts[:-1]:
+        existing = parent.get(part)
+        if existing is None:
+            parent = parent.create_group(part)
+            continue
+        if isinstance(existing, h5py.Group):
+            parent = existing
+            continue
+        raise ValueError(
+            f"Cannot create subgroup '{part}' for key '{key}': a dataset already exists at that path."
+        )
+
+    dataset_name = parts[-1]
+    return parent, dataset_name
 
 
 def _write_value_dataset(group: h5py.Group, key: str, value) -> None:
@@ -63,17 +96,21 @@ def _write_value_dataset(group: h5py.Group, key: str, value) -> None:
     elif isinstance(value, tuple) and len(value) == 2 and isinstance(value[1], dict):
         data, ds_attrs = value
 
+    target_group, dataset_key = _resolve_dataset_target(group, str(key))
+
     if isinstance(data, str):
-        dataset = group.create_dataset(key, data=data, dtype=h5py.string_dtype(encoding="utf-8"))
+        dataset = target_group.create_dataset(
+            dataset_key, data=data, dtype=h5py.string_dtype(encoding="utf-8")
+        )
     else:
         payload = data
         if isinstance(data, (list, tuple)):
             payload = np.asarray(data)
         try:
-            dataset = group.create_dataset(key, data=payload)
+            dataset = target_group.create_dataset(dataset_key, data=payload)
         except (TypeError, ValueError):
-            dataset = group.create_dataset(
-                key, data=str(data), dtype=h5py.string_dtype(encoding="utf-8")
+            dataset = target_group.create_dataset(
+                dataset_key, data=str(data), dtype=h5py.string_dtype(encoding="utf-8")
             )
 
     if ds_attrs:
@@ -81,7 +118,7 @@ def _write_value_dataset(group: h5py.Group, key: str, value) -> None:
             _set_attr_safe(dataset, attr_key, attr_val)
 
 
-def _set_attr_safe(h5obj: Union[h5py.File, h5py.Group], key: str, value) -> None:
+def _set_attr_safe(h5obj: h5py.File | h5py.Group, key: str, value) -> None:
     """
     Set an attribute on a file or group, falling back to string when the type is unsupported.
     """
@@ -102,9 +139,9 @@ def _set_attr_safe(h5obj: Union[h5py.File, h5py.Group], key: str, value) -> None
 
 def write_result_h5(
     result: ProcessResult,
-    path: Union[Path, str],
+    path: Path | str,
     pipeline_name: str,
-    source_file: Optional[str] = None,
+    source_file: str | None = None,
 ) -> str:
     """
     Write pipeline results to an HDF5 file.
@@ -112,8 +149,8 @@ def write_result_h5(
     Attributes:
         pipeline: pipeline display name.
         source_file: optional path to the originating HDF5 input.
-        metrics: stored under /metrics/<name>.
-        artifacts: stored under /artifacts/<name> when present.
+        metrics: stored under /Pipelines/<safe_pipeline_name>/<name>,
+            supporting nested paths in keys.
     """
     out_path = Path(path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -123,11 +160,6 @@ def write_result_h5(
             f.attrs["pipeline"] = pipeline_name
         if source_file:
             f.attrs["source_file"] = source_file
-        if result.file_attrs:
-            for key, value in result.file_attrs.items():
-                if key in {"pipeline", "source_file"}:
-                    continue
-                _set_attr_safe(f, key, value)
         pipelines_grp = _ensure_pipelines_group(f)
         pipeline_grp = _create_unique_group(pipelines_grp, safe_h5_key(pipeline_name))
         pipeline_grp.attrs["pipeline"] = pipeline_name
@@ -136,25 +168,20 @@ def write_result_h5(
                 if key == "pipeline":
                     continue
                 _set_attr_safe(pipeline_grp, key, value)
-        metrics_grp = pipeline_grp.create_group("metrics")
         for key, value in result.metrics.items():
-            _write_value_dataset(metrics_grp, key, value)
-        if result.artifacts:
-            artifacts_grp = pipeline_grp.create_group("artifacts")
-            for key, value in result.artifacts.items():
-                _write_value_dataset(artifacts_grp, key, value)
+            _write_value_dataset(pipeline_grp, key, value)
     return str(out_path)
 
 
 def write_combined_results_h5(
-    results: Sequence[Tuple[str, ProcessResult]],
-    path: Union[Path, str],
-    source_file: Optional[str] = None,
+    results: Sequence[tuple[str, ProcessResult]],
+    path: Path | str,
+    source_file: str | None = None,
 ) -> str:
     """
     Write multiple pipeline results into a single HDF5 file.
 
-    The file groups results under /pipelines/<safe_pipeline_name>/{metrics,artifacts}.
+    The file groups results under /Pipelines/<safe_pipeline_name>/<metric_name>.
     """
     out_path = Path(path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -164,18 +191,15 @@ def write_combined_results_h5(
             f.attrs["source_file"] = source_file
         pipelines_grp = _ensure_pipelines_group(f)
         for pipeline_name, result in results:
-            pipeline_grp = _create_unique_group(pipelines_grp, safe_h5_key(pipeline_name))
+            pipeline_grp = _create_unique_group(
+                pipelines_grp, safe_h5_key(pipeline_name)
+            )
             pipeline_grp.attrs["pipeline"] = pipeline_name
             if result.attrs:
                 for key, value in result.attrs.items():
                     if key == "pipeline":
                         continue
                     _set_attr_safe(pipeline_grp, key, value)
-            metrics_grp = pipeline_grp.create_group("metrics")
             for key, value in result.metrics.items():
-                _write_value_dataset(metrics_grp, key, value)
-            if result.artifacts:
-                artifacts_grp = pipeline_grp.create_group("artifacts")
-                for key, value in result.artifacts.items():
-                    _write_value_dataset(artifacts_grp, key, value)
+                _write_value_dataset(pipeline_grp, key, value)
     return str(out_path)

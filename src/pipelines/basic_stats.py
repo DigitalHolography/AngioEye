@@ -1,16 +1,15 @@
-from typing import Optional
-
 import h5py
 import numpy as np
 
-from .core.base import ProcessPipeline, ProcessResult
+from .core.base import ProcessPipeline, ProcessResult, registerPipeline
 
 
+@registerPipeline(name="Basic Stats")
 class BasicStats(ProcessPipeline):
     description = "Min / Max / Mean / Std over the first dataset found in the file."
 
-    def _first_dataset(self, h5file: h5py.File) -> Optional[h5py.Dataset]:
-        found: Optional[h5py.Dataset] = None
+    def _first_dataset(self, h5file: h5py.File) -> h5py.Dataset | None:
+        found: h5py.Dataset | None = None
 
         def visitor(_name: str, obj: h5py.Dataset) -> None:
             nonlocal found
@@ -28,7 +27,13 @@ class BasicStats(ProcessPipeline):
         finite = data[np.isfinite(data)]
         arr = finite if finite.size > 0 else data
         if arr.size == 0:
-            metrics = {"count": 0, "min": float("nan"), "max": float("nan"), "mean": float("nan"), "std": float("nan")}
+            metrics = {
+                "count": 0,
+                "min": float("nan"),
+                "max": float("nan"),
+                "mean": float("nan"),
+                "std": float("nan"),
+            }
         else:
             metrics = {
                 "count": float(arr.size),
@@ -37,4 +42,4 @@ class BasicStats(ProcessPipeline):
                 "mean": float(np.mean(arr)),
                 "std": float(np.std(arr)),
             }
-        return ProcessResult(metrics=metrics, artifacts={"dataset": dataset.name})
+        return ProcessResult(metrics=metrics, attrs={"dataset": dataset.name})

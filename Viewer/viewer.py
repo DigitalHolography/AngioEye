@@ -1,7 +1,6 @@
 import os
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
-from typing import Dict, List, Optional, Tuple, Union
 
 import h5py
 import numpy as np
@@ -14,11 +13,11 @@ class H5Viewer(tk.Tk):
         super().__init__()
         self.title("HDF5 Viewer")
         self.geometry("1200x800")
-        self.h5_file: Optional[h5py.File] = None
-        self.current_dataset: Optional[h5py.Dataset] = None
-        self.current_dataset_path: Optional[str] = None
-        self.axis_label_to_index: Dict[str, int] = {}
-        self.slider_vars: Dict[int, Tuple[tk.IntVar, ttk.Label]] = {}
+        self.h5_file: h5py.File | None = None
+        self.current_dataset: h5py.Dataset | None = None
+        self.current_dataset_path: str | None = None
+        self.axis_label_to_index: dict[str, int] = {}
+        self.slider_vars: dict[int, tuple[tk.IntVar, ttk.Label]] = {}
         self.colorbar = None
 
         self._build_ui()
@@ -47,8 +46,12 @@ class H5Viewer(tk.Tk):
         tree_frame.columnconfigure(0, weight=1)
         tree_frame.rowconfigure(0, weight=1)
 
-        self.tree = ttk.Treeview(tree_frame, columns=("path",), show="tree", selectmode="browse")
-        tree_scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
+        self.tree = ttk.Treeview(
+            tree_frame, columns=("path",), show="tree", selectmode="browse"
+        )
+        tree_scroll = ttk.Scrollbar(
+            tree_frame, orient="vertical", command=self.tree.yview
+        )
         self.tree.configure(yscrollcommand=tree_scroll.set)
         self.tree.grid(row=0, column=0, sticky="nsew")
         tree_scroll.grid(row=0, column=1, sticky="ns")
@@ -65,17 +68,23 @@ class H5Viewer(tk.Tk):
         self.y_axis_var = tk.StringVar()
 
         ttk.Label(axis_frame, text="X axis").grid(row=0, column=0, sticky="w")
-        self.x_combo = ttk.Combobox(axis_frame, textvariable=self.x_axis_var, state="readonly", width=24)
+        self.x_combo = ttk.Combobox(
+            axis_frame, textvariable=self.x_axis_var, state="readonly", width=24
+        )
         self.x_combo.grid(row=0, column=1, sticky="ew", padx=4, pady=2)
 
         ttk.Label(axis_frame, text="Y axis").grid(row=1, column=0, sticky="w")
-        self.y_combo = ttk.Combobox(axis_frame, textvariable=self.y_axis_var, state="readonly", width=24)
+        self.y_combo = ttk.Combobox(
+            axis_frame, textvariable=self.y_axis_var, state="readonly", width=24
+        )
         self.y_combo.grid(row=1, column=1, sticky="ew", padx=4, pady=2)
 
         self.x_combo.bind("<<ComboboxSelected>>", self.on_axis_change)
         self.y_combo.bind("<<ComboboxSelected>>", self.on_axis_change)
 
-        self.slider_frame = ttk.LabelFrame(sidebar, text="Other axes sliders", padding=8)
+        self.slider_frame = ttk.LabelFrame(
+            sidebar, text="Other axes sliders", padding=8
+        )
         self.slider_frame.grid(row=4, column=0, sticky="nsew", pady=(8, 8))
         self.slider_frame.columnconfigure(1, weight=1)
 
@@ -93,10 +102,14 @@ class H5Viewer(tk.Tk):
         self.canvas.get_tk_widget().grid(row=1, column=0, sticky="nsew")
 
     def _axis_label(self, axis: int) -> str:
-        size = self.current_dataset.shape[axis] if self.current_dataset is not None else "?"
+        size = (
+            self.current_dataset.shape[axis]
+            if self.current_dataset is not None
+            else "?"
+        )
         return f"Dim {axis} (size {size})"
 
-    def _selected_axis(self, label: str) -> Optional[int]:
+    def _selected_axis(self, label: str) -> int | None:
         if label == "(none)":
             return None
         return self.axis_label_to_index.get(label)
@@ -138,17 +151,32 @@ class H5Viewer(tk.Tk):
         self.tree.delete(*self.tree.get_children())
         if self.h5_file is None:
             return
-        root_id = self.tree.insert("", "end", text=os.path.basename(self.h5_file.filename), open=True, values=("/"))
+        root_id = self.tree.insert(
+            "",
+            "end",
+            text=os.path.basename(self.h5_file.filename),
+            open=True,
+            values=("/"),
+        )
         self._add_tree_items(root_id, self.h5_file)
 
     def _add_tree_items(self, parent: str, obj: h5py.Group) -> None:
         for key, item in obj.items():
             if isinstance(item, h5py.Group):
-                node_id = self.tree.insert(parent, "end", text=key, open=False, values=(item.name,), tags=("group",))
+                node_id = self.tree.insert(
+                    parent,
+                    "end",
+                    text=key,
+                    open=False,
+                    values=(item.name,),
+                    tags=("group",),
+                )
                 self._add_tree_items(node_id, item)
             else:
                 label = f"{key} {item.shape}"
-                self.tree.insert(parent, "end", text=label, values=(item.name,), tags=("dataset",))
+                self.tree.insert(
+                    parent, "end", text=label, values=(item.name,), tags=("dataset",)
+                )
 
     def on_tree_select(self, _event: tk.Event) -> None:
         item_id = self.tree.focus()
@@ -166,7 +194,9 @@ class H5Viewer(tk.Tk):
         dataset = self.h5_file[path]
         self.current_dataset = dataset
         self.current_dataset_path = path
-        self.info_label.config(text=f"{path}\nshape={dataset.shape} dtype={dataset.dtype}")
+        self.info_label.config(
+            text=f"{path}\nshape={dataset.shape} dtype={dataset.dtype}"
+        )
 
         dims = dataset.ndim
         labels = [self._axis_label(i) for i in range(dims)]
@@ -215,7 +245,9 @@ class H5Viewer(tk.Tk):
             if axis == x_axis or axis == y_axis:
                 continue
             row = len(self.slider_vars)
-            ttk.Label(self.slider_frame, text=self._axis_label(axis)).grid(row=row, column=0, sticky="w")
+            ttk.Label(self.slider_frame, text=self._axis_label(axis)).grid(
+                row=row, column=0, sticky="w"
+            )
             var = tk.IntVar(value=0)
             scale = tk.Scale(
                 self.slider_frame,
@@ -231,7 +263,7 @@ class H5Viewer(tk.Tk):
             value_label.grid(row=row, column=2, sticky="e")
             self.slider_vars[axis] = (var, value_label)
 
-    def on_axis_change(self, _event: Optional[tk.Event] = None) -> None:
+    def on_axis_change(self, _event: tk.Event | None = None) -> None:
         if self.current_dataset is None:
             return
         self.refresh_sliders()
@@ -262,7 +294,9 @@ class H5Viewer(tk.Tk):
         dims = ds.ndim
         x_axis = self._selected_axis(self.x_axis_var.get())
         y_axis = self._selected_axis(self.y_axis_var.get())
-        slider_indices = {axis: int(var.get()) for axis, (var, _) in self.slider_vars.items()}
+        slider_indices = {
+            axis: int(var.get()) for axis, (var, _) in self.slider_vars.items()
+        }
 
         if dims == 0:
             value = ds[()]
@@ -277,7 +311,7 @@ class H5Viewer(tk.Tk):
             if x_axis == y_axis:
                 self._show_placeholder("Choose two different axes")
                 return
-            slices: List[Union[int, slice]] = []
+            slices: list[int | slice] = []
             for axis in range(dims):
                 if axis == x_axis or axis == y_axis:
                     slices.append(slice(None))
@@ -289,7 +323,9 @@ class H5Viewer(tk.Tk):
                 self.ax.set_xlabel(self._axis_label(x_axis))
                 self.ax.set_ylabel(ds.name)
             else:
-                kept_axes = [idx for idx, slc in enumerate(slices) if isinstance(slc, slice)]
+                kept_axes = [
+                    idx for idx, slc in enumerate(slices) if isinstance(slc, slice)
+                ]
                 order = [kept_axes.index(y_axis), kept_axes.index(x_axis)]
                 if order != [0, 1]:
                     data = np.transpose(data, order)
