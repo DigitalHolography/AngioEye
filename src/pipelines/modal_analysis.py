@@ -1,7 +1,6 @@
 import numpy as np
+
 from .core.base import ProcessPipeline, ProcessResult, registerPipeline, with_attrs
-from scipy.linalg import eigh
-from scipy.signal import savgol_filter, medfilt, find_peaks
 
 
 @registerPipeline(name="modal_analysis")
@@ -28,7 +27,7 @@ class ArterialExample(ProcessPipeline):
         moment_0 = np.asarray(h5file[self.M0_input])
         moment_1 = np.asarray(h5file[self.M1_input])
         moment_2 = np.asarray(h5file[self.M2_input])
-        registration = np.asarray(h5file[self.registration_input])
+
         M0_matrix = []
         M1_matrix = []
         M2_matrix = []
@@ -43,7 +42,7 @@ class ArterialExample(ProcessPipeline):
             for x_idx in range(x_size):
                 for y_idx in range(y_size):
                     M0 = moment_0[time_idx, 0, x_idx, y_idx]
-                    M1 = moment_1[time_idx, 0, x_idx, y_idx]
+
                     M2 = moment_2[time_idx, 0, x_idx, y_idx]
                     M0_matrix_time.append(M0)
                     M2_over_M0_squared_time.append(np.sqrt(M2 / M0))

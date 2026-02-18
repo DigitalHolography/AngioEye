@@ -357,7 +357,7 @@ class Reconstruct(ProcessPipeline):
                 Tau_M1_over_T_raw_branch_cropped = []
                 RI_raw_branch_cropped = []
                 R_VTI_raw_branch_cropped = []
-                for radius_idx in range(len(v_raw[threshold_idx, 0, 0, :])):
+                for _radius_idx in range(len(v_raw[threshold_idx, 0, 0, :])):
                     v_raw_average = np.nanmean(
                         v_raw[threshold_idx, :, branch_idx, :], axis=1
                     )

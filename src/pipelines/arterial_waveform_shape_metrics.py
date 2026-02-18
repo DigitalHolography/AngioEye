@@ -177,7 +177,6 @@ class ArterialSegExample(ProcessPipeline):
         fs = n / Tbeat  # Hz
         X = np.fft.rfft(vv)
         P = np.abs(X) ** 2
-        A = np.abs(X)
         f = np.fft.rfftfreq(n, d=1.0 / fs)  # Hz
         h = f * Tbeat  # cycles per beat (harmonic index, continuous)
         # vv_no_mean = vv - np.mean(vv)

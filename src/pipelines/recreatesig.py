@@ -1,6 +1,6 @@
 import numpy as np
 
-from .core.base import ProcessPipeline, ProcessResult, registerPipeline, with_attrs
+from .core.base import ProcessPipeline, ProcessResult, registerPipeline
 
 
 @registerPipeline(name="reconstruct")
@@ -32,10 +32,8 @@ class Reconstruct(ProcessPipeline):
 
         V_corrected = []
         V_ceil = []
-        V_gauss = []
 
         for k in range(len(v_seg[0, :, 0, 0])):
-            VIT_Time = 0
             Vit_br = []
             for br in range(len(v_seg[0, k, :, 0])):
                 v_branch = np.nanmean(v_seg[:, k, br, :], axis=1)
@@ -80,7 +78,7 @@ class Reconstruct(ProcessPipeline):
 
             V_corrected.append(np.nanmean(Vit))
 
-        '''vraw_ds = np.asarray(v_threshold_beat_segment)
+        """vraw_ds = np.asarray(v_threshold_beat_segment)
         vraw_ds_temp = vraw_ds.transpose(1, 0, 2, 3)
         vraw_ds = np.maximum(vraw_ds_temp, 0)
         v_ds = vraw_ds
@@ -138,10 +136,9 @@ class Reconstruct(ProcessPipeline):
             RI_seg.append(RI_branch)
             RI_seg_band.append(RI_branch_band)
             RTVI_seg.append(RTVI_branch)
-            RTVI_seg_band.append(RTVI_band_branch)''''
+            RTVI_seg_band.append(RTVI_band_branch)"""
         for k in range(len(v_seg[0, :, 0, 0])):
             Vit = []
-            Vit_gauss = []
             for br in range(len(v_seg[0, k, :, 0])):
                 Vit_br = []
                 for seg in range(len(v_seg[0, k, br, :])):
