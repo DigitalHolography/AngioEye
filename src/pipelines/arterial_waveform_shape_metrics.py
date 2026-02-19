@@ -13,9 +13,9 @@ class ArterialSegExample(ProcessPipeline):
       - crest_factor (from band-limited synthesis n=0..10)
       - spectral_entropy (harmonic magnitude distribution entropy, n=1..10)
       - phi1, phi2, phi3 (harmonic phases)
-      - Delta_phi1, Delta_phi2 as phase-coupling:
-            Delta_phi1 = wrap(phi2 - 2*phi1)   (aka Δϕ2)
-            Delta_phi2 = wrap(phi3 - 3*phi1)   (aka Δϕ3)
+      - delta_phi2, delta_phi3 as phase-coupling:
+            delta_phi2 = wrap(phi2 - 2*phi1)   (aka Δϕ2)
+            delta_phi3 = wrap(phi3 - 3*phi1)   (aka Δϕ3)
     """
 
     description = "Waveform shape metrics (segment + aggregates + global), gain-invariant and robust."
@@ -103,7 +103,7 @@ class ArterialSegExample(ProcessPipeline):
         if v.size == 0 or not np.any(np.isfinite(v)):
             return np.nan
 
-        vv = np.where(np.isfinite(v), v, 0.0)
+        vv = np.where(np.isfinite(v), v, np.nan)
         m0 = float(np.sum(vv))
         if m0 <= 0:
             return np.nan
@@ -126,7 +126,7 @@ class ArterialSegExample(ProcessPipeline):
         if v.size == 0 or not np.any(np.isfinite(v)):
             return np.nan, np.nan
 
-        vv = np.where(np.isfinite(v), v, 0.0)
+        vv = np.where(np.isfinite(v), v, np.nan)
         n = vv.size
         if n < 2:
             return np.nan, np.nan
@@ -141,8 +141,10 @@ class ArterialSegExample(ProcessPipeline):
         if not np.isfinite(E_total) or E_total <= 0:
             return np.nan, np.nan
 
-        low_mask = (h >= 1.0) & (h <= float(self.H_LOW_MAX))
-        high_mask = (h >= float(self.H_HIGH_MIN)) & (h <= float(self.H_HIGH_MAX))
+        low_mask = (h >= 0.9) & (h <= float(self.H_LOW_MAX) + 0.1)
+        high_mask = (h >= float(self.H_HIGH_MIN) - 0.1) & (
+            h <= float(self.H_HIGH_MAX) + 0.1
+        )
 
         E_low = float(np.sum(P[low_mask]))
         E_high = float(np.sum(P[high_mask]))
@@ -167,7 +169,7 @@ class ArterialSegExample(ProcessPipeline):
         if v.size == 0 or not np.any(np.isfinite(v)):
             return {"V": None, "H": 0, "vb": None, "Vmax": np.nan, "omega0": np.nan}
 
-        vv = np.where(np.isfinite(v), v, 0.0)
+        vv = np.where(np.isfinite(v), v, np.nan)
         n = vv.size
         if n < 2:
             return {"V": None, "H": 0, "vb": None, "Vmax": np.nan, "omega0": np.nan}
@@ -194,7 +196,13 @@ class ArterialSegExample(ProcessPipeline):
           tau_|H|,n = (1/omega_n) * sqrt(1/|Xn|^2 - 1)  for |Xn| in (0,1]
           tauH = sum_{n=1..H} |Vn| * tau_n / sum_{n=1..H} |Vn|
         """
-        if V is None or (not np.isfinite(Vmax)) or Vmax <= 0 or (not np.isfinite(omega0)) or omega0 <= 0:
+        if (
+            V is None
+            or (not np.isfinite(Vmax))
+            or Vmax <= 0
+            or (not np.isfinite(omega0))
+            or omega0 <= 0
+        ):
             return np.nan
 
         H = int(V.size - 1)
@@ -249,14 +257,14 @@ class ArterialSegExample(ProcessPipeline):
             return np.nan
 
         mags = np.abs(V[1:])
-        mags = np.where(np.isfinite(mags), mags, 0.0)
-        s = float(np.sum(mags))
+        mags = np.where(np.isfinite(mags), mags, np.nan)
+        s = float(np.nansum(mags))
         if s <= 0:
             return np.nan
 
         p = mags / s
         p = np.clip(p, self.eps, 1.0)
-        return float(-np.sum(p * np.log(p)))
+        return float(-np.nansum(p * np.log(p)))
 
     def _crest_factor_from_vb(self, vb: np.ndarray) -> float:
         """
@@ -268,24 +276,24 @@ class ArterialSegExample(ProcessPipeline):
         vb = np.asarray(vb, dtype=float)
         if not np.any(np.isfinite(vb)):
             return np.nan
-        x = np.where(np.isfinite(vb), vb, 0.0)
-        rms = float(np.sqrt(np.mean(x * x)))
+        x = np.where(np.isfinite(vb), vb, np.nan)
+        rms = float(np.sqrt(self._safe_nanmean(x * x)))
         if rms <= 0:
             return np.nan
         return float(np.max(x) / rms)
 
     def _harmonic_phases(self, V: np.ndarray) -> dict:
         """
-        Return phi1,phi2,phi3 and Delta_phi1,Delta_phi2 (phase-coupling wrt fundamental).
-        Delta_phi1 = wrap(phi2 - 2*phi1)
-        Delta_phi2 = wrap(phi3 - 3*phi1)
+        Return phi1,phi2,phi3 and delta_phi2,delta_phi3 (phase-coupling wrt fundamental).
+        delta_phi2 = wrap(phi2 - 2*phi1)
+        delta_phi3 = wrap(phi3 - 3*phi1)
         """
         out = {
             "phi1": np.nan,
             "phi2": np.nan,
             "phi3": np.nan,
-            "Delta_phi1": np.nan,
-            "Delta_phi2": np.nan,
+            "delta_phi2": np.nan,
+            "delta_phi3": np.nan,
         }
         if V is None:
             return out
@@ -310,9 +318,9 @@ class ArterialSegExample(ProcessPipeline):
         out["phi3"] = phi3
 
         if np.isfinite(phi1) and np.isfinite(phi2):
-            out["Delta_phi1"] = self._wrap_pi(phi2 - 2.0 * phi1)
+            out["delta_phi2"] = self._wrap_pi(phi2 - 2.0 * phi1)
         if np.isfinite(phi1) and np.isfinite(phi3):
-            out["Delta_phi2"] = self._wrap_pi(phi3 - 3.0 * phi1)
+            out["delta_phi3"] = self._wrap_pi(phi3 - 3.0 * phi1)
 
         return out
 
@@ -391,7 +399,7 @@ class ArterialSegExample(ProcessPipeline):
         E_low_over_E_total, E_high_over_E_total = self._spectral_ratios(vv, Tbeat)
 
         # Harmonic-domain extras (n=0..10 synthesis; n=1..10 metrics)
-        hp = self._harmonic_pack(np.where(np.isfinite(vv), vv, 0.0), Tbeat)
+        hp = self._harmonic_pack(np.where(np.isfinite(vv), vv, np.nan), Tbeat)
         V = hp["V"]
         vb = hp["vb"]
         Vmax_bl = hp["Vmax"]
@@ -418,16 +426,23 @@ class ArterialSegExample(ProcessPipeline):
             "t90_over_T": float(t90_over_T),
             "E_low_over_E_total": float(E_low_over_E_total),
             "E_high_over_E_total": float(E_high_over_E_total),
-
             # NEW harmonic-domain requested metrics
             "tauH": float(tauH) if np.isfinite(tauH) else np.nan,
-            "crest_factor": float(crest_factor) if np.isfinite(crest_factor) else np.nan,
-            "spectral_entropy": float(spectral_entropy) if np.isfinite(spectral_entropy) else np.nan,
+            "crest_factor": float(crest_factor)
+            if np.isfinite(crest_factor)
+            else np.nan,
+            "spectral_entropy": float(spectral_entropy)
+            if np.isfinite(spectral_entropy)
+            else np.nan,
             "phi1": float(ph["phi1"]) if np.isfinite(ph["phi1"]) else np.nan,
             "phi2": float(ph["phi2"]) if np.isfinite(ph["phi2"]) else np.nan,
             "phi3": float(ph["phi3"]) if np.isfinite(ph["phi3"]) else np.nan,
-            "Delta_phi1": float(ph["Delta_phi1"]) if np.isfinite(ph["Delta_phi1"]) else np.nan,
-            "Delta_phi2": float(ph["Delta_phi2"]) if np.isfinite(ph["Delta_phi2"]) else np.nan,
+            "delta_phi2": float(ph["delta_phi2"])
+            if np.isfinite(ph["delta_phi2"])
+            else np.nan,
+            "delta_phi3": float(ph["delta_phi3"])
+            if np.isfinite(ph["delta_phi3"])
+            else np.nan,
         }
 
     @staticmethod
@@ -448,7 +463,6 @@ class ArterialSegExample(ProcessPipeline):
             "t90_over_T",
             "E_low_over_E_total",
             "E_high_over_E_total",
-
             # NEW requested metrics
             "tauH",
             "crest_factor",
@@ -456,8 +470,8 @@ class ArterialSegExample(ProcessPipeline):
             "phi1",
             "phi2",
             "phi3",
-            "Delta_phi1",
-            "Delta_phi2",
+            "delta_phi2",
+            "delta_phi3",
         ]
 
     def _compute_block_segment(self, v_block: np.ndarray, T: np.ndarray):
