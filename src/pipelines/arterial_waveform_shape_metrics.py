@@ -266,6 +266,28 @@ class ArterialSegExample(ProcessPipeline):
         p = np.clip(p, self.eps, 1.0)
         return float(-np.nansum(p * np.log(p)))
 
+    def _spectral_flatness_from_harmonics(self, V: np.ndarray) -> float:
+        """
+        Spectral entropy of harmonic magnitude distribution over n=1..H:
+          p_n = |Vn| / sum_{k=1..H} |Vk|
+          Hspec = - sum p_n log(p_n)
+        """
+        if V is None:
+            return np.nan
+        H = int(V.size - 1)
+        if H < 1:
+            return np.nan
+
+        mags = np.abs(V[1:])
+        mags = np.where(np.isfinite(mags), mags, np.nan)
+        s = float(np.nansum(mags))
+        if s <= 0:
+            return np.nan
+
+        p = mags / s
+        p = np.clip(p, self.eps, 1.0)
+        return float(-np.nansum(p * np.log(p)))
+
     def _crest_factor_from_vb(self, vb: np.ndarray) -> float:
         """
         Crest factor on band-limited waveform vb:
