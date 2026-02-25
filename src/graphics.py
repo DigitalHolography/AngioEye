@@ -8,6 +8,9 @@ import plotly.graph_objects as go
 from tkinter import Tk, filedialog
 import shutil
 import re
+import base64
+from pathlib import Path
+
 
 # ======================
 # dossier contenant les métriques
@@ -25,22 +28,43 @@ def choose_zip():
     return filedialog.askopenfilename(filetypes=[("ZIP", "*.zip")])
 
 
+def replace_file_in_zip(zip_path, file_to_add):
+
+    temp_zip = zip_path + ".tmp"
+
+    with zipfile.ZipFile(zip_path, "r") as zin:
+        with zipfile.ZipFile(temp_zip, "w") as zout:
+            # copier tous les fichiers sauf l'ancien html
+            for item in zin.infolist():
+                if item.filename != os.path.basename(file_to_add):
+                    buffer = zin.read(item.filename)
+                    zout.writestr(item, buffer)
+
+            # ajouter la nouvelle version
+            zout.write(file_to_add)
+
+    # remplacer ancien zip
+    os.replace(temp_zip, zip_path)
+
+
 # ======================
 # Lire toutes les métriques d'un h5
 # ======================
-def extract_index(filename):
-    """
-    Trouve le numéro d'expérience dans le nom.
-    Pas de numéro = 0.
-    """
 
-    match = re.search(r"PRESSURE_(\d+)", filename)
 
-    if match:
-        return int(match.group(1))
+def extract_sort_key(filename):
 
-    # aucun numéro -> fichier 0
-    return 0
+    name = os.path.basename(filename)
+
+    # 1️⃣ date = premier nombre à 6 chiffres
+    date_match = re.search(r"(\d{6})", name)
+    date = int(date_match.group(1)) if date_match else 0
+
+    # 2️⃣ index avant HD
+    hd_match = re.search(r"_(\d+)_HD", name)
+    hd_index = int(hd_match.group(1)) if hd_match else 0
+
+    return (date, hd_index)
 
 
 def extract_metrics(h5_path):
@@ -81,6 +105,8 @@ def analyze_zip(zip_path):
             z.extractall(tmpdir)
 
         for root, _, files in os.walk(tmpdir):
+            group_name = os.path.basename(root)
+
             for file in files:
                 if not file.endswith(".h5"):
                     continue
@@ -88,23 +114,35 @@ def analyze_zip(zip_path):
                 filepath = os.path.join(root, file)
 
                 metrics = extract_metrics(filepath)
+                for metric_group, group_values in metrics.items():
+                    if "mean" in group_values:
+                        metric_name = metric_group
+                        mean = group_values["mean"]
+                        std = group_values["std"]
 
-                for mode, metrics_dict in metrics.items():
-                    if mode not in all_results:
-                        all_results[mode] = {}
-
-                    for metric, values in metrics_dict.items():
-                        if metric not in all_results[mode]:
-                            all_results[mode][metric] = []
-
-                        all_results[mode][metric].append(
+                        all_results.setdefault(metric_name, []).append(
                             {
                                 "file": file,
-                                "index": extract_index(file),
-                                "mean": values["mean"],
-                                "std": values["std"],
+                                "group": group_name,
+                                "mean": mean,
+                                "std": std,
                             }
                         )
+
+                    # cas nouveau : sous-dossier (bandlimited, raw, etc.)
+                    else:
+                        for metric_name, values in group_values.items():
+                            mean = values["mean"]
+                            std = values["std"]
+
+                            all_results.setdefault(metric_name, []).append(
+                                {
+                                    "file": file,
+                                    "group": group_name,
+                                    "mean": mean,
+                                    "std": std,
+                                }
+                            )
 
     return all_results
 
@@ -121,6 +159,11 @@ def save_dashboard(all_results, original_zip):
 <html>
 <head>
 <title>Metrics Dashboard</title>
+<style>
+body {
+    margin-left: 80px;
+}
+</style>
 </head>
 <body>
 <h1>Metrics Analysis</h1>
@@ -130,13 +173,32 @@ def save_dashboard(all_results, original_zip):
     # POUR CHAQUE MODE
     # ======================
     for mode, metrics in all_results.items():
+        metrics_by_name = defaultdict(list)
+
+        for entry in metrics:
+            metric_name = entry["metric"]
+            metrics_by_name[metric_name].append(entry)
         with open(dashboard_file, "a") as f:
             f.write(f"<h1>{mode.upper()}</h1><hr>")
+        dashboard_file = "metric_dashboard.html"
+        BASE_DIR = Path(__file__).parent
+        image_path = BASE_DIR / "images.jpg"
+        with open(image_path, "rb") as img:
+            encoded = base64.b64encode(img.read()).decode()
 
+        html_img = f'<img src="data:image/jpeg;base64,{encoded}" width="300">'
+
+        with open(dashboard_file, "a") as f:
+            f.write(html_img)
         for metric, data in metrics.items():
             df = pd.DataFrame(data).sort_values("index")
+            df["group_order"] = df["group"].astype("category").cat.codes
+            df = df.sort_values(["group_order", "file"])
+
+            df["index"] = range(len(df))
 
             fig = go.Figure()
+            fig.update_layout(width=800, height=500, margin=dict(t=20, b=20))
             xmin = df["index"].min()
             xmax = df["index"].max()
 
@@ -162,35 +224,44 @@ def save_dashboard(all_results, original_zip):
                     y=df["mean"],
                     error_y=dict(type="data", array=df["std"], visible=True),
                     mode="markers",
+                    marker=dict(color="black"),
                 )
             )
+            tickvals = []
+            ticktext = []
+
+            for g in df["group"].unique():
+                group_indices = df[df["group"] == g]["index"]
+
+                center = group_indices.mean()
+
+                tickvals.append(center)
+                ticktext.append(g)
 
             fig.update_layout(
+                xaxis=dict(
+                    tickmode="array",
+                    tickvals=tickvals,
+                    ticktext=ticktext,
+                    title="Patient Group",
+                ),
+                xaxis_title_font=dict(size=30),
+                yaxis_title_font=dict(size=30),
                 xaxis_title="Epoch",
                 yaxis_title=metric,
                 showlegend=False,
             )
-
             fig_html = fig.to_html(full_html=False, include_plotlyjs="cdn")
-
             with open(dashboard_file, "a") as f:
-                f.write(f"<h2>{metric}</h2>")
+                f.write(f"<h2>{metric + '_' + mode}</h2>")
                 f.write(fig_html)
-
-    with open(dashboard_file, "a") as f:
-        f.write("</body></html>")
 
     # ======================
     # nouveau zip
-    # ======================
-    new_zip = original_zip.replace(".zip", "_graphics.zip")
 
-    shutil.copy(original_zip, new_zip)
+    replace_file_in_zip(original_zip, dashboard_file)
 
-    with zipfile.ZipFile(new_zip, "a") as z:
-        z.write(dashboard_file)
-
-    print("Dashboard créé :", new_zip)
+    print("Dashboard ajouté à:", original_zip)
 
 
 # ======================
