@@ -10,7 +10,7 @@ import shutil
 import re
 import base64
 from pathlib import Path
-
+from collections import defaultdict
 
 # ======================
 # dossier contenant les métriques
@@ -83,11 +83,18 @@ def extract_metrics(h5_path):
             group = metrics_root[mode]
 
             for metric_name in group.keys():
-                data = np.array(group[metric_name])
+                dataset = group[metric_name]
+
+                data = np.array(dataset)
+
+                definition = dataset.attrs.get(
+                    "definition", dataset.attrs.get("formula", "")
+                )
 
                 results[mode][metric_name] = {
                     "mean": np.mean(data),
                     "std": np.std(data),
+                    "definition": definition,
                 }
 
     return results
@@ -112,37 +119,21 @@ def analyze_zip(zip_path):
                     continue
 
                 filepath = os.path.join(root, file)
-
                 metrics = extract_metrics(filepath)
-                for metric_group, group_values in metrics.items():
-                    if "mean" in group_values:
-                        metric_name = metric_group
-                        mean = group_values["mean"]
-                        std = group_values["std"]
 
-                        all_results.setdefault(metric_name, []).append(
+                for mode, metric_dict in metrics.items():
+                    all_results.setdefault(mode, {})
+
+                    for metric_name, values in metric_dict.items():
+                        all_results[mode].setdefault(metric_name, []).append(
                             {
                                 "file": file,
                                 "group": group_name,
-                                "mean": mean,
-                                "std": std,
+                                "mean": values["mean"],
+                                "std": values["std"],
+                                "definition": values["definition"],
                             }
                         )
-
-                    # cas nouveau : sous-dossier (bandlimited, raw, etc.)
-                    else:
-                        for metric_name, values in group_values.items():
-                            mean = values["mean"]
-                            std = values["std"]
-
-                            all_results.setdefault(metric_name, []).append(
-                                {
-                                    "file": file,
-                                    "group": group_name,
-                                    "mean": mean,
-                                    "std": std,
-                                }
-                            )
 
     return all_results
 
@@ -151,7 +142,9 @@ def analyze_zip(zip_path):
 # Figure HTML par métrique
 # ======================
 def save_dashboard(all_results, original_zip):
-
+    all_metrics = set()
+    for mode in all_results:
+        all_metrics.update(all_results[mode].keys())
     dashboard_file = "metric_dashboard.html"
 
     with open(dashboard_file, "w") as f:
@@ -160,6 +153,29 @@ def save_dashboard(all_results, original_zip):
 <head>
 <title>Metrics Dashboard</title>
 <style>
+.definition {
+    max-width:900px;
+    font-style:italic;
+    color:#555;
+    font-size:20px;
+    margin-top:-10px;
+    margin-bottom:20px;
+}
+.mode-title {
+    text-align:center;
+    font-size:20px;
+    font-weight:bold;
+    margin-bottom:5px;
+}
+.row {
+    display: flex;
+    flex-direction: row;
+    gap: 40px;
+    margin-bottom: 40px;
+}
+.plot {
+    flex: 1;
+}
 body {
     margin-left: 80px;
 }
@@ -172,30 +188,45 @@ body {
     # ======================
     # POUR CHAQUE MODE
     # ======================
-    for mode, metrics in all_results.items():
-        metrics_by_name = defaultdict(list)
+    """dashboard_file = "metric_dashboard.html"
+    BASE_DIR = Path(__file__).parent
+    image_path = BASE_DIR / "images.jpg"
+    with open(image_path, "rb") as img:
+        encoded = base64.b64encode(img.read()).decode()
 
-        for entry in metrics:
-            metric_name = entry["metric"]
-            metrics_by_name[metric_name].append(entry)
+    html_img = f'<img src="data:image/jpeg;base64,{encoded}" width="300">'
+
+    with open(dashboard_file, "a") as f:
+        f.write(html_img)"""
+    for metric in sorted(all_metrics):
+        definition = all_results["raw"][metric][0].get("definition", "")
         with open(dashboard_file, "a") as f:
-            f.write(f"<h1>{mode.upper()}</h1><hr>")
-        dashboard_file = "metric_dashboard.html"
-        BASE_DIR = Path(__file__).parent
-        image_path = BASE_DIR / "images.jpg"
-        with open(image_path, "rb") as img:
-            encoded = base64.b64encode(img.read()).decode()
+            f.write(f"<h2>{metric}</h2>")
+            f.write(f"""
+        <p class="definition">{definition[0]}</p>
+        """)
+            f.write('<div class="row">')
+        for mode in ["raw", "bandlimited"]:
+            if mode not in all_results:
+                continue
+            if metric not in all_results[mode]:
+                continue
 
-        html_img = f'<img src="data:image/jpeg;base64,{encoded}" width="300">'
+            data = all_results[mode][metric]
+            df = pd.DataFrame(data)
 
-        with open(dashboard_file, "a") as f:
-            f.write(html_img)
-        for metric, data in metrics.items():
-            df = pd.DataFrame(data).sort_values("index")
             df["group_order"] = df["group"].astype("category").cat.codes
             df = df.sort_values(["group_order", "file"])
-
             df["index"] = range(len(df))
+
+            groups = df["group"].unique()
+
+            color_map = {
+                g: c
+                for g, c in zip(
+                    groups, ["royalblue", "firebrick", "seagreen", "orange", "purple"]
+                )
+            }
 
             fig = go.Figure()
             fig.update_layout(width=800, height=500, margin=dict(t=20, b=20))
@@ -218,15 +249,41 @@ body {
 
                 toggle = not toggle
                 current += 1
-            fig.add_trace(
-                go.Scatter(
-                    x=df["index"],
-                    y=df["mean"],
-                    error_y=dict(type="data", array=df["std"], visible=True),
-                    mode="markers",
-                    marker=dict(color="black"),
+            for g in groups:
+                group_df = df[df["group"] == g]
+
+                fig.add_trace(
+                    go.Scatter(
+                        x=group_df["index"],
+                        y=group_df["mean"],
+                        mode="markers",
+                        name=g,
+                        marker=dict(color=color_map[g], size=7, opacity=0.6),
+                        showlegend=True,
+                    )
                 )
-            )
+            for g in groups:
+                group_df = df[df["group"] == g]
+                x_center = group_df["index"].mean()
+                y_mean = group_df["mean"].mean()
+                y_std = group_df["mean"].std()
+                fig.add_trace(
+                    go.Scatter(
+                        x=[x_center],
+                        y=[y_mean],
+                        mode="markers",
+                        name=f"{g} mean",
+                        marker=dict(color=color_map[g], size=18),
+                        error_y=dict(
+                            type="data",
+                            array=[y_std],
+                            visible=True,
+                            thickness=3,
+                            width=8,
+                        ),
+                    )
+                )
+
             tickvals = []
             ticktext = []
 
@@ -245,7 +302,6 @@ body {
                     ticktext=ticktext,
                     title="Patient Group",
                 ),
-                xaxis_title_font=dict(size=30),
                 yaxis_title_font=dict(size=30),
                 xaxis_title="Epoch",
                 yaxis_title=metric,
@@ -253,12 +309,18 @@ body {
             )
             fig_html = fig.to_html(full_html=False, include_plotlyjs="cdn")
             with open(dashboard_file, "a") as f:
-                f.write(f"<h2>{metric + '_' + mode}</h2>")
-                f.write(fig_html)
-
+                f.write(f"""
+                        <div class="plot">
+                            <div class="mode-title">{mode.upper()}</div>
+                            {fig_html}
+                        </div>
+                        """)
+        with open(dashboard_file, "a") as f:
+            f.write("</div>")
     # ======================
     # nouveau zip
-
+    with open(dashboard_file, "a") as f:
+        f.write("</body></html>")
     replace_file_in_zip(original_zip, dashboard_file)
 
     print("Dashboard ajouté à:", original_zip)
