@@ -11,17 +11,13 @@ import re
 import base64
 from pathlib import Path
 from collections import defaultdict
+import plotly.express as px
 
-# ======================
-# dossier contenant les métriques
-# ======================
+
 METRIC_FOLDER = "/Pipelines/arterial_waveform_shape_metrics/global/"
 VALID_METRIC_FOLDERS = ["raw", "bandlimited"]
 
 
-# ======================
-# Choisir ZIP
-# ======================
 def choose_zip():
     root = Tk()
     root.withdraw()
@@ -34,33 +30,80 @@ def replace_file_in_zip(zip_path, file_to_add):
 
     with zipfile.ZipFile(zip_path, "r") as zin:
         with zipfile.ZipFile(temp_zip, "w") as zout:
-            # copier tous les fichiers sauf l'ancien html
             for item in zin.infolist():
                 if item.filename != os.path.basename(file_to_add):
                     buffer = zin.read(item.filename)
                     zout.writestr(item, buffer)
 
-            # ajouter la nouvelle version
             zout.write(file_to_add)
 
-    # remplacer ancien zip
     os.replace(temp_zip, zip_path)
 
 
-# ======================
-# Lire toutes les métriques d'un h5
-# ======================
+def load_first_m0_image(zip_path):
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+
+        with zipfile.ZipFile(zip_path, "r") as z:
+            z.extractall(tmpdir)
+
+        for root, _, files in os.walk(tmpdir):
+
+            for f in sorted(files):
+
+                if f.endswith(".h5"):
+
+                    h5_path = os.path.join(root, f)
+
+                    with h5py.File(h5_path, "r") as h5:
+                        img = h5["/Maps/M0_ff_img/value"][()]
+
+                    return img
+
+    return None
+
+def build_heatmap(img):
+
+    img = img.T
+
+    fig = px.imshow(
+        img,
+        color_continuous_scale="inferno",
+        origin="lower"
+    )
 
 
+    fig.update_xaxes(
+        visible=False,
+        showticklabels=False,
+        showgrid=False,
+        zeroline=False
+    )
+
+    fig.update_yaxes(
+        visible=False,
+        showticklabels=False,
+        showgrid=False,
+        zeroline=False
+    )
+
+    fig.update_layout(
+        width=300,
+        height=300,
+        margin=dict(t=20, b=0, l=0, r=0),
+        coloraxis_showscale=False
+    )
+
+    return fig
 def extract_sort_key(filename):
 
     name = os.path.basename(filename)
 
-    # 1️⃣ date = premier nombre à 6 chiffres
+
     date_match = re.search(r"(\d{6})", name)
     date = int(date_match.group(1)) if date_match else 0
 
-    # 2️⃣ index avant HD
+
     hd_match = re.search(r"_(\d+)_HD", name)
     hd_index = int(hd_match.group(1)) if hd_match else 0
 
@@ -76,7 +119,7 @@ def extract_metrics(h5_path):
 
         for mode in metrics_root.keys():
             if mode not in VALID_METRIC_FOLDERS:
-                continue  # ignore params ou autre dossier
+                continue 
 
             results[mode] = {}
 
@@ -90,19 +133,15 @@ def extract_metrics(h5_path):
                 definition = dataset.attrs.get(
                     "definition", dataset.attrs.get("formula", "")
                 )
-
+                latex_formula = dataset.attrs.get("latex_formula", "")
                 results[mode][metric_name] = {
                     "mean": np.mean(data),
                     "std": np.std(data),
-                    "definition": definition,
+                    "latex_formula": latex_formula,
                 }
 
     return results
 
-
-# ======================
-# Analyse du ZIP
-# ======================
 def analyze_zip(zip_path):
 
     all_results = {}
@@ -131,16 +170,12 @@ def analyze_zip(zip_path):
                                 "group": group_name,
                                 "mean": values["mean"],
                                 "std": values["std"],
-                                "definition": values["definition"],
+                                "latex_formula": values.get("latex_formula", ""),
                             }
                         )
 
     return all_results
 
-
-# ======================
-# Figure HTML par métrique
-# ======================
 def save_dashboard(all_results, original_zip):
     all_metrics = set()
     for mode in all_results:
@@ -152,6 +187,13 @@ def save_dashboard(all_results, original_zip):
 <html>
 <head>
 <title>Metrics Dashboard</title>
+<script>
+MathJax = {
+  tex: { inlineMath: [['$', '$'], ['\\\\(', '\\\\)']] }
+};
+</script>
+
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
 <style>
 .definition {
     max-width:900px;
@@ -185,27 +227,25 @@ body {
 <h1>Metrics Analysis</h1>
 """)
 
-    # ======================
-    # POUR CHAQUE MODE
-    # ======================
-    """dashboard_file = "metric_dashboard.html"
-    BASE_DIR = Path(__file__).parent
-    image_path = BASE_DIR / "images.jpg"
-    with open(image_path, "rb") as img:
-        encoded = base64.b64encode(img.read()).decode()
+    img = load_first_m0_image(original_zip)
 
-    html_img = f'<img src="data:image/jpeg;base64,{encoded}" width="300">'
+    if img is not None:
 
-    with open(dashboard_file, "a") as f:
-        f.write(html_img)"""
-    for metric in sorted(all_metrics):
-        definition = all_results["raw"][metric][0].get("definition", "")
+        heatmap_fig = build_heatmap(img)
+
+        heatmap_html = heatmap_fig.to_html(
+            full_html=False,
+            include_plotlyjs="cdn"
+        )
+
         with open(dashboard_file, "a") as f:
-            f.write(f"<h2>{metric}</h2>")
-            f.write(f"""
-        <p class="definition">{definition[0]}</p>
-        """)
+            f.write(heatmap_html)
+    for metric in sorted(all_metrics):
+        definition = all_results["raw"][metric][0].get("latex_formula", "")
+        with open(dashboard_file, "a") as f:
+            f.write(f"<h2>{metric + ' = ' + definition[0]}</h2>")
             f.write('<div class="row">')
+        y_values=[]
         for mode in ["raw", "bandlimited"]:
             if mode not in all_results:
                 continue
@@ -214,7 +254,13 @@ body {
 
             data = all_results[mode][metric]
             df = pd.DataFrame(data)
+            y_values.extend(df["mean"].values)
+            ymin = min(y_values)
+            ymax = max(y_values)
+            margin = 0.05 * (ymax - ymin)
 
+            ymin -= margin
+            ymax += margin
             df["group_order"] = df["group"].astype("category").cat.codes
             df = df.sort_values(["group_order", "file"])
             df["index"] = range(len(df))
@@ -229,7 +275,7 @@ body {
             }
 
             fig = go.Figure()
-            fig.update_layout(width=800, height=500, margin=dict(t=20, b=20))
+            fig.update_layout(width=600, height=300, margin=dict(t=20, b=20))
             xmin = df["index"].min()
             xmax = df["index"].max()
 
@@ -294,7 +340,7 @@ body {
 
                 tickvals.append(center)
                 ticktext.append(g)
-
+            fig.update_yaxes(range=[ymin, ymax])
             fig.update_layout(
                 xaxis=dict(
                     tickmode="array",
@@ -317,18 +363,12 @@ body {
                         """)
         with open(dashboard_file, "a") as f:
             f.write("</div>")
-    # ======================
-    # nouveau zip
     with open(dashboard_file, "a") as f:
         f.write("</body></html>")
     replace_file_in_zip(original_zip, dashboard_file)
 
     print("Dashboard ajouté à:", original_zip)
 
-
-# ======================
-# MAIN
-# ======================
 if __name__ == "__main__":
     zip_path = choose_zip()
 

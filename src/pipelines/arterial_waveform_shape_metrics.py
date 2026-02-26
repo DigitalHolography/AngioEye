@@ -586,6 +586,88 @@ class ArterialSegExample(ProcessPipeline):
     # Pipeline entrypoint
     # -------------------------
     def run(self, h5file) -> ProcessResult:
+        latex_formulas = {
+
+# ---- Temporal centroid ----
+"mu_t":
+r"$\mu = \frac{\sum_t w(t)\,t}{\sum_t w(t)}$",
+
+"mu_t_over_T":
+r"$\frac{\mu}{T}$",
+
+# ---- Doppler indices ----
+"RI":
+r"$\frac{V_{systole}-V_{diastole}}{V_{systole}}$",
+
+"PI":
+r"$\frac{V_{systole}-V_{diastole}}{V_{mean}}$",
+
+# ---- VTI metrics ----
+"R_VTI":
+r"$\frac{VTI_{0\rightarrow T/2}}{VTI_{T/2\rightarrow T}}$",
+
+"SF_VTI":
+r"$\frac{VTI_{0\rightarrow T/2}}{VTI_{0\rightarrow T}}$",
+
+# ---- Temporal dispersion ----
+"sigma_t":
+r"$\sqrt{\tau_{M,2}-\tau_{M,1}^{2}}$",
+
+"sigma_t_over_T":
+r"$\frac{\sigma}{T}$",
+
+# ---- Percentile timings ----
+"t10_over_T":
+r"$\frac{t_{10}}{T}$",
+
+"t25_over_T":
+r"$\frac{t_{25}}{T}$",
+
+"t50_over_T":
+r"$\frac{t_{50}}{T}$",
+
+"t75_over_T":
+r"$\frac{t_{75}}{T}$",
+
+"t90_over_T":
+r"$\frac{t_{90}}{T}$",
+
+# ---- Harmonic energy partitions ----
+"E_low_over_E_total":
+r"$\frac{\sum_{n=1}^{k}|V_n|^2}{\sum_{n=1}^{N}|V_n|^2}$",
+
+"E_high_over_E_total":
+r"$\frac{\sum_{n=k+1}^{N}|V_n|^2}{\sum_{n=1}^{N}|V_n|^2}$",
+
+# ---- Harmonic damping ----
+"tauH":
+r"$\tau_H=\frac{\sum_{n=2}^{N} w_n \frac{1}{\omega_n}\sqrt{\frac{1}{|X_n|^2}-1}}{\sum_{n=2}^{N} w_n}$",
+
+# ---- Shape sharpness ----
+"crest_factor":
+r"$\frac{\max_t v_b(t)}{\mathrm{RMS}(v_b(t))}$",
+
+# ---- Spectral entropy ----
+"spectral_entropy":
+r"$-\sum_{n=1}^{N} p_n\log(p_n+\epsilon)$",
+
+# ---- Harmonic phases ----
+"phi1":
+r"$\arg(V_1)$",
+
+"phi2":
+r"$\arg(V_2)$",
+
+"phi3":
+r"$\arg(V_3)$",
+
+# ---- Phase coupling ----
+"delta_phi2":
+r"$\mathrm{wrap}(\phi_2-2\phi_1)$",
+
+"delta_phi3":
+r"$\mathrm{wrap}(\phi_3-3\phi_1)$",
+}
         T = np.asarray(h5file[self.T_input])
         metrics = {}
 
@@ -687,12 +769,12 @@ class ArterialSegExample(ProcessPipeline):
             for k in self._metric_keys():
                 metrics[f"global/raw/{k[0]}"] = with_attrs(
                     out_raw[k[0]],
-                    {"unit": [k[2]], "definition": [k[1]]},
+                    {"unit": [k[2]], "definition": [k[1]], "latex_formula" : [latex_formulas[k[0]]]},
                 )
 
                 metrics[f"global/bandlimited/{k[0]}"] = with_attrs(
                     out_band[k[0]],
-                    {"unit": [k[2]], "definition": [k[1]]},
+                    {"unit": [k[2]], "definition": [k[1]], "latex_formula" : [latex_formulas[k[0]]]},
                 )
 
             # provenance
