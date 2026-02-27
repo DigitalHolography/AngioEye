@@ -285,6 +285,134 @@ def build_metric_figure(df, metric, mode, ymin, ymax, single_group):
     return fig
 
 
+def extract_mean_signal_per_file(h5_path, dataset_path):
+    with h5py.File(h5_path, "r") as f:
+        signal = np.array(f[dataset_path])  # shape (time, beats)
+
+    # moyenne sur les beats
+    mean_signal = signal.mean(axis=1)
+
+    return mean_signal
+
+
+def compute_group_mean_signals(zip_path, dataset_path):
+
+    group_signals = defaultdict(list)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with zipfile.ZipFile(zip_path, "r") as z:
+            z.extractall(tmpdir)
+
+        for root, _, files in os.walk(tmpdir):
+            h5_files = [f for f in files if f.endswith(".h5")]
+            if not h5_files:
+                continue
+
+            group_name = os.path.basename(root)
+            if root == tmpdir:
+                group_name = "all"
+
+            for file in h5_files:
+                h5_path = os.path.join(root, file)
+                signal = extract_mean_signal_per_file(h5_path, dataset_path)
+                group_signals[group_name].append(signal)
+
+    group_curves = {}
+
+    for group, signals in group_signals.items():
+        min_len = min(len(s) for s in signals)
+        aligned = np.array([s[:min_len] for s in signals])
+
+        group_median = np.median(aligned, axis=0)
+
+        group_curves[group] = {
+            "x": np.arange(min_len),
+            "median": group_median,
+        }
+
+    return group_curves
+
+
+def build_comparison_signal_figure(group_curves):
+
+    fig = go.Figure()
+
+    groups = sorted(group_curves.keys())
+    max_len = max(len(group_curves[g]["x"]) for g in groups)
+
+    x_common = np.arange(max_len)
+
+    global_max = 0
+
+    color_map = {
+        g: c
+        for g, c in zip(
+            groups, ["royalblue", "firebrick", "seagreen", "orange", "purple"]
+        )
+    }
+
+    for group in groups:
+        data = group_curves[group]
+
+        x_old = data["x"]
+        y_old = data["median"]
+
+        y_interp = np.interp(x_common, np.linspace(0, max_len - 1, len(y_old)), y_old)
+
+        global_max = max(global_max, np.max(y_interp))
+
+        fig.add_trace(
+            go.Scatter(
+                x=x_common,
+                y=y_interp,
+                mode="lines",
+                name=group,
+                line=dict(color=color_map[group], width=3),
+            )
+        )
+
+    fig.update_yaxes(range=[0, global_max * 1.05])
+
+    fig.update_layout(
+        height=550,
+        xaxis_title="Time index",
+        yaxis_title="Signal amplitude",
+        template="simple_white",
+        legend_title="Group",
+    )
+
+    return fig
+
+
+def build_group_signal_figure(group_name, data):
+
+    fig = go.Figure()
+
+    x = data["x"]
+    median = data["median"]
+
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=median,
+            mode="lines",
+            line=dict(width=3),
+        )
+    )
+    y_max = np.max(median)
+
+    fig.update_yaxes(range=[0, y_max])
+
+    fig.update_layout(
+        height=450,
+        xaxis_title="Time",
+        yaxis_title="Velocity",
+        template="simple_white",
+    )
+
+    return fig
+
+
 def save_dashboard(all_results, original_zip, single_group):
 
     dashboard_file = "metric_dashboard.html"
@@ -370,6 +498,17 @@ body {
     margin-bottom:5px;
     letter-spacing:1px;
 }
+.signal-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr; /* 2 colonnes */
+    gap: 20px;
+    width: 100%;
+    margin-bottom: 40px;
+}
+
+.signal-plot {
+    width: 100%;
+}
 
 </style>
 </head>
@@ -390,6 +529,64 @@ body {
                     {heatmap_html}
                     <h1>Metrics Analysis</h1>
                     </div>""")
+
+    dataset_path = "/Artery/VelocityPerBeat/VelocitySignalPerBeat/value"
+    dataset_path_bl = "/Artery/VelocityPerBeat/VelocitySignalPerBeatBandLimited/value"
+
+    group_curves = compute_group_mean_signals(original_zip, dataset_path)
+    group_curves_bl = compute_group_mean_signals(original_zip, dataset_path_bl)
+    group_comparison_curves = build_comparison_signal_figure(group_curves)
+    group_comparison_curves_bl = build_comparison_signal_figure(group_curves_bl)
+    with open(dashboard_file, "a") as f:
+        f.write('<div class="signal-grid">')
+    for group, data in group_curves.items():
+        fig_signal = build_group_signal_figure(group, data)
+
+        fig_html = fig_signal.to_html(
+            full_html=False, include_plotlyjs=False, config={"responsive": True}
+        )
+
+        with open(dashboard_file, "a") as f:
+            f.write(f"""
+    <div class="signal-plot">
+        <div class="metric-title">Signal raw {group}</div>
+        {fig_html}
+    </div>
+    """)
+    for group, data in group_curves.items():
+        fig_signal = build_group_signal_figure(group, data)
+
+        fig_html = fig_signal.to_html(
+            full_html=False, include_plotlyjs=False, config={"responsive": True}
+        )
+
+        with open(dashboard_file, "a") as f:
+            f.write(f"""
+    <div class="signal-plot">
+        <div class="metric-title">Signal bandlimited {group}</div>
+        {fig_html}
+    </div>
+    """)
+    fig_html = group_comparison_curves.to_html(
+        full_html=False, include_plotlyjs=False, config={"responsive": True}
+    )
+    with open(dashboard_file, "a") as f:
+        f.write(f"""<div class="signal-plot">
+        <div class="metric-title">Signal comparison</div>
+        {fig_html}
+    </div>
+    """)
+    fig_html_bl = group_comparison_curves_bl.to_html(
+        full_html=False, include_plotlyjs=False, config={"responsive": True}
+    )
+    with open(dashboard_file, "a") as f:
+        f.write(f"""<div class="signal-plot">
+        <div class="metric-title">Signal comparison bandlimited</div>
+        {fig_html_bl}
+    </div>""")
+
+    with open(dashboard_file, "a") as f:
+        f.write("</div>")
     for metric in sorted(all_metrics):
         definition = all_results["raw"][metric][0].get("latex_formula", "")
         for mode in ["raw", "bandlimited"]:
