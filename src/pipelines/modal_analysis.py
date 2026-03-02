@@ -1,8 +1,8 @@
 import numpy as np
+from scipy.interpolate import interp1d
+from scipy.signal import find_peaks, medfilt, savgol_filter
 
 from .core.base import ProcessPipeline, ProcessResult, registerPipeline, with_attrs
-from scipy.signal import savgol_filter, medfilt, find_peaks
-from scipy.interpolate import interp1d
 
 
 @registerPipeline(name="modal_analysis")
