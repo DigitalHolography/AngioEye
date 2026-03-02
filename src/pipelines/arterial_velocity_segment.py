@@ -87,8 +87,8 @@ class ArterialExampleSegment(ProcessPipeline):
             "TMI_seg": np.asarray(TMI_seg_band),
             "RI": np.asarray(RI_seg_band),
             "RI_raw": np.asarray(RI_seg),
-            "RTVI_band": np.asarray(RTVI_seg_band),
-            "RTVI": np.asarray(RTVI_seg),
+            "RTVI": np.asarray(RTVI_seg_band),
+            "RTVI_raw": np.asarray(RTVI_seg),
         }
 
         # Artifacts can store non-metric outputs (strings, paths, etc.).
