@@ -4,7 +4,7 @@ import tempfile
 import zipfile
 from collections import defaultdict
 from tkinter import Tk, filedialog
-
+import shutil
 import h5py
 import matplotlib.pyplot as plt
 import numpy as np
@@ -17,11 +17,16 @@ METRIC_FOLDER = "/Pipelines/arterial_waveform_shape_metrics/global/"
 VALID_METRIC_FOLDERS = ["raw", "bandlimited"]
 SELECTED_METRICS_PNG = {
     "RI",
+    "PI",
     "crest_factor",
     "t50_over_T",
     "R_VTI",
+    "SF_VTI",
     "Hspec",
-}  # adapte noms exacts
+    "mu_t_over_T",
+    "sigma_t_over_T",
+    "delta_phi2",
+}
 SIGNAL_DATASET_PATH = "/Artery/VelocityPerBeat/VelocitySignalPerBeatBandLimited/value"
 METRIC_ALIASES = {
     "Hspec": "spectral_entropy",
@@ -42,6 +47,19 @@ LATEX_FORMULAS = {
         r"$H_{spec}=-\sum_{n=1}^{H} p_n\log(p_n+\varepsilon)$",
         r"$p_n=\frac{|V_n|}{\sum_{k=1}^{H}|V_k|}$",
     ],
+    "mu_t_over_T": [
+        r"$\mu/T$",
+        r"$\mu=\frac{\sum_{i=1}^{N} w_i\,t_i}{\sum_{i=1}^{N} w_i}$",
+        r"$w_i=\max(v_i,0)$",
+    ],
+    "PI": r"$PI=\frac{V_{\max}-V_{\min}}{V_{\mathrm{mean}}}$",
+    "SF_VTI": r"$SF_{VTI}=\frac{\sum_{t\leq T/3} v(t)}{\sum_{t\leq T} v(t)}$",
+    "sigma_t_over_T": [
+        r"$\sigma/T$",
+        r"$\sigma=\sqrt{\frac{\sum w_i (t_i-\mu)^2}{\sum w_i}}$",
+        r"$\mu=\frac{\sum w_i t_i}{\sum w_i}$",
+    ],
+    "delta_phi2": r"$\Delta\phi_2=\mathrm{wrap}(\phi_2-2\phi_1)$",
 }
 
 
@@ -184,35 +202,63 @@ def find_control_group_name(groups):
 def plot_metric_illustration(ax, metric, sig_control):
     sig = np.asarray(sig_control, dtype=float)
     sig = np.where(np.isfinite(sig), sig, np.nan)
-    x = np.arange(sig.size)
 
+    # --- helpers ---
+    def _y_at(x0, x_grid, y_grid):
+        # Interpolation linéaire, ignore NaN en remplaçant par 0 pour l'interp local
+        y = np.asarray(y_grid, dtype=float)
+        x = np.asarray(x_grid, dtype=float)
+        if len(x) < 2:
+            return np.nan
+        # pour éviter np.interp qui n'aime pas les NaN
+        y2 = np.where(np.isfinite(y), y, 0.0)
+        return float(np.interp(x0, x, y2))
+
+    def vline_to_curve(x0, x_grid, y_grid, y0=0.0, **kwargs):
+        y1 = _y_at(x0, x_grid, y_grid)
+        if np.isfinite(y1):
+            ax.vlines(x0, y0, y1, **kwargs)
+        return y1
+
+    def hline_label(y, label, va="bottom"):
+        ax.axhline(y, linestyle="--", linewidth=1)
+        ax.text(
+            0.98,
+            y,
+            f" {label}={y:.3g}",
+            transform=ax.get_yaxis_transform(),
+            ha="right",
+            va=va,
+            bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"),
+        )
+
+    # Rectification cohérente avec ton pipeline quand nécessaire
+    # (RI/PI utilisent vmin sur v rectifié_keep_nan → vmin>=0 typiquement, mais on garde la logique simple)
+    def rectified(v):
+        v = np.asarray(v, dtype=float)
+        return np.where(np.isfinite(v), np.maximum(v, 0.0), np.nan)
+
+    n = sig.size
+    if n < 2:
+        ax.text(0.5, 0.5, "Signal too short", ha="center", va="center")
+        return
+
+    # τ normalisé 0..1 (endpoint=False comme ton pipeline: dt=T/n)
+    tau = np.linspace(0.0, 1.0, n, endpoint=False)
+
+    # =========================
+    # RI
+    # =========================
     if metric == "RI":
-        vmax = float(np.nanmax(sig))
-        vmin = float(np.nanmin(sig))
+        vv = rectified(sig)
+        vmax = float(np.nanmax(vv))
+        vmin = float(np.nanmin(vv))
         RI = 1.0 - (vmin / vmax) if vmax > 0 else np.nan
 
-        ax.plot(x, sig, linewidth=2)
-        ax.axhline(vmax, linestyle="--", linewidth=1)
-        ax.axhline(vmin, linestyle="--", linewidth=1)
+        ax.plot(tau, vv, linewidth=2)
 
-        ax.text(
-            0.98,
-            vmax,
-            f" Vmax={vmax:.3g}",
-            transform=ax.get_yaxis_transform(),
-            ha="right",
-            va="bottom",
-            bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"),
-        )
-        ax.text(
-            0.98,
-            vmin,
-            f" Vmin={vmin:.3g}",
-            transform=ax.get_yaxis_transform(),
-            ha="right",
-            va="top",
-            bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"),
-        )
+        hline_label(vmax, "Vmax", va="bottom")
+        hline_label(vmin, "Vmin", va="top")
 
         ax.text(
             0.01,
@@ -223,39 +269,236 @@ def plot_metric_illustration(ax, metric, sig_control):
             bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"),
         )
 
-        ax.set_xlabel("Time")
+        ax.set_xlabel(r"Normalized time $\tau=t/T$")
         ax.set_ylabel("Velocity")
 
+    # =========================
+    # mu_t_over_T   (mu en ratio, pas index)
+    # =========================
+    elif metric == "mu_t_over_T":
+        w = rectified(sig)
+        m0 = float(np.nansum(w))
+        if not np.isfinite(m0) or m0 <= 0:
+            ax.text(0.5, 0.5, "Invalid signal for mu/T", ha="center", va="center")
+            return
+
+        mu_over_T = float(np.nansum(w * tau) / m0)  # directement en ratio
+        ax.plot(tau, w, linewidth=2)
+
+        # ligne verticale qui s'arrête sur la courbe
+        vline_to_curve(
+            mu_over_T, tau, w, y0=0.0, colors="k", linestyles="--", linewidth=1.5
+        )
+
+        ax.text(
+            mu_over_T,
+            0.98,
+            r"$\mu/T$",
+            transform=ax.get_xaxis_transform(),
+            ha="center",
+            va="top",
+            bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"),
+        )
+
+        ax.text(
+            0.01,
+            0.95,
+            f"mu/T = {mu_over_T:.3f}",
+            transform=ax.transAxes,
+            va="top",
+            bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"),
+        )
+
+        ax.set_xlabel(r"Normalized time $\tau=t/T$")
+        ax.set_ylabel(r"$w(\tau)=\max(v(\tau),0)$")
+
+    # =========================
+    # PI
+    # =========================
+    elif metric == "PI":
+        vv = rectified(sig)
+
+        vmax = float(np.nanmax(vv))
+        vmin = float(np.nanmin(vv))
+        vmean = float(np.nanmean(vv))
+
+        PI = (
+            (vmax - vmin) / (vmean + EPS)
+            if (np.isfinite(vmean) and vmean > 0)
+            else np.nan
+        )
+
+        ax.plot(tau, vv, linewidth=2)
+
+        hline_label(vmax, "Vmax", va="bottom")
+        hline_label(vmin, "Vmin", va="top")
+        hline_label(vmean, "Vmean", va="bottom")
+
+        ax.text(
+            0.01,
+            0.95,
+            f"PI = (Vmax-Vmin)/Vmean = {PI:.3f}",
+            transform=ax.transAxes,
+            va="top",
+            bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"),
+        )
+
+        ax.set_xlabel(r"Normalized time $\tau=t/T$")
+        ax.set_ylabel("Velocity")
+
+    # =========================
+    # SF_VTI  (split à 1/3) + aire sous courbe seulement
+    # =========================
+    elif metric == "SF_VTI":
+        vv = rectified(sig)
+
+        k = int(np.ceil(n * (1.0 / 3.0)))
+        k = max(0, min(n, k))
+        tau_k = float(k / n)  # ratio correspondant (proche de 1/3)
+
+        D1 = float(np.nansum(vv[:k])) if k > 0 else np.nan
+        Dtot = float(np.nansum(vv))
+        sf = D1 / (Dtot + EPS)
+
+        ax.plot(tau, vv, linewidth=2)
+
+        ax.fill_between(
+            tau[:k],
+            0,
+            vv[:k],
+            where=np.isfinite(vv[:k]),
+            color="#f7b6d2",
+            alpha=0.55,
+            label=r"$0 \rightarrow 1/3$",
+        )
+        ax.fill_between(
+            tau[k:],
+            0,
+            vv[k:],
+            where=np.isfinite(vv[k:]),
+            color="#fdd0a2",
+            alpha=0.35,
+            label=r"$1/3 \rightarrow 1$",
+        )
+
+        # ligne verticale qui s'arrête sur la courbe
+        vline_to_curve(tau_k, tau, vv, y0=0.0, colors="k", linestyles="--", linewidth=1)
+
+        ax.text(
+            0.01,
+            0.95,
+            f"D1={D1:.3g}, Dtot={Dtot:.3g}\nSF_VTI={sf:.3f}",
+            transform=ax.transAxes,
+            va="top",
+            bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"),
+        )
+
+        ax.set_xlabel(r"Normalized time $\tau=t/T$")
+        ax.set_ylabel("Velocity")
+        ax.legend(loc="upper right", frameon=False)
+
+    # =========================
+    # sigma_t_over_T  (mu et sigma en ratio)
+    # =========================
+    elif metric == "sigma_t_over_T":
+        w = rectified(sig)
+        m0 = float(np.nansum(w))
+        if not np.isfinite(m0) or m0 <= 0:
+            ax.text(0.5, 0.5, "Invalid signal", ha="center", va="center")
+            return
+
+        mu = float(np.nansum(w * tau) / m0)  # ratio
+        var = float(np.nansum(w * (tau - mu) ** 2) / (m0 + EPS))
+        sigma = float(np.sqrt(max(var, 0.0)))  # ratio
+        sigma_over_T = sigma  # déjà "over_T"
+
+        ax.plot(tau, w, linewidth=2)
+
+        # mu : verticale arrêtée sur la courbe
+        vline_to_curve(mu, tau, w, y0=0.0, colors="k", linestyles="--", linewidth=1.5)
+
+        # bande ±sigma (en abscisse), pas rectangle pleine hauteur
+        left = max(0.0, mu - sigma)
+        right = min(1.0, mu + sigma)
+        ax.axvspan(left, right, alpha=0.15)
+
+        ax.text(
+            0.01,
+            0.95,
+            f"mu/T={mu:.3f}\nsigma/T={sigma_over_T:.3f}",
+            transform=ax.transAxes,
+            va="top",
+            bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"),
+        )
+
+        ax.set_xlabel(r"Normalized time $\tau=t/T$")
+        ax.set_ylabel(r"$w(\tau)=\max(v(\tau),0)$")
+
+    # =========================
+    # delta_phi2 : tracer H1 et H2 "tels quels" + noter Δφ2
+    # (tu demandais de juste visualiser le déphasage entre les 2 harmoniques)
+    # =========================
+    elif metric == "delta_phi2":
+        vv = rectify_keep_nan(sig)  # ton helper: garde NaN, rectifie
+        vv = np.where(np.isfinite(vv), vv, np.nan)
+        if n < 2:
+            return
+
+        Vfull = np.fft.rfft(vv) / float(n)
+        if Vfull.size < 3:
+            ax.text(0.5, 0.5, "Need at least 2 harmonics", ha="center", va="center")
+            return
+
+        V1, V2 = Vfull[1], Vfull[2]
+        A1, A2 = float(np.abs(V1)), float(np.abs(V2))
+        phi1, phi2 = float(np.angle(V1)), float(np.angle(V2))
+
+        dphi2 = float((phi2 - 2.0 * phi1 + np.pi) % (2.0 * np.pi) - np.pi)
+
+        m = 500
+        tau_dense = np.linspace(0.0, 1.0, m, endpoint=False)
+        omega = 2.0 * np.pi
+
+        h1 = A1 * np.cos(omega * tau_dense + phi1)
+        h2 = A2 * np.cos(2.0 * omega * tau_dense + phi2)
+
+        ax.plot(tau_dense, h1, linewidth=2, label=r"$A_1\cos(2\pi\tau+\phi_1)$")
+        ax.plot(tau_dense, h2, linewidth=2, label=r"$A_2\cos(4\pi\tau+\phi_2)$")
+
+        ax.text(
+            0.01,
+            0.95,
+            f"A1={A1:.2g}, φ1={phi1:.2f} rad\nA2={A2:.2g}, φ2={phi2:.2f} rad\nΔφ2 = wrap(φ2 − 2φ1) = {dphi2:.2f} rad",
+            transform=ax.transAxes,
+            va="top",
+            bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"),
+        )
+
+        ax.set_xlabel(r"Normalized time $\tau=t/T$")
+        ax.set_ylabel("Harmonic component")
+        ax.grid(True, alpha=0.25)
+        ax.legend(frameon=False)
+
+    # =========================
+    # crest_factor : RMS + Vmax (horizontales OK) + x normalisé (optionnel)
+    # Ici on garde x en τ aussi (plus cohérent visuellement)
+    # =========================
     elif metric == "crest_factor":
         V, vb, H = harmonic_pack(sig)
-        x = np.arange(vb.size)
+        if vb is None or vb.size < 2:
+            ax.text(0.5, 0.5, "Invalid vb", ha="center", va="center")
+            return
+
+        vb = np.asarray(vb, dtype=float)
+        vb_tau = np.linspace(0.0, 1.0, vb.size, endpoint=False)
 
         rms = float(np.sqrt(np.nanmean(vb**2)))
         vmax = float(np.nanmax(vb))
         cf = crest_factor_from_vb(vb)
 
-        ax.plot(x, vb, linewidth=2)
-        ax.axhline(vmax, linestyle="--", linewidth=1)
-        ax.axhline(rms, linestyle="--", linewidth=1)
-
-        ax.text(
-            0.98,
-            vmax,
-            f" Vmax={vmax:.3g}",
-            transform=ax.get_yaxis_transform(),
-            ha="right",
-            va="bottom",
-            bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"),
-        )
-        ax.text(
-            0.98,
-            rms,
-            f" RMS={rms:.3g}",
-            transform=ax.get_yaxis_transform(),
-            ha="right",
-            va="top",
-            bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"),
-        )
+        ax.plot(vb_tau, vb, linewidth=2)
+        hline_label(vmax, "Vmax", va="bottom")
+        hline_label(rms, "RMS", va="top")
 
         ax.text(
             0.01,
@@ -266,51 +509,53 @@ def plot_metric_illustration(ax, metric, sig_control):
             bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"),
         )
 
-        ax.set_xlabel("Time")
-        ax.set_ylabel(r"$v_b$")
+        ax.set_xlabel(r"Normalized time $\tau=t/T$")
+        ax.set_ylabel(r"$v_b(\tau)$")
 
+    # =========================
+    # t50_over_T : x normalisé + traits stoppés sur le point utile
+    # (on garde ton idée D(t)=C(t)-x + tangente)
+    # =========================
     elif metric == "t50_over_T":
-        vv = np.where(np.isfinite(sig), sig, np.nan)
-        vv = np.maximum(vv, 0.0)
+        vv = rectified(sig)
         m0 = float(np.nansum(vv))
         if m0 <= 0:
             return
 
-        # C(t) normalisé
-        c = np.cumsum(vv) / m0
-        n = len(c)
-        if n < 2:
+        C = np.nancumsum(vv) / m0
+        if len(C) < 2:
             return
 
-        # x dans [0,1] pour la droite y=x
-        x_norm = np.linspace(0.0, 1.0, n)
+        # x_norm = tau (mêmes longueurs)
+        x_norm = tau
+        d = C - x_norm
 
-        # Différence à la droite y=x
-        d = c - x_norm
-
-        # t50 (sur C(t), pas sur d)
-        idx = int(np.searchsorted(c, 0.5, side="left"))
+        idx = int(np.searchsorted(C, 0.5, side="left"))
         idx = max(0, min(n - 1, idx))
-        t50_over_T = float(x_norm[idx])
+        t50 = float(x_norm[idx])  # ratio
 
-        # --- Plot de d(t) ---
         ax.plot(x_norm, d, linewidth=2)
 
-        # --- "Tangente" = régression linéaire sur les 4 premiers points ---
+        # repères t50: verticale arrêtée à d(t50)
+        y_t50 = _y_at(t50, x_norm, d)
+        if np.isfinite(y_t50):
+            ax.vlines(t50, 0.0, y_t50, linestyles="--", linewidth=1.2)
+
+        # tangente sur les premiers points (comme toi)
         k = min(4, n)
         x_fit = x_norm[:k]
         y_fit = d[:k]
-
         mask = np.isfinite(x_fit) & np.isfinite(y_fit)
+
         if np.sum(mask) >= 2:
-            a, b = np.polyfit(x_fit[mask], y_fit[mask], 1)  # y = a x + b
+            a, b = np.polyfit(x_fit[mask], y_fit[mask], 1)
             y_line = a * x_norm + b
             ax.plot(x_norm, y_line, linestyle="--", linewidth=1.5)
 
             ax.text(
                 0.01,
                 0.95,
-                f"t50/T = {t50_over_T:.3f}\ncoef of origin tangent : {a:.3g}",
+                f"t50/T = {t50:.3f}\ntangent slope ≈ {a:.3g}",
                 transform=ax.transAxes,
                 va="top",
                 bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"),
@@ -319,51 +564,51 @@ def plot_metric_illustration(ax, metric, sig_control):
             ax.text(
                 0.01,
                 0.95,
-                f"t50/T = {t50_over_T:.3f}",
+                f"t50/T = {t50:.3f}",
                 transform=ax.transAxes,
                 va="top",
                 bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"),
             )
 
-        ax.set_xlabel("Normalized time x = t/T")
-        ax.set_ylabel(r"$D(t)=C(t)-x$")
+        ax.set_xlabel(r"Normalized time $x=\tau=t/T$")
+        ax.set_ylabel(r"$D(\tau)=C(\tau)-\tau$")
 
+    # =========================
+    # R_VTI : aires sous courbe, split à 0.5 en τ, ligne verticale stoppée
+    # =========================
     elif metric == "R_VTI":
-        vv = np.where(np.isfinite(sig), sig, np.nan)
-        vv = np.maximum(vv, 0.0)
-        n = len(vv)
+        vv = rectified(sig)
+
         k = int(np.ceil(n * 0.5))
         k = max(0, min(n, k))
+        tau_k = float(k / n)
 
-        x1, y1 = np.arange(k + 1), vv[: k + 1]
-        x2, y2 = np.arange(k, n), vv[k:]
-
-        D1 = float(np.nansum(y1)) if k > 0 else np.nan
-        D2 = float(np.nansum(y2)) if k < n else np.nan
+        D1 = float(np.nansum(vv[:k])) if k > 0 else np.nan
+        D2 = float(np.nansum(vv[k:])) if k < n else np.nan
         R = D1 / (D2 + EPS)
 
-        ax.plot(np.arange(n), vv, linewidth=2)
+        ax.plot(tau, vv, linewidth=2)
 
         ax.fill_between(
-            x1,
+            tau[:k],
             0,
-            y1,
-            where=np.isfinite(y1),
+            vv[:k],
+            where=np.isfinite(vv[:k]),
             color="#f7b6d2",
             alpha=0.55,
-            label="0 → T/2",
+            label=r"$0 \rightarrow 1/2$",
         )
         ax.fill_between(
-            x2,
+            tau[k:],
             0,
-            y2,
-            where=np.isfinite(y2),
+            vv[k:],
+            where=np.isfinite(vv[k:]),
             color="#fdd0a2",
             alpha=0.55,
-            label="T/2 → T",
+            label=r"$1/2 \rightarrow 1$",
         )
 
-        ax.axvline(k, linestyle="--", linewidth=1)
+        vline_to_curve(0.5, tau, vv, y0=0.0, colors="k", linestyles="--", linewidth=1)
 
         ax.text(
             0.01,
@@ -374,28 +619,34 @@ def plot_metric_illustration(ax, metric, sig_control):
             bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"),
         )
 
-        ax.set_xlabel("Time")
+        ax.set_xlabel(r"Normalized time $\tau=t/T$")
         ax.set_ylabel("Velocity")
         ax.legend(loc="upper right", frameon=False)
 
+    # =========================
+    # Hspec / spectral_entropy : barres p_n + ligne uniforme 1/H
+    # =========================
     elif metric in {"Hspec", "spectral_entropy"}:
         V, vb, H = harmonic_pack(sig)
+        if V is None or V.size < 2:
+            ax.text(0.5, 0.5, "Invalid harmonics", ha="center", va="center")
+            return
 
         mags = np.abs(V[1:])
         mags = np.where(np.isfinite(mags), mags, np.nan)
         s = float(np.nansum(mags))
         if s <= 0:
             return
+
         p = mags / s
-        n = len(p)
-
+        Hn = len(p)
         ent = spectral_entropy_from_harmonics(V)
-        xh = np.arange(1, n + 1)
 
+        xh = np.arange(1, Hn + 1)
         ax.bar(xh, p, width=0.8)
-        uniform = 1.0 / n
-        ax.axhline(uniform, linestyle="--", linewidth=1)
 
+        uniform = 1.0 / Hn
+        ax.axhline(uniform, linestyle="--", linewidth=1)
         ax.text(
             0.98,
             uniform,
@@ -409,14 +660,14 @@ def plot_metric_illustration(ax, metric, sig_control):
         ax.text(
             0.01,
             0.95,
-            f"H={n}\nHspec = {ent:.3f}",
+            f"H={Hn}\nHspec = -Σ p log(p+ε) = {ent:.3f}",
             transform=ax.transAxes,
             va="top",
             bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"),
         )
 
         ax.set_xlabel("Harmonic n")
-        ax.set_ylabel(r"$p_n = |V_n|/\sum |V_k|$")
+        ax.set_ylabel(r"$p_n = |V_n|/\sum_{k=1}^{H}|V_k|$")
 
     else:
         ax.text(0.5, 0.5, f"No illustration for {metric}", ha="center", va="center")
@@ -568,6 +819,30 @@ def export_selected_metric_pngs_bandlimited(
             png_path = os.path.join(out_dir, f"{metric}_bandlimited.png")
             fig.savefig(png_path)
             plt.close(fig)
+
+
+def replace_folder_in_zip(zip_path: str, folder_path: str, arc_folder: str):
+    """
+    Remplace complètement un dossier dans un zip.
+    Supprime toute ancienne version de arc_folder/ puis ajoute folder_path.
+    """
+    temp_zip = zip_path + ".tmp"
+
+    with zipfile.ZipFile(zip_path, "r") as zin:
+        with zipfile.ZipFile(temp_zip, "w", compression=zipfile.ZIP_DEFLATED) as zout:
+            for item in zin.infolist():
+                if not item.filename.startswith(arc_folder + "/"):
+                    buffer = zin.read(item.filename)
+                    zout.writestr(item, buffer)
+
+            for root, _, files in os.walk(folder_path):
+                for fn in files:
+                    fullpath = os.path.join(root, fn)
+                    rel = os.path.relpath(fullpath, folder_path)
+                    arcname = os.path.join(arc_folder, rel).replace("\\", "/")
+                    zout.write(fullpath, arcname)
+
+    os.replace(temp_zip, zip_path)
 
 
 def choose_zip():
@@ -1132,6 +1407,9 @@ body {
         all_results, original_zip, png_dir, dataset_path=dataset_path_bl
     )
     print("PNGs exportés dans :", png_dir)
+    replace_folder_in_zip(original_zip, png_dir, arc_folder="export_png")
+    if os.path.isdir(png_dir):
+        shutil.rmtree(png_dir)
     with open(dashboard_file, "a") as f:
         f.write('<div class="signal-grid">')
     for group, data in group_curves.items():
