@@ -1267,7 +1267,6 @@ body {
     replace_file_in_zip(
         original_zip,
         dashboard_file,
-        strict=False,
     )
 
     print("Dashboard ajouté à:", original_zip)
