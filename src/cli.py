@@ -7,7 +7,7 @@ Usage example:
 Inputs:
     --data / -d        Path to a directory (recursively scanned), a single .h5/.hdf5 file, or a .zip archive of .h5 files.
     --pipelines / -p   Text file listing pipeline names (one per line, '#' and blank lines ignored).
-    --output / -o      Base directory where results will be written. A subfolder is created per input file.
+    --output / -o      Base directory where results will be written (input subfolder layout is preserved).
     --zip / -z         When set, compress the outputs into a .zip archive after completion.
     --zip-name         Optional filename for the archive (default: outputs.zip).
 """
@@ -18,8 +18,9 @@ import argparse
 import shutil
 import sys
 import tempfile
+import time
 import zipfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import h5py
@@ -100,11 +101,15 @@ def _run_pipelines_on_file(
     h5_path: Path,
     pipelines: Sequence[PipelineDescriptor],
     output_root: Path,
-) -> list[Path]:
-    outputs: list[Path] = []
-    data_dir = output_root / h5_path.stem
-    data_dir.mkdir(parents=True, exist_ok=True)
-    combined_h5_out = data_dir / f"{h5_path.stem}_pipelines_result.h5"
+    output_relative_parent: Path = Path("."),
+) -> Path:
+    target_dir = output_root / output_relative_parent
+    target_dir.mkdir(parents=True, exist_ok=True)
+    combined_h5_out = target_dir / f"{h5_path.stem}_pipelines_result.h5"
+    suffix = 1
+    while combined_h5_out.exists():
+        combined_h5_out = target_dir / f"{h5_path.stem}_{suffix}_pipelines_result.h5"
+        suffix += 1
     pipeline_results: list[tuple[str, ProcessResult]] = []
     with h5py.File(h5_path, "r") as h5file:
         for pipeline_desc in pipelines:
@@ -120,12 +125,24 @@ def _run_pipelines_on_file(
     )
     for _, result in pipeline_results:
         result.output_h5_path = str(combined_h5_out)
-    outputs.append(combined_h5_out)
-    print(f"[OK] {h5_path.name}: combined results -> {combined_h5_out.name}")
-    return outputs
+    print(f"[OK] {h5_path.name}: combined results -> {combined_h5_out}")
+    return combined_h5_out
 
 
-def _zip_output_dir(folder: Path, target_path: Path | None = None) -> Path:
+def _relative_input_parent(h5_path: Path, input_root: Path) -> Path:
+    if input_root.is_dir():
+        try:
+            return h5_path.resolve().relative_to(input_root.resolve()).parent
+        except ValueError:
+            pass
+    return Path(".")
+
+
+def _zip_output_dir(
+    folder: Path,
+    target_path: Path | None = None,
+    progress_callback: Callable[[int, int, Path], None] | None = None,
+) -> Path:
     folder = folder.expanduser().resolve()
     if not folder.exists() or not folder.is_dir():
         raise FileNotFoundError(f"Output folder does not exist: {folder}")
@@ -136,10 +153,24 @@ def _zip_output_dir(folder: Path, target_path: Path | None = None) -> Path:
         zip_path = target_path.expanduser().resolve()
     if zip_path.exists():
         zip_path.unlink()
-    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for file_path in folder.rglob("*"):
-            if file_path.is_file():
-                zf.write(file_path, file_path.relative_to(folder))
+    files = sorted(
+        (file_path for file_path in folder.rglob("*") if file_path.is_file()),
+        key=lambda path: str(path.relative_to(folder)),
+    )
+    total_files = len(files)
+    if progress_callback is not None:
+        progress_callback(0, total_files, Path("."))
+    with zipfile.ZipFile(
+        zip_path,
+        "w",
+        compression=zipfile.ZIP_DEFLATED,
+        compresslevel=1,
+    ) as zf:
+        for idx, file_path in enumerate(files, start=1):
+            rel_path = file_path.relative_to(folder)
+            zf.write(file_path, rel_path)
+            if progress_callback is not None:
+                progress_callback(idx, total_files, rel_path)
     return zip_path
 
 
@@ -171,7 +202,13 @@ def run_cli(
         failures: list[str] = []
         for h5_path in inputs:
             try:
-                _run_pipelines_on_file(h5_path, pipelines, work_root)
+                relative_parent = _relative_input_parent(h5_path, data_root)
+                _run_pipelines_on_file(
+                    h5_path,
+                    pipelines,
+                    work_root,
+                    output_relative_parent=relative_parent,
+                )
             except Exception as exc:  # noqa: BLE001
                 failures.append(f"{h5_path}: {exc}")
                 print(f"[FAIL] {h5_path.name}: {exc}", file=sys.stderr)
@@ -181,8 +218,21 @@ def run_cli(
                 final_name = (zip_name or "outputs.zip").strip() or "outputs.zip"
                 if not final_name.lower().endswith(".zip"):
                     final_name += ".zip"
+                print("[ZIP] Preparing archive...")
+                last_progress_log = 0.0
+
+                def _zip_progress(done: int, total: int, _rel_path: Path) -> None:
+                    nonlocal last_progress_log
+                    now = time.monotonic()
+                    if done == total or (now - last_progress_log) >= 0.5:
+                        pct = 100 if total == 0 else int((done * 100) / total)
+                        print(f"[ZIP] {done}/{total} files ({pct}%)")
+                        last_progress_log = now
+
                 zip_path = _zip_output_dir(
-                    work_root, target_path=output_root / final_name
+                    work_root,
+                    target_path=output_root / final_name,
+                    progress_callback=_zip_progress,
                 )
                 print(f"[ZIP] Archive created: {zip_path}")
                 summary_msg = f"ZIP archive: {zip_path}"
@@ -233,7 +283,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--output",
         required=True,
         type=Path,
-        help="Base output directory. A subfolder is created per input HDF5 file.",
+        help="Base output directory. Input subfolder layout is preserved for output files.",
     )
     parser.add_argument(
         "-z",
