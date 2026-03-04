@@ -95,6 +95,35 @@ python src/cli.py
 
 ---
 
+## Windows Installer
+
+With the current PyInstaller setup (`onedir`), `AngioEye.exe` must stay next to its bundled DLLs and `_internal` folder. This is expected.
+
+To distribute to users, build a setup installer that includes the full `dist\AngioEye` folder.
+
+### Quick build (recommended)
+
+```powershell
+# Install Inno Setup once
+winget install JRSoftware.InnoSetup
+
+# Build PyInstaller output + installer
+powershell -ExecutionPolicy Bypass -File .\scripts\build-installer.ps1
+```
+
+Result:
+
+- `dist\AngioEye-setup-<version>.exe`
+
+### Manual commands
+
+```powershell
+pyinstaller --clean --noconfirm AngioEye.spec
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=0.1.0 .\installer\AngioEye.iss
+```
+
+---
+
 ## Pipeline System
 
 Pipelines are the heart of AngioEye. To add a new analysis, create a file in `src/pipelines/` with a class inheriting from `ProcessPipeline`.
