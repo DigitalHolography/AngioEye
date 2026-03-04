@@ -71,7 +71,7 @@ Launch the main application to process files interactively:
 
 ### GUI
 
-The GUI handles batch processing for folders, single .h5/.hdf5 files, or .zip archives and lets you run multiple pipelines at once. Batch outputs preserve the input subfolder layout under the chosen output directory (one combined `.h5` per input file).
+The GUI handles batch processing for folders, single .h5/.hdf5 files, or .zip archives and lets you run multiple pipelines at once. Batch outputs are written directly into the chosen output directory (one combined `.h5` per input file).
 
 ```sh
 # Via the entry point
