@@ -73,6 +73,8 @@ class ArterialHarmonicAnalysis(ProcessPipeline):
             amp1=np.abs(np.asarray(Vn_tot)[:,1])
             amp2=np.abs(np.asarray(Vn_tot)[:,2])
 
+
+
             CV_1.append(np.std(amp1)/np.mean(amp1))
             CV_2.append(np.std(amp2)/np.mean(amp2))
 

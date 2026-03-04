@@ -55,6 +55,7 @@ class ArterialSegExample(ProcessPipeline):
             R_VTI_bandlimited_branch = []
             
             t = T[0][beat_idx] / len(v_bandlimited)
+            
 
             for branch_idx in range(len(v_bandlimited[0, beat_idx, :, 0])):
 
