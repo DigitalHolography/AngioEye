@@ -416,7 +416,16 @@ class ArterialSegExample(ProcessPipeline):
         t50_over_T = self._quantile_time_over_T(vv, Tbeat, 0.50)
         t75_over_T = self._quantile_time_over_T(vv, Tbeat, 0.75)
         t90_over_T = self._quantile_time_over_T(vv, Tbeat, 0.90)
+        m0 = float(np.nansum(vv))
 
+        C = np.nancumsum(vv) / (m0 + self.eps)
+        x_norm = np.linspace(0.0, 1.0, n, endpoint=False)
+        d = C - x_norm
+        AUC_cumsum = np.nansum(d)
+        x5 = x_norm[:4]
+        y5 = d[:4]
+
+        Tan_cumsum, b = np.polyfit(x5, y5, 1)
         # Spectral ratios (FFT power bands)
         E_low_over_E_total, E_high_over_E_total = self._spectral_ratios(vv, Tbeat)
 
@@ -465,6 +474,8 @@ class ArterialSegExample(ProcessPipeline):
             "delta_phi3": float(ph["delta_phi3"])
             if np.isfinite(ph["delta_phi3"])
             else np.nan,
+            "AUC_cumsum": float(AUC_cumsum),
+            "Tan_cumsum": float(Tan_cumsum),
         }
 
     @staticmethod
@@ -494,6 +505,12 @@ class ArterialSegExample(ProcessPipeline):
             ["phi3", "angle(V3)", "rad"],
             ["delta_phi2", "wrap(phi2-2*phi1)", "rad"],
             ["delta_phi3", "wrap(phi3-3*phi1)", "rad"],
+            ["AUC_cumsum", "measuring the area above the y=x function", ""],
+            [
+                "Tan_cumsum",
+                "measuring the tangent coeff director by a linear regression of the four first points",
+                "",
+            ],
         ]
 
     def _compute_block_segment(self, v_block: np.ndarray, T: np.ndarray):
@@ -621,6 +638,8 @@ class ArterialSegExample(ProcessPipeline):
             # ---- Phase coupling ----
             "delta_phi2": r"$\mathrm{wrap}(\phi_2-2\phi_1)$",
             "delta_phi3": r"$\mathrm{wrap}(\phi_3-3\phi_1)$",
+            "AUC_cumsum": r"$AUC$",
+            "Tan_cumsum": r"$Tan$",
         }
         T = np.asarray(h5file[self.T_input])
         metrics = {}
