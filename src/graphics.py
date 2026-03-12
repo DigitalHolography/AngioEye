@@ -722,6 +722,7 @@ def plot_metric_illustration(ax, metric, sig_control):
         x_norm_line = np.linspace(0, 1, 200)
         y_norm_line = slope_rise_tot * x_norm_line
 
+        ax.plot(tau, w, linewidth=3, color="#EC5241")
         ax.plot(
             x_norm_line,
             y_norm_line,
@@ -755,7 +756,7 @@ def plot_metric_illustration(ax, metric, sig_control):
             label=f"T·max(dv/dt) = {T_max_slope_rise:.3f}",
         )
 
-        ax.legend()
+        ax.legend(fontsize=11)
 
         ax.set_xlabel("rectified time: t/T", fontsize=14)
         ax.set_ylabel(r"$v_b (mm/s)$", fontsize=14)
@@ -774,17 +775,11 @@ def plot_metric_illustration(ax, metric, sig_control):
         slope_fall_tot = m0 * np.abs(s_down) / (meanv + EPS)
 
         T_max_slope_fall = m0 * np.abs(s_down)
-        idx_min = np.argmin(dvdt)
-
-        x_norm = tau
-        x5 = x_norm[np.maximum(idx_min - 5, 0) : np.minimum(idx_min + 5, len(w))]
-        y5 = w[np.maximum(idx_min - 5, 0) : np.minimum(idx_min + 5, len(w))]
-
-        slope_fall, b = np.polyfit(x5, y5, 1)
 
         x_norm_line = np.linspace(0, 1, 200)
-        y_norm_line = slope_fall_tot * x_norm_line
+        y_norm_line = slope_fall_tot * (1 - x_norm_line)
 
+        ax.plot(tau, w, linewidth=3, color="#EC5241")
         ax.plot(
             x_norm_line,
             y_norm_line,
@@ -796,18 +791,19 @@ def plot_metric_illustration(ax, metric, sig_control):
 
         ax.plot(
             x_norm_line,
-            meanv * x_norm_line,
+            meanv * (1 - x_norm_line),
             linestyle=":",
             color="#2EC164",
             linewidth=2,
             label=rf"$v_{{mean}} = {meanv:.3f}$",
         )
 
-        y_limit = ax.get_ylim()[1]
-        x_max = min(1, y_limit / T_max_slope_fall)
+        vmax = np.nanmax(w)
 
-        x_line_limited = np.linspace(0, x_max, 200)
-        y_line_limited = T_max_slope_fall * x_line_limited
+        x_start = max(0, 1 - vmax / T_max_slope_fall)
+
+        x_line_limited = np.linspace(x_start, 1, 200)
+        y_line_limited = T_max_slope_fall * (1 - x_line_limited)
 
         ax.plot(
             x_line_limited,
@@ -818,7 +814,7 @@ def plot_metric_illustration(ax, metric, sig_control):
             label=f"T·|min(dv/dt)| = {T_max_slope_fall:.3f}",
         )
 
-        ax.legend()
+        ax.legend(fontsize=11)
 
         ax.set_xlabel("rectified time: t/T", fontsize=14)
         ax.set_ylabel(r"$v_b (mm/s)$", fontsize=14)
@@ -840,11 +836,30 @@ def plot_metric_illustration(ax, metric, sig_control):
 
         ax.plot(tau, w, linewidth=3, color="#EC5241")
         hline_label(vmax, "Vmax", va="bottom")
+        ax.axhline(vend, linestyle="--", color="#000000")
+
+        x0, x1 = ax.get_xlim()
+        ax.text(
+            x0 + 0.02 * (x1 - x0),
+            vend,
+            f"Vend = {vend:.3f}",
+            va="bottom",
+            ha="left",
+            fontsize=12,
+        )
         ax.fill_between(
-            tau[idx_start:idx_end], 0, tail, where=np.isfinite(tail), color="#fbd3f2"
+            tau[idx_start:idx_end], 0, tail, where=np.isfinite(tail), color="#F2CCC7"
         )
 
         info_box([f"D={D:.3g} ", f"R_SD={r_sd:.3f}"])
+
+        ax.vlines(
+            tau[idx_start], 0, w[idx_start], color="black", linestyles="--", linewidth=1
+        )
+
+        ax.vlines(
+            tau[idx_end], 0, w[idx_end], color="black", linestyles="--", linewidth=1
+        )
 
         ax.set_xlabel("rectified time: t/T", fontsize=14)
         ax.set_ylabel(r"$v_b (mm/s)$", fontsize=14)
@@ -897,35 +912,49 @@ def plot_metric_illustration(ax, metric, sig_control):
     elif metric == "Delta_DTI":
         w = rectified(sig)
         m0 = float(np.nansum(w))
+        if m0 <= 0:
+            info_box("Invalid signal")
+            return
 
-        # cumul
         d = np.nancumsum(w)
 
         # normalisation
         d_star = d / (m0 + EPS)
         d0_star = tau
 
+        a = d_star - d0_star
+
+        AUC = np.sum(a)
         # tracer
-        ax.plot(tau, d_star, color="#EC5241", linewidth=3, label="cumulative signal")
-        ax.plot(tau, d0_star, linestyle="--", color="black", label="uniform reference")
+        # ax.plot(tau, d_star, color="#EC5241", linewidth=3, label="cumulative signal")
+        # ax.plot(tau, d0_star, linestyle="--", color="black", label="uniform reference")
 
         # aire entre les courbes
-        ax.fill_between(
-            tau,
-            d_star,
-            d0_star,
-            color="#2E86C1",
-            alpha=0.3,
-        )
+        # ax.fill_between(
+        # tau,
+        # d_star,
+        # d0_star,
+        # color="#2E86C1",
+        # alpha=0.3,)
 
         delta_dti = float(np.nansum(d_star - d0_star) / w.size)
 
-        ax.legend()
+        ax.plot(d0_star, a, linewidth=3, color="#EC5241")
+        ax.fill_between(
+            d0_star,
+            0,
+            a,
+            where=np.isfinite(a),
+            hatch="//",
+            facecolor="none",
+            edgecolor="#f9c2ca",
+        )
+        info_box([f"AUC = {AUC:.3f}", rf"$\Delta DTI = {delta_dti:.3f}$"])
 
-        info_box([rf"$\Delta DTI = {delta_dti:.3f}$"])
+        ax.set_xlabel("rectified time: t/T", fontsize=14)
 
-        ax.set_xlabel("normalized time $t/T$")
-        ax.set_ylabel("normalized cumulative signal")
+        ax.set_ylabel(r"$D(\tau)=d_{*}(\tau)-\tau$", fontsize=14)
+        ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
     else:
         info_box(f"No illustration for {metric}")
 
