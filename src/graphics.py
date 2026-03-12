@@ -643,7 +643,8 @@ def plot_metric_illustration(ax, metric, sig_control):
             label=r"$\dot v^2$",
         )
         ax2.set_ylabel(r"$\dot v^2$", fontsize=12)
-        info_box([rf"$E_{{slope}}={e_slope:.3f}$"])
+        ax2.set_yticks([])
+        info_box([rf"$E_{{slope}}={e_slope:.4f}$"])
         ax.set_xlabel("rectified time: t/T", fontsize=14)
         ax.set_ylabel(r"$v_b (mm/s)$", fontsize=14)
 
@@ -669,8 +670,9 @@ def plot_metric_illustration(ax, metric, sig_control):
             color="black",
             label=r"$\ddot v^2$",
         )
+        ax2.set_yticks([])
         ax2.set_ylabel(r"$\ddot v^2$", fontsize=12)
-        info_box([rf"$E_{{curv}}={e_curv:.3f}$"])
+        info_box([rf"$E_{{curv}}={e_curv:.4f}$"])
         ax.set_xlabel("rectified time: t/T", fontsize=14)
         ax.set_ylabel(r"$v_b (mm/s)$", fontsize=14)
     elif metric == "mu_t_over_T":
@@ -999,7 +1001,78 @@ def plot_metric_illustration(ax, metric, sig_control):
 
         ax.set_xlabel("Harmonic n", fontsize=14)
         ax.set_ylabel(r"$p_n$", fontsize=14)
+    elif metric == "E_high_over_E_total":
+        V, vb, H, w = harmonic_pack(sig)
 
+        if V is None:
+            info_box("Invalid harmonics")
+            return
+
+        mags = np.abs(V[:]) ** 2
+        mags = np.where(np.isfinite(mags), mags, np.nan)
+
+        Hn = len(mags)
+
+        nc = int(Hn * 0.3)  # seuil de séparation
+
+        E_high = np.nansum(mags[nc:])
+        E_total = np.nansum(mags)
+
+        ratio = E_high / (E_total + EPS)
+
+        xh = np.arange(1, Hn + 1)
+
+        ax.bar(xh[1:nc], mags[1:nc], color="#cccccc")
+        ax.bar(xh[nc:9], mags[nc:9], color="#EC5241")
+        ax.bar(xh[9:], mags[9:], color="#cccccc")
+
+        ax.axvline(nc, linestyle="--", color="black")
+
+        info_box(
+            [
+                f"E_high = {E_high:.3g}",
+                f"E_total = {E_total:.3g}",
+                rf"$E_{{high}}/E_{{total}} = {ratio:.3f}$",
+            ]
+        )
+
+        ax.set_xlabel("Harmonic n", fontsize=14)
+        ax.set_ylabel(r"$|V_n|^2$", fontsize=14)
+    elif metric == "E_low_over_E_total":
+        V, vb, H, w = harmonic_pack(sig)
+
+        if V is None:
+            info_box("Invalid harmonics")
+            return
+
+        mags = np.abs(V[0:]) ** 2
+        mags = np.where(np.isfinite(mags), mags, np.nan)
+
+        Hn = len(mags)
+
+        nc = int(Hn * 0.3)
+
+        E_low = np.nansum(mags[1:nc])
+        E_total = np.nansum(mags)
+
+        ratio = E_low / (E_total + EPS)
+
+        xh = np.arange(1, Hn + 1)
+        ax.bar(xh[1:nc], mags[1:nc], color="#EC5241")
+        ax.bar(xh[nc:], mags[nc:], color="#cccccc")
+
+        ax.axvline(nc, linestyle="--", color="black")
+
+        info_box(
+            [
+                f"E_low = {E_low:.3g}",
+                f"E_total = {E_total:.3g}",
+                rf"$E_{{low}}/E_{{total}} = {ratio:.3f}$",
+            ]
+        )
+
+        ax.set_xlabel("Harmonic n", fontsize=14)
+        ax.set_ylabel(r"$|V_n|^2$", fontsize=14)
     elif metric == "t_peak_over_T":
         w = rectified(sig)
         idx = int(np.nanargmax(w))
@@ -1383,6 +1456,7 @@ def export_selected_metric_pngs_bandlimited(
                     ax.axis("off")
 
             # si <4 groupes, masque les cases vides
+
             for j in range(len(groups[:4]), 4):
                 r = j // 2
                 c = j % 2
