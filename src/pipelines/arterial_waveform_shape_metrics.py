@@ -31,9 +31,10 @@ class ArterialSegExample(ProcessPipeline):
     ratio_vend_start = 0.75
     ratio_vend_end = 0.90
 
+    H_LOW_MIN = 1
     H_LOW_MAX = 3
     H_HIGH_MIN = 4
-    H_HIGH_MAX = 8
+    H_HIGH_MAX = 10
 
     H_MAX = 10
     H_PHASE_RESIDUAL = 10
@@ -147,7 +148,9 @@ class ArterialSegExample(ProcessPipeline):
         if not np.isfinite(E_total) or E_total <= 0:
             return np.nan, np.nan
 
-        low_mask = (h >= 0.9) & (h <= float(self.H_LOW_MAX) + 0.1)
+        low_mask = (h >= float(self.H_LOW_MIN) - 0.1) & (
+            h <= float(self.H_LOW_MAX) + 0.1
+        )
         high_mask = (h >= float(self.H_HIGH_MIN) - 0.1) & (
             h <= float(self.H_HIGH_MAX) + 0.1
         )
