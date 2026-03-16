@@ -472,7 +472,7 @@ class ArterialSegExample(ProcessPipeline):
     def _peak_trough_times(self, v: np.ndarray) -> tuple[float, float, int, int]:
         """
         Returns:
-          t_peak_over_T, t_min_over_T, idx_peak, idx_min
+          t_max_over_T, t_min_over_T, idx_peak, idx_min
         """
         if v.size == 0 or not np.any(np.isfinite(v)):
             return np.nan, np.nan, -1, -1
@@ -521,7 +521,7 @@ class ArterialSegExample(ProcessPipeline):
 
     def _peak_to_trough_interval(self, idx_peak: int, idx_min: int, n: int) -> float:
         """
-        Delta_t_over_T = (t_min - t_peak)/T, assuming min occurs after peak in the beat.
+        Delta_t_over_T = (t_min - t_max)/T, assuming min occurs after peak in the beat.
         Returns NaN if ordering is inconsistent.
         """
         if n <= 0 or idx_peak < 0 or idx_min < 0:
@@ -746,7 +746,7 @@ class ArterialSegExample(ProcessPipeline):
         mu_h, sigma_h = self._spectral_centroid_spread(V)
         G_t, N_eff, N_eff_over_T = self._temporal_support_metrics(vv, Tbeat, m0)
 
-        t_peak_over_T, t_min_over_T, idx_peak, idx_min = self._peak_trough_times(vv)
+        t_max_over_T, t_min_over_T, idx_peak, idx_min = self._peak_trough_times(vv)
         (
             slope_rise_normalized,
             slope_fall_normalized,
@@ -762,8 +762,8 @@ class ArterialSegExample(ProcessPipeline):
         gamma_t = self._gamma_t(vv, Tbeat, mu_t, sigma_t, m0, t)
 
         R_pre_post = (
-            float(t_peak_over_T / (1.0 - t_peak_over_T + self.eps))
-            if np.isfinite(t_peak_over_T)
+            float(t_max_over_T / (1.0 - t_max_over_T + self.eps))
+            if np.isfinite(t_max_over_T)
             else np.nan
         )
 
@@ -810,8 +810,8 @@ class ArterialSegExample(ProcessPipeline):
             "t90_over_T": float(t90_over_T),
             "E_low_over_E_total": float(E_low_over_E_total),
             "E_high_over_E_total": float(E_high_over_E_total),
-            "t_peak_over_T": float(t_peak_over_T)
-            if np.isfinite(t_peak_over_T)
+            "t_max_over_T": float(t_max_over_T)
+            if np.isfinite(t_max_over_T)
             else np.nan,
             "t_min_over_T": float(t_min_over_T)
             if np.isfinite(t_min_over_T)
@@ -891,7 +891,7 @@ class ArterialSegExample(ProcessPipeline):
             ["t90_over_T", "t90/T", ""],
             ["E_low_over_E_total", "sum(|Vn|**2,n<=k)/sum(|Vn|**2)", ""],
             ["E_high_over_E_total", "sum(|Vn|**2,n>k)/sum(|Vn|**2)", ""],
-            ["t_peak_over_T", "t_max/T", ""],
+            ["t_max_over_T", "t_max/T", ""],
             ["t_min_over_T", "t_min/T", ""],
             ["Delta_t_over_T", "(t_min-t_max)/T", ""],
             ["slope_rise_normalized", "T*max(dv/dt)/V_mean", ""],
@@ -1038,7 +1038,7 @@ class ArterialSegExample(ProcessPipeline):
             "t90_over_T": r"$\frac{t_{90}}{T}$",
             "E_low_over_E_total": r"$\frac{\sum_{n=1}^{k}|V_n|^2}{\sum_{n\geq 0}|V_n|^2}$",
             "E_high_over_E_total": r"$\frac{\sum_{n=k+1}^{N}|V_n|^2}{\sum_{n\geq 0}|V_n|^2}$",
-            "t_peak_over_T": r"$\frac{t_{\max}}{T}$",
+            "t_max_over_T": r"$\frac{t_{\max}}{T}$",
             "t_min_over_T": r"$\frac{t_{\min}}{T}$",
             "Delta_t_over_T": r"$\frac{t_{\min}-t_{\max}}{T}$",
             "slope_rise_normalized": r"$\frac{T}{\bar v}\max_t \frac{dv}{dt}$",
