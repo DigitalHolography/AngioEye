@@ -565,7 +565,7 @@ def export_selected_metric_pngs_bandlimited(
                 ax_empty = fig.add_subplot(gs[1 + (n_groups // ncols), 1])
                 ax_empty.axis("off")
 
-            png_path = os.path.join(out_dir, f"{metric}_bandlimited.png")
+            png_path = os.path.join(out_dir, f"{metric}_bandlimited.eps")
             fig.savefig(png_path)
             plt.close(fig)
 
