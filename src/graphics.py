@@ -93,7 +93,7 @@ LATEX_FORMULAS = {
     "N_eff": r"$N_{\mathrm{eff}}$",
     "N_eff_over_T": r"$N_{\mathrm{eff}}/T$",
     "G_t": r"$G_t$",
-    "R_pre_post": r"$R_{\uparrow/\downarrow}$",
+    "R_pre_post": r"$R_{{pre/post}}$",
     "R_slope": r"$R_{\mathrm{slope}}$",
     "E_recon_H_MAX": r"$E_{\mathrm{recon},H_{\max}}$",
     "Q_skew": r"$Q_{\mathrm{skew}}$",
@@ -347,7 +347,6 @@ def plot_metric_illustration(ax, metric, sig_control, path):
         w = rectified(sig)
         vmax = float(np.nanmax(w))
         vmin = float(np.nanmin(w))
-        print("true", vmax, vmin)
         RI = 1.0 - (vmin / vmax) if vmax > 0 else np.nan
 
         ax.plot(tau, w, linewidth=3, color="#EC5241")
@@ -457,7 +456,7 @@ def plot_metric_illustration(ax, metric, sig_control, path):
             [
                 rf"$t_\uparrow/T={t_up:.3f}$",
                 rf"$t_\downarrow/T={t_down:.3f}$",
-                rf"$R_{{\uparrow/\downarrow}}={r_ud:.3f}$",
+                rf"$R_{{pre/post}}={r_ud:.3f}$",
             ]
         )
         ax.set_xlabel("rectified time : t/T", fontsize=14)
@@ -1596,7 +1595,7 @@ def export_selected_metric_pngs_bandlimited(
                 ax_empty = fig.add_subplot(right[r, c])
                 ax_empty.axis("off")
 
-            png_path = os.path.join(out_dir, f"{metric}_bandlimited.png")
+            png_path = os.path.join(out_dir, f"{metric}_bandlimited.eps")
             fig.savefig(png_path, dpi=200, bbox_inches="tight", pad_inches=0.06)
             plt.close(fig)
 
