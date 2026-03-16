@@ -1,5 +1,6 @@
 import importlib
 import pkgutil
+import sys
 
 # import inspect
 from .core.base import (
@@ -15,6 +16,7 @@ from .core.utils import write_combined_results_h5, write_result_h5
 def _discover_pipelines() -> tuple[list[PipelineDescriptor], list[PipelineDescriptor]]:
     available: list[PipelineDescriptor] = []
     missing: list[PipelineDescriptor] = []
+    PIPELINE_REGISTRY.clear()
 
     for module_info in pkgutil.iter_modules(__path__):
         if module_info.name in {"core"} or module_info.name.startswith("_"):
@@ -23,7 +25,10 @@ def _discover_pipelines() -> tuple[list[PipelineDescriptor], list[PipelineDescri
         module_name = f"{__name__}.{module_info.name}"
 
         try:
-            importlib.import_module(module_name)
+            if module_name in sys.modules:
+                importlib.reload(sys.modules[module_name])
+            else:
+                importlib.import_module(module_name)
         except Exception as e:
             # Fallback for unknown failures (SyntaxError, etc.)
             missing.append(
