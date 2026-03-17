@@ -3,7 +3,7 @@ import numpy as np
 from .core.base import ProcessPipeline, ProcessResult, registerPipeline, with_attrs
 
 
-@registerPipeline(name="arterial_waveform_shape_metrics")
+@registerPipeline(name="arterial_waveform_shape_metrics_testsource ")
 class ArterialExample(ProcessPipeline):
     """
     Tutorial pipeline showing the full surface area of a pipeline:
