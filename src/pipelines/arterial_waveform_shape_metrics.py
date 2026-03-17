@@ -15,9 +15,7 @@ class ArterialSegExample(ProcessPipeline):
     v_raw_segment_input = (
         "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegment/value"
     )
-    v_band_segment_input = (
-        "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegmentBandLimited/value"
-    )
+    v_band_segment_input = "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegmentBandLimited/value"
 
     v_raw_global_input = "/Artery/VelocityPerBeat/VelocitySignalPerBeat/value"
     v_band_global_input = (
@@ -33,7 +31,7 @@ class ArterialSegExample(ProcessPipeline):
     ratio_vend_start = 0.75
     ratio_vend_end = 0.90
 
-    H_LOW_MAX = 3
+    H_LOW_MAX = 2
     H_HIGH_MIN = 4
     H_HIGH_MAX = 8
 
@@ -823,7 +821,9 @@ class ArterialSegExample(ProcessPipeline):
             "slope_rise_normalized": float(slope_rise_normalized) if np.isfinite(slope_rise_normalized) else np.nan,
             "slope_fall_normalized": float(slope_fall_normalized) if np.isfinite(slope_fall_normalized) else np.nan,
             "t_up_over_T": float(t_up_over_T) if np.isfinite(t_up_over_T) else np.nan,
-            "t_down_over_T": float(t_down_over_T) if np.isfinite(t_down_over_T) else np.nan,
+            "t_down_over_T": float(t_down_over_T)
+            if np.isfinite(t_down_over_T)
+            else np.nan,
             "S_decay": float(S_decay) if np.isfinite(S_decay) else np.nan,
             "R_SD": float(R_SD) if np.isfinite(R_SD) else np.nan,
             "Delta_DTI": float(Delta_DTI) if np.isfinite(Delta_DTI) else np.nan,
