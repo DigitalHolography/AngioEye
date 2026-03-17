@@ -15,9 +15,7 @@ class ArterialSegExample(ProcessPipeline):
     v_raw_segment_input = (
         "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegment/value"
     )
-    v_band_segment_input = (
-        "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegmentBandLimited/value"
-    )
+    v_band_segment_input = "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegmentBandLimited/value"
 
     v_raw_global_input = "/Artery/VelocityPerBeat/VelocitySignalPerBeat/value"
     v_band_global_input = (
@@ -33,7 +31,7 @@ class ArterialSegExample(ProcessPipeline):
     ratio_vend_start = 0.75
     ratio_vend_end = 0.90
 
-    H_LOW_MAX = 3
+    H_LOW_MAX = 2
     H_HIGH_MIN = 4
     H_HIGH_MAX = 8
 
@@ -605,10 +603,10 @@ class ArterialSegExample(ProcessPipeline):
             return np.nan
         if (not np.isfinite(m0)) or m0 <= 0:
             return np.nan
-        d = np.nancumsum(np.where(np.isfinite(v), v, 0.0)) * (Tbeat / v.size)
+        d = np.nancumsum(np.where(np.isfinite(v), v, 0.0))
         d_star = d / (m0 + self.eps)
         d0_star = t / Tbeat
-        return float(np.nansum(d_star - d0_star) / v.size)
+        return float(np.nansum(d_star - d0_star))
 
     def _gamma_t(
         self,
@@ -722,7 +720,7 @@ class ArterialSegExample(ProcessPipeline):
         SF_VTI = D1_sf / (D1_sf + D2_sf + self.eps)
 
         dtau = t - mu_t
-        m2 = float(np.nansum(vv * (dtau ** 2)))
+        m2 = float(np.nansum(vv * (dtau**2)))
         sigma_t = np.sqrt(m2 / m0 + self.eps)
         sigma_t_over_T = sigma_t / Tbeat
 
@@ -843,13 +841,17 @@ class ArterialSegExample(ProcessPipeline):
             if np.isfinite(slope_fall_normalized)
             else np.nan,
             "t_up_over_T": float(t_up_over_T) if np.isfinite(t_up_over_T) else np.nan,
-            "t_down_over_T": float(t_down_over_T) if np.isfinite(t_down_over_T) else np.nan,
+            "t_down_over_T": float(t_down_over_T)
+            if np.isfinite(t_down_over_T)
+            else np.nan,
             "S_decay": float(S_decay) if np.isfinite(S_decay) else np.nan,
             "R_SD": float(R_SD) if np.isfinite(R_SD) else np.nan,
             "Delta_DTI": float(Delta_DTI) if np.isfinite(Delta_DTI) else np.nan,
             "gamma_t": float(gamma_t) if np.isfinite(gamma_t) else np.nan,
             "tauH": float(tauH) if np.isfinite(tauH) else np.nan,
-            "crest_factor": float(crest_factor) if np.isfinite(crest_factor) else np.nan,
+            "crest_factor": float(crest_factor)
+            if np.isfinite(crest_factor)
+            else np.nan,
             "spectral_entropy": float(spectral_entropy)
             if np.isfinite(spectral_entropy)
             else np.nan,

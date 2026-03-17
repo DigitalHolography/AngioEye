@@ -61,7 +61,7 @@ METRIC_ALIASES = {
 }
 EPS = 1e-12
 H_MAX = 10
-H_LOW_MAX = 3
+H_LOW_MAX = 2
 H_HIGH_MIN = 4
 H_HIGH_MAX = 8
 LATEX_FORMULAS = {
@@ -1595,7 +1595,7 @@ def export_selected_metric_pngs_bandlimited(
                 ax_empty = fig.add_subplot(right[r, c])
                 ax_empty.axis("off")
 
-            png_path = os.path.join(out_dir, f"{metric}_bandlimited.eps")
+            png_path = os.path.join(out_dir, f"{metric}_bandlimited.png")
             fig.savefig(png_path, dpi=200, bbox_inches="tight", pad_inches=0.06)
             plt.close(fig)
 
