@@ -8,6 +8,8 @@ from tkinter import filedialog, messagebox, ttk
 
 import h5py
 
+from app_settings import AppSettingsStore, normalize_pipeline_visibility
+
 try:
     import sv_ttk
 except ImportError:  #  optional dependency
@@ -65,12 +67,19 @@ class ProcessApp(tk.Tk):
         super().__init__()
         self.title("HDF5 Process")
         self.geometry("800x600")
+        self.settings_store = AppSettingsStore()
         self.pipeline_registry: dict[str, PipelineDescriptor] = {}
+        self.pipeline_catalog: dict[str, PipelineDescriptor] = {}
+        self.pipeline_rows: list[PipelineDescriptor] = []
         self.pipeline_check_vars: dict[str, tk.BooleanVar] = {}
+        self.pipeline_visibility: dict[str, bool] = {}
+        self.pipeline_visibility_vars: dict[str, tk.BooleanVar] = {}
         self.batch_input_var = tk.StringVar()
         self.batch_output_var = tk.StringVar(value=str(Path.cwd()))
         self.batch_zip_var = tk.BooleanVar(value=False)
         self.batch_zip_name_var = tk.StringVar(value="outputs.zip")
+        self.pipeline_library_summary_var = tk.StringVar(value="")
+        self._settings_warning_shown = False
 
         self._apply_theme()
         self._build_ui()
@@ -124,7 +133,19 @@ class ProcessApp(tk.Tk):
     def _build_ui(self) -> None:
         container = ttk.Frame(self, padding=10)
         container.pack(fill="both", expand=True)
-        self._build_batch_tab(container)
+        container.columnconfigure(0, weight=1)
+        container.rowconfigure(0, weight=1)
+
+        self.notebook = ttk.Notebook(container)
+        self.notebook.grid(row=0, column=0, sticky="nsew")
+
+        self.batch_tab = ttk.Frame(self.notebook, padding=10)
+        self.library_tab = ttk.Frame(self.notebook, padding=10)
+        self.notebook.add(self.batch_tab, text="Batch")
+        self.notebook.add(self.library_tab, text="Pipeline Library")
+
+        self._build_batch_tab(self.batch_tab)
+        self._build_pipeline_library_tab(self.library_tab)
 
     def _build_batch_tab(self, parent: ttk.Frame) -> None:
         parent.columnconfigure(1, weight=1)
@@ -164,6 +185,11 @@ class ProcessApp(tk.Tk):
         ttk.Button(actions, text="Clear all", command=self.clear_all_pipelines).pack(
             side="left"
         )
+        ttk.Button(
+            actions,
+            text="Pipeline library",
+            command=self.open_pipeline_library,
+        ).pack(side="left", padx=(4, 0))
 
         pipelines_container = ttk.Frame(pipelines_wrapper)
         pipelines_container.grid(row=1, column=0, sticky="nsew")
@@ -249,21 +275,111 @@ class ProcessApp(tk.Tk):
         self.batch_output.grid(row=0, column=0, sticky="nsew")
         batch_output_scroll.grid(row=0, column=1, sticky="ns")
 
+    def _build_pipeline_library_tab(self, parent: ttk.Frame) -> None:
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(2, weight=1)
+
+        ttk.Label(
+            parent,
+            text="Choose which pipelines are shown in the Batch tab. "
+            "This preference is saved between app launches.",
+        ).grid(row=0, column=0, sticky="w")
+
+        controls = ttk.Frame(parent)
+        controls.grid(row=1, column=0, sticky="ew", pady=(8, 4))
+        controls.columnconfigure(4, weight=1)
+        ttk.Button(controls, text="Open batch", command=self.open_batch_tab).grid(
+            row=0, column=0, sticky="w"
+        )
+        ttk.Button(
+            controls,
+            text="Show all",
+            command=self.show_all_pipelines_in_main_ui,
+        ).grid(row=0, column=1, sticky="w", padx=(4, 0))
+        ttk.Button(
+            controls,
+            text="Hide all",
+            command=self.hide_all_pipelines_from_main_ui,
+        ).grid(row=0, column=2, sticky="w", padx=(4, 0))
+        ttk.Button(
+            controls,
+            text="Reload pipelines",
+            command=self.refresh_pipeline_catalog,
+        ).grid(row=0, column=3, sticky="w", padx=(4, 0))
+        ttk.Label(
+            controls, textvariable=self.pipeline_library_summary_var
+        ).grid(row=0, column=4, sticky="e")
+
+        library_container = ttk.Frame(parent)
+        library_container.grid(row=2, column=0, sticky="nsew")
+        library_container.columnconfigure(0, weight=1)
+        library_container.rowconfigure(0, weight=1)
+
+        self.pipeline_library_canvas = tk.Canvas(
+            library_container, highlightthickness=0, bg=self._bg_color
+        )
+        self.pipeline_library_canvas.grid(row=0, column=0, sticky="nsew")
+        library_scroll = ttk.Scrollbar(
+            library_container,
+            orient="vertical",
+            command=self.pipeline_library_canvas.yview,
+        )
+        library_scroll.grid(row=0, column=1, sticky="ns")
+        self.pipeline_library_canvas.configure(yscrollcommand=library_scroll.set)
+        self.pipeline_library_inner = ttk.Frame(self.pipeline_library_canvas)
+        self.pipeline_library_window = self.pipeline_library_canvas.create_window(
+            (0, 0), window=self.pipeline_library_inner, anchor="nw"
+        )
+        self.pipeline_library_inner.bind(
+            "<Configure>",
+            lambda _evt: self.pipeline_library_canvas.configure(
+                scrollregion=self.pipeline_library_canvas.bbox("all")
+            ),
+        )
+        self.pipeline_library_canvas.bind(
+            "<Configure>",
+            lambda evt: self.pipeline_library_canvas.itemconfigure(
+                self.pipeline_library_window, width=evt.width
+            ),
+        )
+
     def _register_pipelines(self) -> None:
         available, missing = load_pipeline_catalog()
+        rows = sorted([*available, *missing], key=lambda pipeline: pipeline.name.lower())
         self.pipeline_registry = {p.name: p for p in available}
-        self._populate_pipeline_checks(available, missing)
+        self.pipeline_catalog = {p.name: p for p in rows}
+        self.pipeline_rows = rows
+        self._sync_pipeline_visibility(rows)
+        selection_state = {
+            name: var.get() for name, var in self.pipeline_check_vars.items()
+        }
+        self._populate_pipeline_checks(rows, selection_state)
+        self._populate_pipeline_library(rows)
 
     def _populate_pipeline_checks(
-        self, available: list[PipelineDescriptor], missing: list[PipelineDescriptor]
+        self,
+        rows: list[PipelineDescriptor],
+        selection_state: dict[str, bool] | None = None,
     ) -> None:
         for child in self.pipeline_checks_inner.winfo_children():
             child.destroy()
         self.pipeline_check_vars = {}
-        rows: list[PipelineDescriptor] = [*available, *missing]
-        for idx, pipeline in enumerate(rows):
+        visible_rows = [row for row in rows if self.pipeline_visibility.get(row.name, False)]
+        if not visible_rows:
+            ttk.Label(
+                self.pipeline_checks_inner,
+                text="No pipelines are visible here. Open Pipeline Library to enable some.",
+            ).grid(row=0, column=0, sticky="w", pady=(0, 6))
+            return
+
+        for idx, pipeline in enumerate(visible_rows):
             is_available = getattr(pipeline, "available", True)
-            var = tk.BooleanVar(value=is_available)
+            default_value = (
+                selection_state.get(pipeline.name, is_available)
+                if selection_state is not None
+                else is_available
+            )
+            var = tk.BooleanVar(value=default_value if is_available else False)
             var._enabled = is_available  # type: ignore[attr-defined]
             label = pipeline.name if is_available else f"{pipeline.name} (missing deps)"
             state = "normal" if is_available else "disabled"
@@ -286,6 +402,128 @@ class ProcessApp(tk.Tk):
                     fg=self._text_fg,
                 )
             self.pipeline_check_vars[pipeline.name] = var
+
+    def _populate_pipeline_library(self, rows: list[PipelineDescriptor]) -> None:
+        for child in self.pipeline_library_inner.winfo_children():
+            child.destroy()
+        self.pipeline_visibility_vars = {}
+        self.pipeline_library_inner.columnconfigure(0, weight=1)
+
+        ttk.Label(self.pipeline_library_inner, text="Show in Batch").grid(
+            row=0, column=0, sticky="w", pady=(0, 6)
+        )
+        ttk.Label(self.pipeline_library_inner, text="Status").grid(
+            row=0, column=1, sticky="w", padx=(12, 0), pady=(0, 6)
+        )
+
+        for idx, pipeline in enumerate(rows, start=1):
+            var = tk.BooleanVar(value=self.pipeline_visibility.get(pipeline.name, False))
+            check = ttk.Checkbutton(
+                self.pipeline_library_inner,
+                text=pipeline.name,
+                variable=var,
+                command=lambda name=pipeline.name, visible_var=var: self._set_pipeline_visibility(
+                    name, visible_var.get()
+                ),
+            )
+            check.grid(row=idx, column=0, sticky="w", pady=(0, 6))
+
+            if pipeline.available:
+                status_text = "Available"
+            elif pipeline.missing_deps:
+                status_text = f"Missing deps: {', '.join(pipeline.missing_deps)}"
+            else:
+                status_text = "Unavailable"
+            status = ttk.Label(self.pipeline_library_inner, text=status_text)
+            status.grid(row=idx, column=1, sticky="w", padx=(12, 0), pady=(0, 6))
+
+            tip_text = pipeline.description or ""
+            missing_deps = getattr(pipeline, "missing_deps", []) or getattr(
+                pipeline, "requires", []
+            )
+            if missing_deps:
+                tip_suffix = f"\nInstall: {', '.join(missing_deps)}"
+                tip_text = (tip_text + tip_suffix) if tip_text else tip_suffix
+            if tip_text:
+                _Tooltip(check, tip_text, bg=self._surface_color, fg=self._text_fg)
+                _Tooltip(status, tip_text, bg=self._surface_color, fg=self._text_fg)
+
+            self.pipeline_visibility_vars[pipeline.name] = var
+
+        self._update_pipeline_library_summary()
+
+    def _sync_pipeline_visibility(self, rows: list[PipelineDescriptor]) -> None:
+        visibility, changed = normalize_pipeline_visibility(
+            (pipeline.name for pipeline in rows),
+            self.settings_store.load_pipeline_visibility(),
+        )
+        self.pipeline_visibility = visibility
+        if changed:
+            self._persist_pipeline_visibility()
+
+    def _persist_pipeline_visibility(self) -> None:
+        try:
+            self.settings_store.save_pipeline_visibility(self.pipeline_visibility)
+        except OSError as exc:
+            if self._settings_warning_shown:
+                return
+            self._settings_warning_shown = True
+            messagebox.showwarning(
+                "Settings not saved",
+                f"Could not save pipeline visibility preferences:\n{exc}",
+            )
+
+    def _set_pipeline_visibility(self, name: str, visible: bool) -> None:
+        if self.pipeline_visibility.get(name) == visible:
+            return
+        self.pipeline_visibility[name] = visible
+        self._persist_pipeline_visibility()
+        selection_state = {
+            pipeline_name: var.get()
+            for pipeline_name, var in self.pipeline_check_vars.items()
+        }
+        self._populate_pipeline_checks(self.pipeline_rows, selection_state)
+        self._update_pipeline_library_summary()
+
+    def _set_all_pipeline_visibility(self, visible: bool) -> None:
+        changed = False
+        for name in self.pipeline_visibility:
+            if self.pipeline_visibility[name] != visible:
+                self.pipeline_visibility[name] = visible
+                changed = True
+        if not changed:
+            return
+        for var in self.pipeline_visibility_vars.values():
+            var.set(visible)
+        self._persist_pipeline_visibility()
+        selection_state = {
+            pipeline_name: var.get()
+            for pipeline_name, var in self.pipeline_check_vars.items()
+        }
+        self._populate_pipeline_checks(self.pipeline_rows, selection_state)
+        self._update_pipeline_library_summary()
+
+    def _update_pipeline_library_summary(self) -> None:
+        visible_count = sum(self.pipeline_visibility.values())
+        total_count = len(self.pipeline_visibility)
+        self.pipeline_library_summary_var.set(
+            f"Visible in Batch: {visible_count}/{total_count}"
+        )
+
+    def open_pipeline_library(self) -> None:
+        self.notebook.select(self.library_tab)
+
+    def open_batch_tab(self) -> None:
+        self.notebook.select(self.batch_tab)
+
+    def show_all_pipelines_in_main_ui(self) -> None:
+        self._set_all_pipeline_visibility(True)
+
+    def hide_all_pipelines_from_main_ui(self) -> None:
+        self._set_all_pipeline_visibility(False)
+
+    def refresh_pipeline_catalog(self) -> None:
+        self._register_pipelines()
 
     def _reset_batch_output(
         self, message: str = "Select an input path, choose pipelines, then run batch."
