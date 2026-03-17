@@ -578,12 +578,15 @@ class ArterialSegExample(ProcessPipeline):
 
         n = v.size
         dt = Tbeat / n
-        D = np.nancumsum(np.where(np.isfinite(v), v, 0.0)) * dt
+        D = np.nancumsum(np.where(np.isfinite(v), v, 0.0))
         d = D / (m0 + self.eps)
+        print(d)
 
         def sample_at_ratio(r: float) -> float:
             idx = int(np.floor(r * n))
+
             idx = max(0, min(n - 1, idx))
+
             return float(d[idx])
 
         d10 = sample_at_ratio(0.10)
@@ -591,7 +594,6 @@ class ArterialSegExample(ProcessPipeline):
         d50 = sample_at_ratio(0.50)
         d75 = sample_at_ratio(0.75)
         d90 = sample_at_ratio(0.90)
-
         out["d10"] = d10
         out["d25"] = d25
         out["d50"] = d50

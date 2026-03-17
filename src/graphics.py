@@ -49,8 +49,12 @@ SELECTED_METRICS_PNG = {
     "R_pre_post",
     "R_slope",
     "E_recon_H_MAX",
-    "Q_skew",
-    "Q_width",
+    "Q_t_skew",
+    "Q_t_width",
+    "Q_d_skew",
+    "Q_d_width",
+    "R_Q_d",
+    "R_Q_t",
     "v_end_over_v_mean",
     "E_slope",
     "E_curv",
@@ -85,8 +89,8 @@ LATEX_FORMULAS = {
     "E_high_over_E_total": r"$E_{\mathrm{high}}/E_{\mathrm{total}}$",
     "E_low_over_E_total": r"$E_{\mathrm{low}}/E_{\mathrm{total}}$",
     "R_SD": r"$R_{SD}$",
-    "slope_fall_normalized": r"$S_{\mathrm{fall}}^{\mathrm{norm}}$",
-    "slope_rise_normalized": r"$S_{\mathrm{rise}}^{\mathrm{norm}}$",
+    "slope_fall_normalized": r"$S_{\mathrm{fall}}$",
+    "slope_rise_normalized": r"$S_{\mathrm{rise}}$",
     "gamma_t": r"$\gamma_t$",
     "mu_h": r"$\mu_h$",
     "sigma_h": r"$\sigma_h$",
@@ -96,8 +100,12 @@ LATEX_FORMULAS = {
     "R_pre_post": r"$R_{{pre/post}}$",
     "R_slope": r"$R_{\mathrm{slope}}$",
     "E_recon_H_MAX": r"$E_{\mathrm{recon},H_{\max}}$",
-    "Q_skew": r"$Q_{\mathrm{skew}}$",
-    "Q_width": r"$Q_{\mathrm{conc}}$",
+    "Q_t_skew": r"$Q_{\mathrm{t_{{skew}}}}$",
+    "Q_t_width": r"$Q_{\mathrm{t_{{width}}}}$",
+    "Q_d_skew": r"$Q_{\mathrm{d_{{skew}}}}$",
+    "Q_d_width": r"$Q_{\mathrm{d_{{width}}}}$",
+    "R_Q_t": r"$R_{\mathrm{Q_{{t}}}}$",
+    "R_Q_d": r"$R_{\mathrm{Q_{{d}}}}$",
     "v_end_over_v_mean": r"$R_{EM}$",
     "E_slope": r"$E_{\mathrm{slope}}$",
     "E_curv": r"$E_{\mathrm{curv}}$",
@@ -520,7 +528,7 @@ def plot_metric_illustration(ax, metric, sig_control, path):
         ax.set_xlabel("rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
 
-    elif metric == "Q_skew":
+    elif metric == "Q_t_skew":
         w = rectified(sig)
         m0 = float(np.nansum(w))
         if m0 <= 0:
@@ -536,7 +544,7 @@ def plot_metric_illustration(ax, metric, sig_control, path):
         t50 = float(i50 / n)
         t90 = float(i90 / n)
 
-        q_skew = float(((t90 - t50) - (t50 - t10)) / (t90 - t10 + EPS))
+        Q_t_skew = float(((t90 - t50) - (t50 - t10)) / (t90 - t10 + EPS))
 
         ax.plot(tau, C, linewidth=3, color="#EC5241")
         for tq, lab in [(t10, "t10"), (t50, "t50"), (t90, "t90")]:
@@ -546,14 +554,44 @@ def plot_metric_illustration(ax, metric, sig_control, path):
 
         info_box(
             [
-                rf"$Q_{{skew}}={q_skew:.3f}$",
+                rf"$Q_{{t_{{skew}}}}={Q_t_skew:.3f}$",
                 f"t10={t10:.3f}, t50={t50:.3f}, t90={t90:.3f}",
             ]
         )
         ax.set_xlabel("rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$C(\tau) \: (a.u.)$", fontsize=14, labelpad=12)
+    elif metric == "Q_d_skew":
+        w = rectified(sig)
+        m0 = float(np.nansum(w))
+        if m0 <= 0:
+            info_box("Invalid signal")
+            return
 
-    elif metric == "Q_width":
+        C = np.nancumsum(w) / (m0 + EPS)
+        t10 = int(w.size / 10)
+        t50 = int(w.size / 2)
+        t90 = int(9 * w.size / 10)
+        d10 = C[t10]
+        d50 = C[t50]
+        d90 = C[t90]
+
+        Q_d_skew = float(((d90 - d50) - (d50 - d10)) / (d90 - d10 + EPS))
+
+        ax.plot(tau, C, linewidth=3, color="#EC5241")
+        for tq, dq in [(0.1, d10), (0.5, d50), (0.9, d90)]:
+            ax.vlines(tq, 0, dq, linestyle="--", linewidth=1, color="black")
+            ax.hlines(dq, 0, tq, linestyle="--", linewidth=1, color="black")
+
+        info_box(
+            [
+                rf"$Q_{{d_{{skew}}}}={Q_d_skew:.3f}$",
+                f"d10={d10:.3f}, d50={d50:.3f}, d90={d90:.3f}",
+            ]
+        )
+        ax.set_xlabel("rectified time : t/T", fontsize=14)
+        ax.set_ylabel(r"$C(\tau) \: (a.u.)$", fontsize=14, labelpad=12)
+
+    elif metric == "Q_t_width":
         w = rectified(sig)
         m0 = float(np.nansum(w))
         if m0 <= 0:
@@ -566,7 +604,7 @@ def plot_metric_illustration(ax, metric, sig_control, path):
 
         t25 = float(i25 / n)
         t75 = float(i75 / n)
-        Q_width = float(t75 - t25)
+        Q_t_width = float(t75 - t25)
 
         ax.plot(tau, C, linewidth=3, color="#EC5241")
         y25 = _y_at(t25, tau, C)
@@ -577,10 +615,128 @@ def plot_metric_illustration(ax, metric, sig_control, path):
             tau, 0, C, where=(tau >= t25) & (tau <= t75), color="#F2CCC7", alpha=0.7
         )
 
-        info_box([rf"$Q_{{conc}}={Q_width:.3f}$", f"t25={t25:.3f}, t75={t75:.3f}"])
+        info_box(
+            [rf"$Q_{{t_{{width}}}}={Q_t_width:.3f}$", f"t25={t25:.3f}, t75={t75:.3f}"]
+        )
         ax.set_xlabel("rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$C(\tau) \: (a.u.)$", fontsize=14, labelpad=12)
+    elif metric == "Q_d_width":
+        w = rectified(sig)
+        m0 = float(np.nansum(w))
+        if m0 <= 0:
+            info_box("Invalid signal")
+            return
 
+        C = np.nancumsum(w) / (m0 + EPS)
+        t25 = int(w.size / 4)
+        t75 = int(3 * w.size / 4)
+        d25 = C[t25]
+        d75 = C[t75]
+        Q_d_width = float(d75 - d25)
+
+        ax.plot(tau, C, linewidth=3, color="#EC5241")
+        ax.vlines(0.25, 0, d25, linestyle="--", linewidth=1, color="black")
+        ax.vlines(0.75, 0, d75, linestyle="--", linewidth=1, color="black")
+        ax.hlines(d25, 0, 0.25, linestyle="--", linewidth=1, color="black")
+        ax.hlines(d75, 0, 0.75, linestyle="--", linewidth=1, color="black")
+        y_fill = np.linspace(d25, d75, 300)
+        x_curve = np.interp(y_fill, C, tau)
+
+        ax.fill_betweenx(y_fill, 0, x_curve, color="#F2CCC7", alpha=0.7)
+        info_box(
+            [rf"$Q_{{d_{{width}}}}={Q_d_width:.3f}$", f"d25={d25:.3f}, d75={d75:.3f}"]
+        )
+        ax.set_xlabel("rectified time : t/T", fontsize=14)
+        ax.set_ylabel(r"$C(\tau) \: (a.u.)$", fontsize=14, labelpad=12)
+    elif metric == "R_Q_d":
+        w = rectified(sig)
+        m0 = float(np.nansum(w))
+        if m0 <= 0:
+            info_box("Invalid signal")
+            return
+
+        C = np.nancumsum(w) / (m0 + EPS)
+        t25 = int(w.size / 4)
+        t75 = int(3 * w.size / 4)
+        t10 = int(w.size / 10)
+        t50 = int(w.size / 2)
+        t90 = int(9 * w.size / 10)
+        d10 = C[t10]
+        d50 = C[t50]
+        d90 = C[t90]
+        d25 = C[t25]
+        d75 = C[t75]
+        Q_d_width = float(d75 - d25)
+        Q_d_skew = float(((d90 - d50) - (d50 - d10)) / (d90 - d10 + EPS))
+        R_Q_d = Q_d_skew / Q_d_width
+        ax.plot(tau, C, linewidth=3, color="#EC5241")
+        ax.vlines(0.10, 0, d10, linestyle="--", linewidth=1, color="black")
+        ax.vlines(0.25, 0, d25, linestyle="--", linewidth=1, color="black")
+        ax.vlines(0.50, 0, d50, linestyle="--", linewidth=1, color="black")
+        ax.vlines(0.75, 0, d75, linestyle="--", linewidth=1, color="black")
+        ax.vlines(0.90, 0, d90, linestyle="--", linewidth=1, color="black")
+        ax.hlines(d10, 0, 0.10, linestyle="--", linewidth=1, color="black")
+        ax.hlines(d25, 0, 0.25, linestyle="--", linewidth=1, color="black")
+        ax.hlines(d50, 0, 0.50, linestyle="--", linewidth=1, color="black")
+        ax.hlines(d75, 0, 0.75, linestyle="--", linewidth=1, color="black")
+        ax.hlines(d90, 0, 0.90, linestyle="--", linewidth=1, color="black")
+
+        y_fill = np.linspace(d25, d75, 300)
+        x_curve = np.interp(y_fill, C, tau)
+        ax.fill_betweenx(y_fill, 0, x_curve, color="#F2CCC7", alpha=0.7)
+
+        info_box(
+            [
+                rf"$Q_{{d_{{width}}}}={Q_d_width:.3f}$",
+                rf"$Q_{{d_{{skew}}}}={Q_d_skew:.3f}$",
+                rf"$R_{{Q_{{d}}}}={R_Q_d:.3f}$",
+            ]
+        )
+        ax.set_xlabel("rectified time : t/T", fontsize=14)
+        ax.set_ylabel(r"$C(\tau) \: (a.u.)$", fontsize=14, labelpad=12)
+    elif metric == "R_Q_t":
+        w = rectified(sig)
+        m0 = float(np.nansum(w))
+        if m0 <= 0:
+            info_box("Invalid signal")
+            return
+
+        C = np.nancumsum(w) / (m0 + EPS)
+        i25 = quantile_idx_from_cumsum(C, 0.25)
+        i75 = quantile_idx_from_cumsum(C, 0.75)
+        i10 = quantile_idx_from_cumsum(C, 0.10)
+        i50 = quantile_idx_from_cumsum(C, 0.50)
+        i90 = quantile_idx_from_cumsum(C, 0.90)
+
+        t10 = float(i10 / n)
+        t50 = float(i50 / n)
+        t90 = float(i90 / n)
+        t25 = float(i25 / n)
+        t75 = float(i75 / n)
+
+        Q_t_width = float(t75 - t25)
+        Q_t_skew = float(((t90 - t50) - (t50 - t10)) / (t90 - t10 + EPS))
+        R_Q_t = Q_t_skew / Q_t_width
+
+        ax.plot(tau, C, linewidth=3, color="#EC5241")
+        ax.vlines(t10, 0, C[i10], linestyle="--", linewidth=1, color="black")
+        ax.vlines(t25, 0, C[i25], linestyle="--", linewidth=1, color="black")
+        ax.vlines(t50, 0, C[i50], linestyle="--", linewidth=1, color="black")
+        ax.vlines(t75, 0, C[i75], linestyle="--", linewidth=1, color="black")
+        ax.vlines(t90, 0, C[i90], linestyle="--", linewidth=1, color="black")
+        ax.fill_between(
+            tau, 0, C, where=(tau >= t25) & (tau <= t75), color="#F2CCC7", alpha=0.7
+        )
+
+        info_box(
+            [
+                rf"$Q_{{t_{{width}}}}={Q_t_width:.3f}$",
+                rf"$Q_{{t_{{skew}}}}={Q_t_skew:.3f}$",
+                rf"$R_{{Q_{{t}}}}={R_Q_t:.3f}$",
+            ]
+        )
+        ax.set_xlabel("rectified time : t/T", fontsize=14)
+        ax.set_ylabel(r"$C(\tau) \: (a.u.)$", fontsize=14, labelpad=12)
     elif metric == "v_end_over_v_mean":
         w = rectified(sig)
         vmean = float(np.nanmean(w))
@@ -600,7 +756,7 @@ def plot_metric_illustration(ax, metric, sig_control, path):
         ax.text(
             0,
             vend,
-            f" Vend={vend:.3g}",
+            rf" $\overline{{Vend}}={vend:.3g}$",
             transform=ax.get_yaxis_transform(),
             ha="left",
             va="bottom",
@@ -1234,13 +1390,16 @@ def plot_metric_illustration(ax, metric, sig_control, path):
 
         dt = 1 / w.size
         dvdt = np.gradient(w, dt)
-        s_up = np.nanmax(dvdt)
-        slope_rise_tot = s_up / (meanv + EPS)
 
+        idx_max = int(np.nanargmax(dvdt))
+        tau_max = tau[idx_max]
+        w_max = w[idx_max]
+
+        s_up = float(np.nanmax(dvdt))
+        slope_rise_tot = s_up / (meanv + EPS)
         T_max_slope_rise = s_up
 
         x_norm = tau
-
         x_norm_line = np.linspace(0, 1, 200)
         y_norm_line = slope_rise_tot * x_norm_line
 
@@ -1251,18 +1410,16 @@ def plot_metric_illustration(ax, metric, sig_control, path):
             linestyle="--",
             color="black",
             linewidth=2,
-            label=rf"$S_{{rise}}^{{norm}}= {slope_rise_tot:.3f}$",
+            label=rf"$S_{{rise}}= {slope_rise_tot:.3f}$",
         )
 
-        y_limit = ax.get_ylim()[1]
-        x_max = min(1, y_limit / T_max_slope_rise)
+        x_tan = np.linspace(0, 1, 400)
+        y_tan = T_max_slope_rise * (x_tan - tau_max) + w_max
 
-        x_line_limited = np.linspace(0, x_max, 200)
-        y_line_limited = T_max_slope_rise * x_line_limited
-
+        mask = (y_tan >= 0) & (y_tan <= ax.get_ylim()[1])
         ax.plot(
-            x_line_limited,
-            y_line_limited,
+            x_tan[mask],
+            y_tan[mask],
             linestyle=":",
             color="black",
             linewidth=2,
@@ -1281,13 +1438,18 @@ def plot_metric_illustration(ax, metric, sig_control, path):
 
         dt = 1 / w.size
         dvdt = np.gradient(w, dt)
-        s_down = np.nanmin(dvdt)
-        slope_fall_tot = np.abs(s_down) / (meanv + EPS)
 
-        T_max_slope_fall = np.abs(s_down)
+        idx_min = int(np.nanargmin(dvdt))
+        tau_min = tau[idx_min]
+        w_min = w[idx_min]
 
+        s_up = float(np.nanmin(dvdt))
+        slope_rise_tot = s_up / (meanv + EPS)
+        T_min_slope_rise = s_up
+
+        x_norm = tau
         x_norm_line = np.linspace(0, 1, 200)
-        y_norm_line = slope_fall_tot * (1 - x_norm_line)
+        y_norm_line = slope_rise_tot * x_norm_line
 
         ax.plot(tau, w, linewidth=3, color="#EC5241")
         ax.plot(
@@ -1296,23 +1458,20 @@ def plot_metric_illustration(ax, metric, sig_control, path):
             linestyle="--",
             color="black",
             linewidth=2,
-            label=rf"$S_{{fall}}^{{norm}} = {slope_fall_tot:.3f}$",
+            label=rf"$S_{{rise}}= {slope_rise_tot:.3f}$",
         )
 
-        vmax = np.nanmax(w)
+        x_tan = np.linspace(0, 1, 400)
+        y_tan = T_min_slope_rise * (x_tan - tau_min) + w_min
 
-        x_start = max(0, 1 - vmax / T_max_slope_fall)
-
-        x_line_limited = np.linspace(x_start, 1, 200)
-        y_line_limited = T_max_slope_fall * (1 - x_line_limited)
-
+        mask = (y_tan >= 0) & (y_tan <= ax.get_ylim()[1])
         ax.plot(
-            x_line_limited,
-            y_line_limited,
+            x_tan[mask],
+            y_tan[mask],
             linestyle=":",
             color="black",
             linewidth=2,
-            label=rf"$S_{{fall}} = {T_max_slope_fall:.3f}$",
+            label=rf"$S_{{rise}} = {T_min_slope_rise:.3f}$",
         )
 
         ax.legend(fontsize=11)
@@ -1340,7 +1499,7 @@ def plot_metric_illustration(ax, metric, sig_control, path):
         ax.text(
             0,
             vend,
-            f" Vend={vend:.3g}",
+            rf"$ \overline{{Vend}}={vend:.3g}$",
             transform=ax.get_yaxis_transform(),
             ha="left",
             va="bottom",
@@ -1595,7 +1754,7 @@ def export_selected_metric_pngs_bandlimited(
                 ax_empty = fig.add_subplot(right[r, c])
                 ax_empty.axis("off")
 
-            png_path = os.path.join(out_dir, f"{metric}_bandlimited.eps")
+            png_path = os.path.join(out_dir, f"{metric}_bandlimited.png")
             fig.savefig(png_path)
             plt.close(fig)
 
