@@ -161,14 +161,6 @@ class ArterialSegExample(ProcessPipeline):
         """
         Compute complex harmonic coefficients Vn for n=0..H, with H=min(H_MAX, n_rfft-1),
         and synthesize band-limited waveform vb(t) using harmonics 0..H.
-
-        Returns:
-          - V (complex array length H+1)
-          - H (int)
-          - vb (float array length n)
-          - Vmax (float) = max_t vb(t)
-          - omega0 (float) = 2*pi/Tbeat
-          - Vfull (full rfft/n coefficient array)
         """
         if (not np.isfinite(Tbeat)) or Tbeat <= 0:
             return {
@@ -223,12 +215,6 @@ class ArterialSegExample(ProcessPipeline):
         }
 
     def _tauH_from_harmonics(self, V: np.ndarray, Vmax: float, omega0: float) -> float:
-        """
-        Magnitude-only damping proxy tauH:
-          Xn = Vn / Vmax
-          tau_|H|,n = (1/omega_n) * sqrt(1/|Xn|^2 - 1)  for |Xn| in (0,1]
-          tauH = sum_{n=1..H} |Vn| * tau_n / sum_{n=1..H} |Vn|
-        """
         if (
             V is None
             or (not np.isfinite(Vmax))
@@ -276,11 +262,6 @@ class ArterialSegExample(ProcessPipeline):
         return float(np.sum(w * t) / (np.sum(w) + self.eps))
 
     def _spectral_entropy_from_harmonics(self, V: np.ndarray) -> float:
-        """
-        Spectral entropy of harmonic magnitude distribution over n=1..H:
-          p_n = |Vn| / sum_{k=1..H} |Vk|
-          Hspec = - sum p_n log(p_n)
-        """
         if V is None:
             return np.nan
         H = int(V.size - 1)
@@ -298,10 +279,6 @@ class ArterialSegExample(ProcessPipeline):
         return float(-np.nansum(p * np.log(p)))
 
     def _crest_factor(self, v: np.ndarray) -> float:
-        """
-        Crest factor on the current waveform representation:
-          CF = max(v) / rms(v)
-        """
         if v is None or v.size == 0:
             return np.nan
         v = np.asarray(v, dtype=float)
@@ -314,11 +291,6 @@ class ArterialSegExample(ProcessPipeline):
         return float(np.nanmax(x) / rms)
 
     def _harmonic_phases(self, V: np.ndarray) -> dict:
-        """
-        Return phi1,phi2,phi3 and delta_phi2,delta_phi3 (phase-coupling wrt fundamental).
-        delta_phi2 = wrap(phi2 - 2*phi1)
-        delta_phi3 = wrap(phi3 - 3*phi1)
-        """
         out = {
             "phi1": np.nan,
             "phi2": np.nan,
@@ -356,9 +328,6 @@ class ArterialSegExample(ProcessPipeline):
         return out
 
     def _spectral_centroid_spread(self, V: np.ndarray) -> tuple[float, float]:
-        """
-        mu_h = sum n w_n, sigma_h = sqrt(sum (n-mu_h)^2 w_n), with w_n ∝ |V_n| for n=1..H.
-        """
         if V is None:
             return np.nan, np.nan
         H = int(V.size - 1)
@@ -380,12 +349,6 @@ class ArterialSegExample(ProcessPipeline):
     def _temporal_support_metrics(
         self, v: np.ndarray, Tbeat: float, m0: float
     ) -> tuple[float, float, float]:
-        """
-        Returns:
-          G_t           : Gini-style temporal displacement concentration index
-          N_eff         : effective support duration [seconds]
-          N_eff_over_T  : normalized effective support duration
-        """
         if (
             v.size == 0
             or (not np.any(np.isfinite(v)))
@@ -413,10 +376,6 @@ class ArterialSegExample(ProcessPipeline):
         return G_t, N_eff, N_eff_over_T
 
     def _phase_locking_residual(self, V: np.ndarray) -> float:
-        """
-        E_phi = weighted mean squared wrapped residual of phi_n - n phi_1 over n=2..H_PHASE_RESIDUAL,
-        using weights |V_n|.
-        """
         if V is None:
             return np.nan
 
@@ -449,10 +408,6 @@ class ArterialSegExample(ProcessPipeline):
         return float(np.sum(w * r2) / (np.sum(w) + self.eps))
 
     def _reconstruction_error_from_vb(self, v: np.ndarray, vb: np.ndarray) -> float:
-        """
-        Reconstruction error from the existing harmonic truncation used in _harmonic_pack,
-        i.e. from DC + first H_MAX harmonics (or fewer if limited by sampling).
-        """
         if v is None or vb is None:
             return np.nan
         if v.size < 2 or vb.size != v.size:
@@ -470,10 +425,6 @@ class ArterialSegExample(ProcessPipeline):
         return float(num / (den + self.eps))
 
     def _peak_trough_times(self, v: np.ndarray) -> tuple[float, float, int, int]:
-        """
-        Returns:
-          t_max_over_T, t_min_over_T, idx_peak, idx_min
-        """
         if v.size == 0 or not np.any(np.isfinite(v)):
             return np.nan, np.nan, -1, -1
 
@@ -485,10 +436,6 @@ class ArterialSegExample(ProcessPipeline):
     def _normalized_slopes_and_times(
         self, v: np.ndarray, Tbeat: float
     ) -> tuple[float, float, float, float]:
-        """
-        Returns:
-          S_rise, S_fall, t_up_over_T, t_down_over_T
-        """
         if (
             v.size < 2
             or (not np.any(np.isfinite(v)))
@@ -520,10 +467,6 @@ class ArterialSegExample(ProcessPipeline):
         )
 
     def _peak_to_trough_interval(self, idx_peak: int, idx_min: int, n: int) -> float:
-        """
-        Delta_t_over_T = (t_min - t_max)/T, assuming min occurs after peak in the beat.
-        Returns NaN if ordering is inconsistent.
-        """
         if n <= 0 or idx_peak < 0 or idx_min < 0:
             return np.nan
         if idx_min < idx_peak:
@@ -537,10 +480,6 @@ class ArterialSegExample(ProcessPipeline):
         meanv: float,
         delta_t_over_T: float,
     ) -> float:
-        """
-        S_decay = ((v_min - v_max) T) / (Delta_t * v_mean)
-                = (v_min - v_max) / ( (Delta_t/T) * v_mean )
-        """
         if not np.isfinite(vmin) or not np.isfinite(vmax):
             return np.nan
         if (not np.isfinite(meanv)) or meanv <= 0:
@@ -570,9 +509,6 @@ class ArterialSegExample(ProcessPipeline):
         return float(vmax / (vend + self.eps))
 
     def _late_cycle_mean_fraction(self, v: np.ndarray) -> float:
-        """
-        v_end_over_v_mean where v_end is the mean over [ratio_vend_start*T, ratio_vend_end*T].
-        """
         if v.size == 0 or not np.any(np.isfinite(v)):
             return np.nan
 
@@ -603,10 +539,76 @@ class ArterialSegExample(ProcessPipeline):
             return np.nan
         if (not np.isfinite(m0)) or m0 <= 0:
             return np.nan
-        d = np.nancumsum(np.where(np.isfinite(v), v, 0.0))
-        d_star = d / (m0 + self.eps)
-        d0_star = t / Tbeat
-        return float(np.nansum(d_star - d0_star))
+        D = np.nancumsum(np.where(np.isfinite(v), v, 0.0)) * (Tbeat / v.size)
+        d = D / (m0 + self.eps)
+        d0 = t / Tbeat
+        return float(np.nansum(d - d0) / v.size)
+
+    def _fixed_phase_cumulative_displacement_metrics(
+        self, v: np.ndarray, Tbeat: float, m0: float
+    ) -> dict:
+        """
+        D(t) = int_0^t v(u) du
+        d(t) = D(t)/D(T)
+
+        Returns:
+          d10,d25,d50,d75,d90
+          Q_d_width, Q_d_skew, R_Q_d
+        """
+        out = {
+            "d10": np.nan,
+            "d25": np.nan,
+            "d50": np.nan,
+            "d75": np.nan,
+            "d90": np.nan,
+            "Q_d_width": np.nan,
+            "Q_d_skew": np.nan,
+            "R_Q_d": np.nan,
+        }
+
+        if (
+            v.size == 0
+            or (not np.any(np.isfinite(v)))
+            or (not np.isfinite(Tbeat))
+            or Tbeat <= 0
+            or (not np.isfinite(m0))
+            or m0 <= 0
+        ):
+            return out
+
+        n = v.size
+        dt = Tbeat / n
+        D = np.nancumsum(np.where(np.isfinite(v), v, 0.0)) * dt
+        d = D / (m0 + self.eps)
+
+        def sample_at_ratio(r: float) -> float:
+            idx = int(np.floor(r * n))
+            idx = max(0, min(n - 1, idx))
+            return float(d[idx])
+
+        d10 = sample_at_ratio(0.10)
+        d25 = sample_at_ratio(0.25)
+        d50 = sample_at_ratio(0.50)
+        d75 = sample_at_ratio(0.75)
+        d90 = sample_at_ratio(0.90)
+
+        out["d10"] = d10
+        out["d25"] = d25
+        out["d50"] = d50
+        out["d75"] = d75
+        out["d90"] = d90
+
+        if np.isfinite(d25) and np.isfinite(d75):
+            out["Q_d_width"] = float(d75 - d25)
+
+        if np.isfinite(d10) and np.isfinite(d50) and np.isfinite(d90):
+            denom = (d90 - d10) + self.eps
+            out["Q_d_skew"] = float(((d90 - d50) - (d50 - d10)) / denom)
+
+        if np.isfinite(out["Q_d_width"]) and np.isfinite(out["Q_d_skew"]):
+            out["R_Q_d"] = float(out["Q_d_skew"] / (out["Q_d_width"] + self.eps))
+
+        return out
 
     def _gamma_t(
         self,
@@ -640,10 +642,6 @@ class ArterialSegExample(ProcessPipeline):
     def _derivative_energies(
         self, v: np.ndarray, Tbeat: float, m0: float
     ) -> tuple[float, float]:
-        """
-        E_slope = T^2 / M0^2 * int (dv/dt)^2 dt
-        E_curv  = T^4 / M0^2 * int (d2v/dt2)^2 dt
-        """
         if (
             v.size < 3
             or (not np.any(np.isfinite(v)))
@@ -666,10 +664,6 @@ class ArterialSegExample(ProcessPipeline):
         return E_slope, E_curv
 
     def _compute_metrics_1d(self, v: np.ndarray, Tbeat: float) -> dict:
-        """
-        Canonical metric kernel: compute all waveform-shape metrics from a single 1D waveform v(t).
-        Returns a dict of scalar metrics (floats).
-        """
         v = self._rectify_keep_nan(v)
         n = int(v.size)
         if n <= 0:
@@ -776,20 +770,26 @@ class ArterialSegExample(ProcessPipeline):
         phase_locking_residual = self._phase_locking_residual(V)
         E_recon_H_MAX = self._reconstruction_error_from_vb(vv, vb)
 
-        Q_skew = np.nan
+        Q_t_skew = np.nan
         if (
             np.isfinite(t10_over_T)
             and np.isfinite(t50_over_T)
             and np.isfinite(t90_over_T)
         ):
             denom = (t90_over_T - t10_over_T) + self.eps
-            Q_skew = float(
+            Q_t_skew = float(
                 ((t90_over_T - t50_over_T) - (t50_over_T - t10_over_T)) / denom
             )
 
-        Q_width = np.nan
+        Q_t_width = np.nan
         if np.isfinite(t25_over_T) and np.isfinite(t75_over_T):
-            Q_width = float(t75_over_T - t25_over_T)
+            Q_t_width = float(t75_over_T - t25_over_T)
+
+        R_Q_t = np.nan
+        if np.isfinite(Q_t_skew) and np.isfinite(Q_t_width):
+            R_Q_t = float(Q_t_skew / (Q_t_width + self.eps))
+
+        d_metrics = self._fixed_phase_cumulative_displacement_metrics(vv, Tbeat, m0)
 
         v_end_over_v_mean = self._late_cycle_mean_fraction(vv)
         E_slope, E_curv = self._derivative_energies(vv, Tbeat, m0)
@@ -808,23 +808,18 @@ class ArterialSegExample(ProcessPipeline):
             "t50_over_T": float(t50_over_T),
             "t75_over_T": float(t75_over_T),
             "t90_over_T": float(t90_over_T),
+            "d10": float(d_metrics["d10"]) if np.isfinite(d_metrics["d10"]) else np.nan,
+            "d25": float(d_metrics["d25"]) if np.isfinite(d_metrics["d25"]) else np.nan,
+            "d50": float(d_metrics["d50"]) if np.isfinite(d_metrics["d50"]) else np.nan,
+            "d75": float(d_metrics["d75"]) if np.isfinite(d_metrics["d75"]) else np.nan,
+            "d90": float(d_metrics["d90"]) if np.isfinite(d_metrics["d90"]) else np.nan,
             "E_low_over_E_total": float(E_low_over_E_total),
             "E_high_over_E_total": float(E_high_over_E_total),
-            "t_max_over_T": float(t_max_over_T)
-            if np.isfinite(t_max_over_T)
-            else np.nan,
-            "t_min_over_T": float(t_min_over_T)
-            if np.isfinite(t_min_over_T)
-            else np.nan,
-            "Delta_t_over_T": float(Delta_t_over_T)
-            if np.isfinite(Delta_t_over_T)
-            else np.nan,
-            "slope_rise_normalized": float(slope_rise_normalized)
-            if np.isfinite(slope_rise_normalized)
-            else np.nan,
-            "slope_fall_normalized": float(slope_fall_normalized)
-            if np.isfinite(slope_fall_normalized)
-            else np.nan,
+            "t_max_over_T": float(t_max_over_T) if np.isfinite(t_max_over_T) else np.nan,
+            "t_min_over_T": float(t_min_over_T) if np.isfinite(t_min_over_T) else np.nan,
+            "Delta_t_over_T": float(Delta_t_over_T) if np.isfinite(Delta_t_over_T) else np.nan,
+            "slope_rise_normalized": float(slope_rise_normalized) if np.isfinite(slope_rise_normalized) else np.nan,
+            "slope_fall_normalized": float(slope_fall_normalized) if np.isfinite(slope_fall_normalized) else np.nan,
             "t_up_over_T": float(t_up_over_T) if np.isfinite(t_up_over_T) else np.nan,
             "t_down_over_T": float(t_down_over_T)
             if np.isfinite(t_down_over_T)
@@ -834,56 +829,29 @@ class ArterialSegExample(ProcessPipeline):
             "Delta_DTI": float(Delta_DTI) if np.isfinite(Delta_DTI) else np.nan,
             "gamma_t": float(gamma_t) if np.isfinite(gamma_t) else np.nan,
             "tauH": float(tauH) if np.isfinite(tauH) else np.nan,
-            "crest_factor": float(crest_factor)
-            if np.isfinite(crest_factor)
-            else np.nan,
-            "slope_fall_normalized": float(slope_fall_normalized)
-            if np.isfinite(slope_fall_normalized)
-            else np.nan,
-            "t_up_over_T": float(t_up_over_T) if np.isfinite(t_up_over_T) else np.nan,
-            "t_down_over_T": float(t_down_over_T)
-            if np.isfinite(t_down_over_T)
-            else np.nan,
-            "S_decay": float(S_decay) if np.isfinite(S_decay) else np.nan,
-            "R_SD": float(R_SD) if np.isfinite(R_SD) else np.nan,
-            "Delta_DTI": float(Delta_DTI) if np.isfinite(Delta_DTI) else np.nan,
-            "gamma_t": float(gamma_t) if np.isfinite(gamma_t) else np.nan,
-            "tauH": float(tauH) if np.isfinite(tauH) else np.nan,
-            "crest_factor": float(crest_factor)
-            if np.isfinite(crest_factor)
-            else np.nan,
-            "spectral_entropy": float(spectral_entropy)
-            if np.isfinite(spectral_entropy)
-            else np.nan,
+            "crest_factor": float(crest_factor) if np.isfinite(crest_factor) else np.nan,
+            "spectral_entropy": float(spectral_entropy) if np.isfinite(spectral_entropy) else np.nan,
             "phi1": float(ph["phi1"]) if np.isfinite(ph["phi1"]) else np.nan,
             "phi2": float(ph["phi2"]) if np.isfinite(ph["phi2"]) else np.nan,
             "phi3": float(ph["phi3"]) if np.isfinite(ph["phi3"]) else np.nan,
-            "delta_phi2": float(ph["delta_phi2"])
-            if np.isfinite(ph["delta_phi2"])
-            else np.nan,
-            "delta_phi3": float(ph["delta_phi3"])
-            if np.isfinite(ph["delta_phi3"])
-            else np.nan,
+            "delta_phi2": float(ph["delta_phi2"]) if np.isfinite(ph["delta_phi2"]) else np.nan,
+            "delta_phi3": float(ph["delta_phi3"]) if np.isfinite(ph["delta_phi3"]) else np.nan,
             "mu_h": float(mu_h) if np.isfinite(mu_h) else np.nan,
             "sigma_h": float(sigma_h) if np.isfinite(sigma_h) else np.nan,
             "G_t": float(G_t) if np.isfinite(G_t) else np.nan,
             "N_eff": float(N_eff) if np.isfinite(N_eff) else np.nan,
-            "N_eff_over_T": float(N_eff_over_T)
-            if np.isfinite(N_eff_over_T)
-            else np.nan,
+            "N_eff_over_T": float(N_eff_over_T) if np.isfinite(N_eff_over_T) else np.nan,
             "R_pre_post": float(R_pre_post) if np.isfinite(R_pre_post) else np.nan,
             "R_slope": float(R_slope) if np.isfinite(R_slope) else np.nan,
-            "phase_locking_residual": float(phase_locking_residual)
-            if np.isfinite(phase_locking_residual)
-            else np.nan,
-            "E_recon_H_MAX": float(E_recon_H_MAX)
-            if np.isfinite(E_recon_H_MAX)
-            else np.nan,
-            "Q_skew": float(Q_skew) if np.isfinite(Q_skew) else np.nan,
-            "Q_width": float(Q_width) if np.isfinite(Q_width) else np.nan,
-            "v_end_over_v_mean": float(v_end_over_v_mean)
-            if np.isfinite(v_end_over_v_mean)
-            else np.nan,
+            "phase_locking_residual": float(phase_locking_residual) if np.isfinite(phase_locking_residual) else np.nan,
+            "E_recon_H_MAX": float(E_recon_H_MAX) if np.isfinite(E_recon_H_MAX) else np.nan,
+            "Q_t_skew": float(Q_t_skew) if np.isfinite(Q_t_skew) else np.nan,
+            "Q_t_width": float(Q_t_width) if np.isfinite(Q_t_width) else np.nan,
+            "R_Q_t": float(R_Q_t) if np.isfinite(R_Q_t) else np.nan,
+            "Q_d_skew": float(d_metrics["Q_d_skew"]) if np.isfinite(d_metrics["Q_d_skew"]) else np.nan,
+            "Q_d_width": float(d_metrics["Q_d_width"]) if np.isfinite(d_metrics["Q_d_width"]) else np.nan,
+            "R_Q_d": float(d_metrics["R_Q_d"]) if np.isfinite(d_metrics["R_Q_d"]) else np.nan,
+            "v_end_over_v_mean": float(v_end_over_v_mean) if np.isfinite(v_end_over_v_mean) else np.nan,
             "E_slope": float(E_slope) if np.isfinite(E_slope) else np.nan,
             "E_curv": float(E_curv) if np.isfinite(E_curv) else np.nan,
         }
@@ -904,6 +872,11 @@ class ArterialSegExample(ProcessPipeline):
             ["t50_over_T", "t50/T", ""],
             ["t75_over_T", "t75/T", ""],
             ["t90_over_T", "t90/T", ""],
+            ["d10", "d(0.10T)=D(0.10T)/D(T)", ""],
+            ["d25", "d(0.25T)=D(0.25T)/D(T)", ""],
+            ["d50", "d(0.50T)=D(0.50T)/D(T)", ""],
+            ["d75", "d(0.75T)=D(0.75T)/D(T)", ""],
+            ["d90", "d(0.90T)=D(0.90T)/D(T)", ""],
             ["E_low_over_E_total", "sum(|Vn|**2,n<=k)/sum(|Vn|**2)", ""],
             ["E_high_over_E_total", "sum(|Vn|**2,n>k)/sum(|Vn|**2)", ""],
             ["t_max_over_T", "t_max/T", ""],
@@ -919,7 +892,7 @@ class ArterialSegExample(ProcessPipeline):
                 "V_max/(mean(V(t in [ratio_vend_start*T,ratio_vend_end*T]))+eps)",
                 "",
             ],
-            ["Delta_DTI", "int_0^1(d*(tau)-d0*(tau))dtau", ""],
+            ["Delta_DTI", "int_0^1(d(tauT)-tau)dtau", ""],
             ["gamma_t", "sum(w(t)*((t-mu)/sigma)^3)/sum(w(t))", ""],
             ["tauH", "sum(wn*(1/omega_n)*sqrt(1/|Xn|**2-1))/sum(wn)", "seconds"],
             ["crest_factor", "V_max/V_RMS", ""],
@@ -942,8 +915,12 @@ class ArterialSegExample(ProcessPipeline):
                 "rad^2",
             ],
             ["E_recon_H_MAX", "int(v-v_0:HMAX)^2 dt / int(v^2) dt", ""],
-            ["Q_skew", "((t90-t50)-(t50-t10))/(t90-t10+eps)", ""],
-            ["Q_width", "(t75-t25)/T", ""],
+            ["Q_t_skew", "((t90-t50)-(t50-t10))/(t90-t10+eps)", ""],
+            ["Q_t_width", "(t75-t25)/T", ""],
+            ["R_Q_t", "Q_t_skew/(Q_t_width+eps)", ""],
+            ["Q_d_skew", "((d90-d50)-(d50-d10))/(d90-d10+eps)", ""],
+            ["Q_d_width", "d75-d25", ""],
+            ["R_Q_d", "Q_d_skew/(Q_d_width+eps)", ""],
             [
                 "v_end_over_v_mean",
                 "mean(v[t in ratio_vend_start*T:ratio_vend_end*T])/mean(v)",
@@ -954,13 +931,6 @@ class ArterialSegExample(ProcessPipeline):
         ]
 
     def _compute_block_segment(self, v_block: np.ndarray, T: np.ndarray):
-        """
-        v_block: (n_t, n_beats, n_branches, n_radii)
-        Returns:
-          per-segment arrays: (n_beats, n_segments)
-          per-branch arrays:  (n_beats, n_branches)   (median over radii)
-          global arrays:      (n_beats,)              (mean over all branches & radii)
-        """
         if v_block.ndim != 4:
             raise ValueError(
                 f"Expected (n_t,n_beats,n_branches,n_radii), got {v_block.shape}"
@@ -1015,10 +985,6 @@ class ArterialSegExample(ProcessPipeline):
         return seg, br, gl, n_branches, n_radii, seg_order_note
 
     def _compute_block_global(self, v_global: np.ndarray, T: np.ndarray):
-        """
-        v_global: (n_t, n_beats) after _ensure_time_by_beat
-        Returns dict of arrays each shaped (n_beats,)
-        """
         n_beats = int(T.shape[1])
         v_global = self._ensure_time_by_beat(v_global, n_beats)
         v_global = self._rectify_keep_nan(v_global)
@@ -1051,6 +1017,11 @@ class ArterialSegExample(ProcessPipeline):
             "t50_over_T": r"$\frac{t_{50}}{T}$",
             "t75_over_T": r"$\frac{t_{75}}{T}$",
             "t90_over_T": r"$\frac{t_{90}}{T}$",
+            "d10": r"$d_{10}=d(0.10T)=\frac{D(0.10T)}{D(T)}$",
+            "d25": r"$d_{25}=d(0.25T)=\frac{D(0.25T)}{D(T)}$",
+            "d50": r"$d_{50}=d(0.50T)=\frac{D(0.50T)}{D(T)}$",
+            "d75": r"$d_{75}=d(0.75T)=\frac{D(0.75T)}{D(T)}$",
+            "d90": r"$d_{90}=d(0.90T)=\frac{D(0.90T)}{D(T)}$",
             "E_low_over_E_total": r"$\frac{\sum_{n=1}^{k}|V_n|^2}{\sum_{n\geq 0}|V_n|^2}$",
             "E_high_over_E_total": r"$\frac{\sum_{n=k+1}^{N}|V_n|^2}{\sum_{n\geq 0}|V_n|^2}$",
             "t_max_over_T": r"$\frac{t_{\max}}{T}$",
@@ -1062,7 +1033,7 @@ class ArterialSegExample(ProcessPipeline):
             "t_down_over_T": r"$\frac{t_{\mathrm{down}}}{T}$",
             "S_decay": r"$\frac{(v_{\min}-v_{\max})\,T}{\Delta t\,\bar v}$",
             "R_SD": r"$\frac{v_{\max}}{\mathrm{mean}_{t\in[\alpha T,\beta T]} v(t)+\epsilon}$",
-            "Delta_DTI": r"$\int_0^1 \left[d^*(\tau)-d_0^*(\tau)\right]d\tau$",
+            "Delta_DTI": r"$\int_0^1 \left[d(\tau T)-\tau\right]d\tau$",
             "gamma_t": r"$\frac{1}{M_0}\sum_t v(t)\left(\frac{t-\mu_t}{\sigma_t}\right)^3$",
             "tauH": r"$\tau_H=\frac{\sum_n |V_n|\frac{1}{\omega_n}\sqrt{\frac{1}{|X_n|^2}-1}}{\sum_n |V_n|}$",
             "crest_factor": r"$\frac{v_{\max}}{v_{\mathrm{RMS}}}$",
@@ -1081,8 +1052,12 @@ class ArterialSegExample(ProcessPipeline):
             "R_slope": r"$\frac{S_{\mathrm{rise}}}{S_{\mathrm{fall}}+\epsilon}$",
             "phase_locking_residual": r"$E_{\phi}=\frac{\sum_{n=2}^{N} w_n\,\mathrm{wrap}(\phi_n-n\phi_1)^2}{\sum_{n=2}^{N} w_n+\epsilon}$",
             "E_recon_H_MAX": r"$E_{\mathrm{recon},H_{\max}}=\frac{\int_0^T (v(t)-v_{0:H_{\max}}(t))^2\,dt}{\int_0^T v(t)^2\,dt+\epsilon}$",
-            "Q_skew": r"$Q_{\mathrm{skew}}=\frac{(t_{90}-t_{50})-(t_{50}-t_{10})}{t_{90}-t_{10}+\epsilon}$",
-            "Q_width": r"$Q_{\mathrm{width}}=\frac{t_{75}-t_{25}}{T}$",
+            "Q_t_skew": r"$Q_{t,\mathrm{skew}}=\frac{(t_{90}-t_{50})-(t_{50}-t_{10})}{t_{90}-t_{10}+\epsilon}$",
+            "Q_t_width": r"$Q_{t,\mathrm{width}}=\frac{t_{75}-t_{25}}{T}$",
+            "R_Q_t": r"$R_{Q_t}=\frac{Q_{t,\mathrm{skew}}}{Q_{t,\mathrm{width}}+\epsilon}$",
+            "Q_d_skew": r"$Q_{d,\mathrm{skew}}=\frac{(d_{90}-d_{50})-(d_{50}-d_{10})}{d_{90}-d_{10}+\epsilon}$",
+            "Q_d_width": r"$Q_{d,\mathrm{width}}=d_{75}-d_{25}$",
+            "R_Q_d": r"$R_{Q_d}=\frac{Q_{d,\mathrm{skew}}}{Q_{d,\mathrm{width}}+\epsilon}$",
             "v_end_over_v_mean": r"$\frac{\bar v_{\mathrm{end}}}{v_{\mathrm{mean}}}=\frac{\mathrm{mean}_{t\in[\alpha T,\beta T]} v(t)}{\mathrm{mean}_{t\in[0,T]} v(t)}$",
             "E_slope": r"$E_{\mathrm{slope}}=\frac{T^2}{M_0^2}\int_0^T \left(\frac{dv}{dt}\right)^2 dt$",
             "E_curv": r"$E_{\mathrm{curv}}=\frac{T^4}{M_0^2}\int_0^T \left(\frac{d^2v}{dt^2}\right)^2 dt$",
