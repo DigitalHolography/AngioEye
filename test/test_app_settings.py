@@ -7,6 +7,7 @@ from app_settings import (
     AppSettingsStore,
     default_settings_path,
     normalize_pipeline_visibility,
+    normalize_postprocess_visibility,
 )
 
 
@@ -45,6 +46,24 @@ class AppSettingsTests(unittest.TestCase):
             store.save_pipeline_visibility(expected)
 
             self.assertEqual(store.load_pipeline_visibility(), expected)
+
+    def test_normalize_postprocess_visibility_defaults_first_run_to_visible(self) -> None:
+        visibility, changed = normalize_postprocess_visibility(
+            ["Graphics Dashboard"],
+            {},
+        )
+
+        self.assertEqual(visibility, {"Graphics Dashboard": True})
+        self.assertTrue(changed)
+
+    def test_store_round_trips_postprocess_visibility(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            store = AppSettingsStore(Path(tmp_dir) / "settings.json")
+            expected = {"Graphics Dashboard": True}
+
+            store.save_postprocess_visibility(expected)
+
+            self.assertEqual(store.load_postprocess_visibility(), expected)
 
 
 if __name__ == "__main__":

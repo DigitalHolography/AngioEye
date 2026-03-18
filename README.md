@@ -35,13 +35,16 @@ pip install -e .
 
 # Installs pipeline-specific dependencies (optional)
 pip install -e ".[pipelines]"
+
+# Installs postprocess-specific dependencies such as the graphics dashboard (optional)
+pip install -e ".[postprocess]"
 ```
 
 ### 2. Development Setup (Contributor)
 
 ```sh
 # Install all dependencies including dev tools (ruff, pre-commit, pyinstaller)
-pip install -e ".[dev,pipelines]"
+pip install -e ".[dev,pipelines,postprocess]"
 
 # Initialize pre-commit hooks (optionnal)
 pre-commit install
@@ -73,7 +76,10 @@ Launch the main application to process files interactively:
 
 The GUI handles batch processing for folders, single .h5/.hdf5 files, or .zip archives and lets you run multiple pipelines at once. Batch outputs preserve the input subfolder layout under the chosen output directory (one combined `.h5` per input file).
 
+You can also select batch-level postprocess steps. These run after the selected pipelines finish and before optional zipping, so any generated dashboards, PNGs, or summaries are included in the final output folder or archive.
+
 Use the Pipeline Library tab to decide which pipelines are shown in the main Batch tab. Visibility preferences are saved per user between app launches, including installed builds.
+Use the Postprocess Library tab the same way for postprocess steps.
 
 ```sh
 # Via the entry point
@@ -135,3 +141,15 @@ class MyAnalysis(ProcessPipeline):
             attrs=attrs
         )
 ```
+
+## Postprocess System
+
+Postprocess steps are discovered from `src/postprocess/` in the same spirit as pipelines, but they run once per batch over the generated pipeline output folder.
+
+Use `@registerPostprocess(...)` to declare:
+
+- optional Python package dependencies with `required_deps`
+- required pipeline outputs with `required_pipelines`
+
+The included `Graphics Dashboard` postprocess shows the intended pattern: it consumes the `arterial_waveform_shape_metrics` output and generates a cohort dashboard plus PNG exports after the batch finishes.
+`Pipeline Metrics Manifest` is a lighter built-in example that writes a JSON inventory of the generated pipeline metric datasets for the batch.

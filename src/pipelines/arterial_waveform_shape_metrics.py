@@ -580,7 +580,6 @@ class ArterialSegExample(ProcessPipeline):
         dt = Tbeat / n
         D = np.nancumsum(np.where(np.isfinite(v), v, 0.0))
         d = D / (m0 + self.eps)
-        print(d)
 
         def sample_at_ratio(r: float) -> float:
             idx = int(np.floor(r * n))
@@ -817,75 +816,85 @@ class ArterialSegExample(ProcessPipeline):
             "d90": float(d_metrics["d90"]) if np.isfinite(d_metrics["d90"]) else np.nan,
             "E_low_over_E_total": float(E_low_over_E_total),
             "E_high_over_E_total": float(E_high_over_E_total),
-            "t_max_over_T": float(t_max_over_T)
-            if np.isfinite(t_max_over_T)
-            else np.nan,
-            "t_min_over_T": float(t_min_over_T)
-            if np.isfinite(t_min_over_T)
-            else np.nan,
-            "Delta_t_over_T": float(Delta_t_over_T)
-            if np.isfinite(Delta_t_over_T)
-            else np.nan,
-            "slope_rise_normalized": float(slope_rise_normalized)
-            if np.isfinite(slope_rise_normalized)
-            else np.nan,
-            "slope_fall_normalized": float(slope_fall_normalized)
-            if np.isfinite(slope_fall_normalized)
-            else np.nan,
+            "t_max_over_T": (
+                float(t_max_over_T) if np.isfinite(t_max_over_T) else np.nan
+            ),
+            "t_min_over_T": (
+                float(t_min_over_T) if np.isfinite(t_min_over_T) else np.nan
+            ),
+            "Delta_t_over_T": (
+                float(Delta_t_over_T) if np.isfinite(Delta_t_over_T) else np.nan
+            ),
+            "slope_rise_normalized": (
+                float(slope_rise_normalized)
+                if np.isfinite(slope_rise_normalized)
+                else np.nan
+            ),
+            "slope_fall_normalized": (
+                float(slope_fall_normalized)
+                if np.isfinite(slope_fall_normalized)
+                else np.nan
+            ),
             "t_up_over_T": float(t_up_over_T) if np.isfinite(t_up_over_T) else np.nan,
-            "t_down_over_T": float(t_down_over_T)
-            if np.isfinite(t_down_over_T)
-            else np.nan,
+            "t_down_over_T": (
+                float(t_down_over_T) if np.isfinite(t_down_over_T) else np.nan
+            ),
             "S_decay": float(S_decay) if np.isfinite(S_decay) else np.nan,
             "R_SD": float(R_SD) if np.isfinite(R_SD) else np.nan,
             "Delta_DTI": float(Delta_DTI) if np.isfinite(Delta_DTI) else np.nan,
             "gamma_t": float(gamma_t) if np.isfinite(gamma_t) else np.nan,
             "tauH": float(tauH) if np.isfinite(tauH) else np.nan,
-            "crest_factor": float(crest_factor)
-            if np.isfinite(crest_factor)
-            else np.nan,
-            "spectral_entropy": float(spectral_entropy)
-            if np.isfinite(spectral_entropy)
-            else np.nan,
+            "crest_factor": (
+                float(crest_factor) if np.isfinite(crest_factor) else np.nan
+            ),
+            "spectral_entropy": (
+                float(spectral_entropy) if np.isfinite(spectral_entropy) else np.nan
+            ),
             "phi1": float(ph["phi1"]) if np.isfinite(ph["phi1"]) else np.nan,
             "phi2": float(ph["phi2"]) if np.isfinite(ph["phi2"]) else np.nan,
             "phi3": float(ph["phi3"]) if np.isfinite(ph["phi3"]) else np.nan,
-            "delta_phi2": float(ph["delta_phi2"])
-            if np.isfinite(ph["delta_phi2"])
-            else np.nan,
-            "delta_phi3": float(ph["delta_phi3"])
-            if np.isfinite(ph["delta_phi3"])
-            else np.nan,
+            "delta_phi2": (
+                float(ph["delta_phi2"]) if np.isfinite(ph["delta_phi2"]) else np.nan
+            ),
+            "delta_phi3": (
+                float(ph["delta_phi3"]) if np.isfinite(ph["delta_phi3"]) else np.nan
+            ),
             "mu_h": float(mu_h) if np.isfinite(mu_h) else np.nan,
             "sigma_h": float(sigma_h) if np.isfinite(sigma_h) else np.nan,
             "G_t": float(G_t) if np.isfinite(G_t) else np.nan,
             "N_eff": float(N_eff) if np.isfinite(N_eff) else np.nan,
-            "N_eff_over_T": float(N_eff_over_T)
-            if np.isfinite(N_eff_over_T)
-            else np.nan,
+            "N_eff_over_T": (
+                float(N_eff_over_T) if np.isfinite(N_eff_over_T) else np.nan
+            ),
             "R_pre_post": float(R_pre_post) if np.isfinite(R_pre_post) else np.nan,
             "R_slope": float(R_slope) if np.isfinite(R_slope) else np.nan,
-            "phase_locking_residual": float(phase_locking_residual)
-            if np.isfinite(phase_locking_residual)
-            else np.nan,
-            "E_recon_H_MAX": float(E_recon_H_MAX)
-            if np.isfinite(E_recon_H_MAX)
-            else np.nan,
+            "phase_locking_residual": (
+                float(phase_locking_residual)
+                if np.isfinite(phase_locking_residual)
+                else np.nan
+            ),
+            "E_recon_H_MAX": (
+                float(E_recon_H_MAX) if np.isfinite(E_recon_H_MAX) else np.nan
+            ),
             "Q_t_skew": float(Q_t_skew) if np.isfinite(Q_t_skew) else np.nan,
             "Q_t_width": float(Q_t_width) if np.isfinite(Q_t_width) else np.nan,
             "R_Q_t": float(R_Q_t) if np.isfinite(R_Q_t) else np.nan,
-            "Q_d_skew": float(d_metrics["Q_d_skew"])
-            if np.isfinite(d_metrics["Q_d_skew"])
-            else np.nan,
-            "Q_d_width": float(d_metrics["Q_d_width"])
-            if np.isfinite(d_metrics["Q_d_width"])
-            else np.nan,
-            "R_Q_d": float(d_metrics["R_Q_d"])
-            if np.isfinite(d_metrics["R_Q_d"])
-            else np.nan,
-            "v_end_over_v_mean": float(v_end_over_v_mean)
-            if np.isfinite(v_end_over_v_mean)
-            else np.nan,
+            "Q_d_skew": (
+                float(d_metrics["Q_d_skew"])
+                if np.isfinite(d_metrics["Q_d_skew"])
+                else np.nan
+            ),
+            "Q_d_width": (
+                float(d_metrics["Q_d_width"])
+                if np.isfinite(d_metrics["Q_d_width"])
+                else np.nan
+            ),
+            "R_Q_d": (
+                float(d_metrics["R_Q_d"]) if np.isfinite(d_metrics["R_Q_d"]) else np.nan
+            ),
+            "v_end_over_v_mean": (
+                float(v_end_over_v_mean) if np.isfinite(v_end_over_v_mean) else np.nan
+            ),
             "E_slope": float(E_slope) if np.isfinite(E_slope) else np.nan,
             "E_curv": float(E_curv) if np.isfinite(E_curv) else np.nan,
         }
