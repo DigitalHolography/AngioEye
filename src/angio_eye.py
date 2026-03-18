@@ -1,8 +1,10 @@
 import os
 import tempfile
+import threading
+import time
 import tkinter as tk
 import zipfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
@@ -673,7 +675,13 @@ class ProcessApp(tk.Tk):
         failures: list[str] = []
         for h5_path in inputs:
             try:
-                self._run_pipelines_on_file(h5_path, pipelines, output_dir)
+                relative_parent = self._relative_input_parent(h5_path, data_root)
+                self._run_pipelines_on_file(
+                    h5_path,
+                    pipelines,
+                    output_dir,
+                    output_relative_parent=relative_parent,
+                )
             except Exception as exc:  # noqa: BLE001
                 failures.append(f"{h5_path}: {exc}")
                 self._log_batch(f"[FAIL] {h5_path.name}: {exc}")
@@ -684,8 +692,26 @@ class ProcessApp(tk.Tk):
                 zip_name = self.batch_zip_name_var.get().strip() or "outputs.zip"
                 if not zip_name.lower().endswith(".zip"):
                     zip_name += ".zip"
+                self._log_batch("[ZIP] Preparing archive...")
+                last_progress_log = 0.0
+
+                def _zip_progress(done: int, total: int, _rel_path: Path) -> None:
+                    nonlocal last_progress_log
+                    now = time.monotonic()
+                    if done == total or (now - last_progress_log) >= 0.5:
+                        pct = 100 if total == 0 else int((done * 100) / total)
+                        self._log_batch(f"[ZIP] {done}/{total} files ({pct}%)")
+                        last_progress_log = now
+                        try:
+                            # Keep the UI responsive while archiving large batches.
+                            self.update()
+                        except tk.TclError:
+                            pass
+
                 zip_path = self._zip_output_dir(
-                    output_dir, target_path=base_output_dir / zip_name
+                    output_dir,
+                    target_path=base_output_dir / zip_name,
+                    progress_callback=_zip_progress,
                 )
                 self._log_batch(f"[ZIP] Archive created: {zip_path}")
                 summary_msg = f"ZIP archive: {zip_path}"
@@ -743,18 +769,28 @@ class ProcessApp(tk.Tk):
             return files
         raise FileNotFoundError(f"Input path does not exist: {path}")
 
+    def _relative_input_parent(self, h5_path: Path, input_root: Path) -> Path:
+        if input_root.is_dir():
+            try:
+                return h5_path.resolve().relative_to(input_root.resolve()).parent
+            except ValueError:
+                pass
+        return Path(".")
+
     def _run_pipelines_on_file(
         self,
         h5_path: Path,
         pipelines: Sequence[PipelineDescriptor],
         output_root: Path,
+        output_relative_parent: Path = Path("."),
     ) -> None:
-        # Place combined output directly in the output root (no per-file subfolder).
-        combined_h5_out = output_root / f"{h5_path.stem}_pipelines_result.h5"
+        target_dir = output_root / output_relative_parent
+        target_dir.mkdir(parents=True, exist_ok=True)
+        combined_h5_out = target_dir / f"{h5_path.stem}_pipelines_result.h5"
         suffix = 1
         while combined_h5_out.exists():
             combined_h5_out = (
-                output_root / f"{h5_path.stem}_{suffix}_pipelines_result.h5"
+                target_dir / f"{h5_path.stem}_{suffix}_pipelines_result.h5"
             )
             suffix += 1
 
@@ -770,14 +806,56 @@ class ProcessApp(tk.Tk):
                     ) from exc
                 pipeline_results.append((pipeline.name, result))
                 self._log_batch(f"[OK] {h5_path.name} -> {pipeline.name}")
-        write_combined_results_h5(
-            pipeline_results, combined_h5_out, source_file=str(h5_path)
+        self._log_batch(f"[SAVE] Writing output file -> {combined_h5_out.name}")
+        self._write_combined_results_with_ui_pump(
+            pipeline_results=pipeline_results,
+            combined_h5_out=combined_h5_out,
+            source_file=str(h5_path),
         )
         for _, result in pipeline_results:
             result.output_h5_path = str(combined_h5_out)
         self._log_batch(f"[OK] {h5_path.name}: combined results -> {combined_h5_out}")
 
-    def _zip_output_dir(self, folder: Path, target_path: Path | None = None) -> Path:
+    def _write_combined_results_with_ui_pump(
+        self,
+        pipeline_results: Sequence[tuple[str, ProcessResult]],
+        combined_h5_out: Path,
+        source_file: str,
+    ) -> None:
+        errors: list[Exception] = []
+        done_event = threading.Event()
+
+        def _worker() -> None:
+            try:
+                write_combined_results_h5(
+                    pipeline_results,
+                    combined_h5_out,
+                    source_file=source_file,
+                )
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+            finally:
+                done_event.set()
+
+        writer_thread = threading.Thread(target=_worker, daemon=True)
+        writer_thread.start()
+        while not done_event.wait(timeout=0.05):
+            try:
+                # Let Tk process paint/events while output file is being written.
+                self.update_idletasks()
+                self.update()
+            except tk.TclError:
+                break
+        writer_thread.join()
+        if errors:
+            raise errors[0]
+
+    def _zip_output_dir(
+        self,
+        folder: Path,
+        target_path: Path | None = None,
+        progress_callback: Callable[[int, int, Path], None] | None = None,
+    ) -> Path:
         folder = folder.expanduser().resolve()
         if not folder.exists() or not folder.is_dir():
             raise FileNotFoundError(f"Output folder does not exist: {folder}")
@@ -788,10 +866,24 @@ class ProcessApp(tk.Tk):
             zip_path = target_path.expanduser().resolve()
         if zip_path.exists():
             zip_path.unlink()
-        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            for file_path in folder.rglob("*"):
-                if file_path.is_file():
-                    zf.write(file_path, file_path.relative_to(folder))
+        files = sorted(
+            (file_path for file_path in folder.rglob("*") if file_path.is_file()),
+            key=lambda path: str(path.relative_to(folder)),
+        )
+        total_files = len(files)
+        if progress_callback is not None:
+            progress_callback(0, total_files, Path("."))
+        with zipfile.ZipFile(
+            zip_path,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+            compresslevel=1,
+        ) as zf:
+            for idx, file_path in enumerate(files, start=1):
+                rel_path = file_path.relative_to(folder)
+                zf.write(file_path, rel_path)
+                if progress_callback is not None:
+                    progress_callback(idx, total_files, rel_path)
         return zip_path
 
 
