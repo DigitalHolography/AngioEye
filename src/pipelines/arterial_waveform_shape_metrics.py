@@ -611,7 +611,7 @@ class ArterialSegExample(ProcessPipeline):
         if (not np.isfinite(m0)) or m0 <= 0:
             return out
 
-        D = np.nancumsum(np.where(np.isfinite(v), v, 0.0)) * (Tbeat / v.size)
+        D = np.nancumsum(np.where(np.isfinite(v), v, 0.0))
         d = D / (m0 + self.eps)
 
         def sample_at_ratio(r: float) -> float:
@@ -709,6 +709,109 @@ class ArterialSegExample(ProcessPipeline):
         E_curv = float((Tbeat**4) * np.sum(d2vdt2**2) * dt / ((m0 + self.eps) ** 2))
 
         return E_slope, E_curv
+
+    def _compute_graphics_support_1d(self, v: np.ndarray, Tbeat: float) -> dict:
+        """
+        Calcule toutes les valeurs intermédiaires utiles à graphics.py
+        à partir d'un seul signal 1D (le signal moyen du fichier).
+        """
+        v = self._rectify_keep_nan(v)
+        n = int(v.size)
+
+        if n <= 1 or (not np.isfinite(Tbeat)) or Tbeat <= 0:
+            return {}
+
+        vv = np.where(np.isfinite(v), v, np.nan)
+        m0 = float(np.nansum(vv))
+        if m0 <= 0:
+            return {}
+
+        tau = np.linspace(0.0, 1.0, n, endpoint=False)
+        dt = Tbeat / n
+        t = np.arange(n, dtype=float) * dt
+
+        vmax = float(np.nanmax(vv))
+        vmin = float(np.nanmin(vv))
+        vmean = float(self._safe_nanmean(vv))
+
+        # Cumulative
+        cumulative = np.nancumsum(vv) / (m0 + self.eps)
+        d_star = np.asarray(cumulative, dtype=float)
+        d0_star = np.asarray(tau, dtype=float)
+        delta_dti_curve = d_star - d0_star
+
+        hp = self._harmonic_pack(vv, Tbeat)
+        V = hp["V"]
+        vb = hp["vb"]
+        H = hp["H"]
+
+        if V is not None and H >= 1:
+            mags = np.abs(V[1 : H + 1])
+            mags = np.where(np.isfinite(mags), mags, np.nan)
+            mag_sum = float(np.nansum(mags))
+            harmonic_weights = (
+                mags / (mag_sum + self.eps)
+                if mag_sum > 0
+                else np.full_like(mags, np.nan)
+            )
+
+            phases = np.angle(V[1 : H + 1])
+            phi1 = float(np.angle(V[1])) if H >= 1 else np.nan
+            delta_phi_all = np.full((max(H - 1, 0),), np.nan, dtype=float)
+            for h in range(2, H + 1):
+                delta_phi_all[h - 2] = self._wrap_pi(float(np.angle(V[h])) - h * phi1)
+        else:
+            harmonic_weights = np.array([], dtype=float)
+            mags = np.array([], dtype=float)
+            phases = np.array([], dtype=float)
+            delta_phi_all = np.array([], dtype=float)
+
+        dvdt = np.gradient(np.where(np.isfinite(vv), vv, 0.0), dt)
+        d2vdt2 = np.gradient(dvdt, dt)
+
+        d_samples = self._normalized_cumulative_displacement_samples(vv, Tbeat, m0)
+
+        metrics = self._compute_metrics_1d(vv, Tbeat)
+
+        k0, k1 = self._late_window_indices(n)
+        vend = float(self._safe_nanmean(vv[k0:k1])) if k1 > k0 else np.nan
+
+        return {
+            "delta_dti_curve": np.asarray(delta_dti_curve, dtype=float),
+            "signal_mean": np.asarray(vv, dtype=float),
+            "tau": np.asarray(tau, dtype=float),
+            "cumulative": np.asarray(cumulative, dtype=float),
+            "vb": np.asarray(vb, dtype=float)
+            if vb is not None
+            else np.full((n,), np.nan),
+            "dvdt": np.asarray(dvdt, dtype=float),
+            "d2vdt2": np.asarray(d2vdt2, dtype=float),
+            "harmonic_magnitudes": np.asarray(mags, dtype=float),
+            "harmonic_weights": np.asarray(harmonic_weights, dtype=float),
+            "harmonic_phases": np.asarray(phases, dtype=float),
+            "delta_phi_all": np.asarray(delta_phi_all, dtype=float),
+            "vmax": np.asarray(vmax, dtype=float),
+            "vmin": np.asarray(vmin, dtype=float),
+            "vmean": np.asarray(vmean, dtype=float),
+            "m0": np.asarray(m0, dtype=float),
+            "vend": np.asarray(vend, dtype=float),
+            "late_window_start_idx": np.asarray(k0, dtype=int),
+            "late_window_end_idx": np.asarray(k1, dtype=int),
+            **{k: np.asarray(v, dtype=float) for k, v in metrics.items()},
+            **{k: np.asarray(v, dtype=float) for k, v in d_samples.items()},
+        }
+
+    def _compute_graphics_support_global(
+        self, v_global: np.ndarray, T: np.ndarray
+    ) -> dict:
+        n_beats = int(T.shape[1])
+        v_global = self._ensure_time_by_beat(v_global, n_beats)
+        v_global = self._rectify_keep_nan(v_global)
+
+        mean_signal = np.nanmean(v_global, axis=1)
+        Tref = float(np.nanmean(T))
+
+        return self._compute_graphics_support_1d(mean_signal, Tref)
 
     def _compute_metrics_1d(self, v: np.ndarray, Tbeat: float) -> dict:
         """
@@ -1216,7 +1319,8 @@ class ArterialSegExample(ProcessPipeline):
 
             out_raw = self._compute_block_global(v_raw_gl, T)
             out_band = self._compute_block_global(v_band_gl, T)
-
+            graphics_raw = self._compute_graphics_support_global(v_raw_gl, T)
+            graphics_band = self._compute_graphics_support_global(v_band_gl, T)
             for k in self._metric_keys():
                 metrics[f"global/raw/{k[0]}"] = with_attrs(
                     out_raw[k[0]],
@@ -1256,5 +1360,10 @@ class ArterialSegExample(ProcessPipeline):
             metrics["global/params/H_PHASE_RESIDUAL"] = np.asarray(
                 self.H_PHASE_RESIDUAL, dtype=int
             )
+            for name, arr in graphics_raw.items():
+                metrics[f"graphics_support/raw/{name}"] = arr
+
+            for name, arr in graphics_band.items():
+                metrics[f"graphics_support/bandlimited/{name}"] = arr
 
         return ProcessResult(metrics=metrics)
