@@ -100,10 +100,10 @@ LATEX_FORMULAS = {
     "R_pre_post": r"$R_{{pre/post}}$",
     "R_slope": r"$R_{\mathrm{slope}}$",
     "E_recon_H_MAX": r"$E_{\mathrm{recon},H_{\max}}$",
-    "Q_t_skew": r"$Q_{\mathrm{t_{{skew}}}}$",
-    "Q_t_width": r"$Q_{\mathrm{t_{{width}}}}$",
-    "Q_d_skew": r"$Q_{\mathrm{d_{{skew}}}}$",
-    "Q_d_width": r"$Q_{\mathrm{d_{{width}}}}$",
+    "Q_t_skew": r"$Q_{\mathrm{t,skew}}$",
+    "Q_t_width": r"$Q_{\mathrm{t,width}}$",
+    "Q_d_skew": r"$Q_{\mathrm{d,skew}}$",
+    "Q_d_width": r"$Q_{\mathrm{d,width}}$",
     "R_Q_t": r"$R_{\mathrm{Q_{{t}}}}$",
     "R_Q_d": r"$R_{\mathrm{Q_{{d}}}}$",
     "v_end_over_v_mean": r"$R_{EM}$",
@@ -554,7 +554,7 @@ def plot_metric_illustration(ax, metric, sig_control, path):
 
         info_box(
             [
-                rf"$Q_{{t_{{skew}}}}={Q_t_skew:.3f}$",
+                rf"$Q_{{t,skew}}={Q_t_skew:.3f}$",
                 f"t10={t10:.3f}, t50={t50:.3f}, t90={t90:.3f}",
             ]
         )
@@ -584,7 +584,7 @@ def plot_metric_illustration(ax, metric, sig_control, path):
 
         info_box(
             [
-                rf"$Q_{{d_{{skew}}}}={Q_d_skew:.3f}$",
+                rf"$Q_{{d,skew}}={Q_d_skew:.3f}$",
                 f"d10={d10:.3f}, d50={d50:.3f}, d90={d90:.3f}",
             ]
         )
@@ -615,9 +615,7 @@ def plot_metric_illustration(ax, metric, sig_control, path):
             tau, 0, C, where=(tau >= t25) & (tau <= t75), color="#F2CCC7", alpha=0.7
         )
 
-        info_box(
-            [rf"$Q_{{t_{{width}}}}={Q_t_width:.3f}$", f"t25={t25:.3f}, t75={t75:.3f}"]
-        )
+        info_box([rf"$Q_{{t,width}}={Q_t_width:.3f}$", f"t25={t25:.3f}, t75={t75:.3f}"])
         ax.set_xlabel("rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$C(\tau) \: (a.u.)$", fontsize=14, labelpad=12)
     elif metric == "Q_d_width":
@@ -643,9 +641,7 @@ def plot_metric_illustration(ax, metric, sig_control, path):
         x_curve = np.interp(y_fill, C, tau)
 
         ax.fill_betweenx(y_fill, 0, x_curve, color="#F2CCC7", alpha=0.7)
-        info_box(
-            [rf"$Q_{{d_{{width}}}}={Q_d_width:.3f}$", f"d25={d25:.3f}, d75={d75:.3f}"]
-        )
+        info_box([rf"$Q_{{d,width}}={Q_d_width:.3f}$", f"d25={d25:.3f}, d75={d75:.3f}"])
         ax.set_xlabel("rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$C(\tau) \: (a.u.)$", fontsize=14, labelpad=12)
     elif metric == "R_Q_d":
@@ -687,8 +683,8 @@ def plot_metric_illustration(ax, metric, sig_control, path):
 
         info_box(
             [
-                rf"$Q_{{d_{{width}}}}={Q_d_width:.3f}$",
-                rf"$Q_{{d_{{skew}}}}={Q_d_skew:.3f}$",
+                rf"$Q_{{d,width}}={Q_d_width:.3f}$",
+                rf"$Q_{{d,skew}}={Q_d_skew:.3f}$",
                 rf"$R_{{Q_{{d}}}}={R_Q_d:.3f}$",
             ]
         )
@@ -730,8 +726,8 @@ def plot_metric_illustration(ax, metric, sig_control, path):
 
         info_box(
             [
-                rf"$Q_{{t_{{width}}}}={Q_t_width:.3f}$",
-                rf"$Q_{{t_{{skew}}}}={Q_t_skew:.3f}$",
+                rf"$Q_{{t,width}}={Q_t_width:.3f}$",
+                rf"$Q_{{t,skew}}={Q_t_skew:.3f}$",
                 rf"$R_{{Q_{{t}}}}={R_Q_t:.3f}$",
             ]
         )
@@ -1754,7 +1750,7 @@ def export_selected_metric_pngs_bandlimited(
                 ax_empty = fig.add_subplot(right[r, c])
                 ax_empty.axis("off")
 
-            png_path = os.path.join(out_dir, f"{metric}_bandlimited.png")
+            png_path = os.path.join(out_dir, f"{metric}_bandlimited.eps")
             fig.savefig(png_path)
             plt.close(fig)
 
