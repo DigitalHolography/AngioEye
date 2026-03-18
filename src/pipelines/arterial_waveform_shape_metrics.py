@@ -15,9 +15,7 @@ class ArterialSegExample(ProcessPipeline):
     v_raw_segment_input = (
         "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegment/value"
     )
-    v_band_segment_input = (
-        "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegmentBandLimited/value"
-    )
+    v_band_segment_input = "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegmentBandLimited/value"
 
     v_raw_global_input = "/Artery/VelocityPerBeat/VelocitySignalPerBeat/value"
     v_band_global_input = (
@@ -444,7 +442,7 @@ class ArterialSegExample(ProcessPipeline):
         vbb = np.where(np.isfinite(vb), vb, 0.0)
 
         num = float(np.sum((vv - vbb) ** 2))
-        den = float(np.sum(vv ** 2))
+        den = float(np.sum(vv**2))
         if (not np.isfinite(den)) or den <= 0:
             return np.nan
         return float(num / (den + self.eps))
@@ -583,10 +581,10 @@ class ArterialSegExample(ProcessPipeline):
             return np.nan
         if (not np.isfinite(m0)) or m0 <= 0:
             return np.nan
-        d = np.nancumsum(np.where(np.isfinite(v), v, 0.0)) * (Tbeat / v.size)
+        d = np.nancumsum(np.where(np.isfinite(v), v, 0.0))
         d_star = d / (m0 + self.eps)
         d0_star = t / Tbeat
-        return float(np.nansum(d_star - d0_star) / v.size)
+        return float(np.nansum(d_star - d0_star))
 
     def _normalized_cumulative_displacement_samples(
         self, v: np.ndarray, Tbeat: float, m0: float
@@ -647,9 +645,7 @@ class ArterialSegExample(ProcessPipeline):
 
         Q_d_skew = np.nan
         if np.isfinite(d10) and np.isfinite(d50) and np.isfinite(d90):
-            Q_d_skew = float(
-                ((d90 - d50) - (d50 - d10)) / ((d90 - d10) + self.eps)
-            )
+            Q_d_skew = float(((d90 - d50) - (d50 - d10)) / ((d90 - d10) + self.eps))
 
         R_Q_d = np.nan
         if np.isfinite(Q_d_skew) and np.isfinite(Q_d_width):
@@ -769,7 +765,7 @@ class ArterialSegExample(ProcessPipeline):
         SF_VTI = D1_sf / (D1_sf + D2_sf + self.eps)
 
         dtau = t - mu_t
-        m2 = float(np.nansum(vv * (dtau ** 2)))
+        m2 = float(np.nansum(vv * (dtau**2)))
         sigma_t = np.sqrt(m2 / m0 + self.eps)
         sigma_t_over_T = sigma_t / Tbeat
 
