@@ -95,10 +95,10 @@ LATEX_FORMULAS = {
     "N_eff": r"$N_{\mathrm{eff}}$",
     "N_eff_over_T": r"$N_{\mathrm{eff}}/T$",
     "E_recon_H_MAX": r"$E_{\mathrm{recon},H_{\max}}$",
-    "Q_t_skew": r"$Q_{\mathrm{t_{{skew}}}}$",
-    "Q_t_width": r"$Q_{\mathrm{t_{{width}}}}$",
-    "Q_d_skew": r"$Q_{\mathrm{d_{{skew}}}}$",
-    "Q_d_width": r"$Q_{\mathrm{d_{{width}}}}$",
+    "Q_t_skew": r"$Q_{\mathrm{t,skew}}$",
+    "Q_t_width": r"$Q_{\mathrm{t,width}}$",
+    "Q_d_skew": r"$Q_{\mathrm{d,skew}}$",
+    "Q_d_width": r"$Q_{\mathrm{d,width}}$",
     "R_Q_t": r"$R_{\mathrm{Q_{{t}}}}$",
     "R_Q_d": r"$R_{\mathrm{Q_{{d}}}}$",
     "v_end_over_v_mean": r"$R_{EM}$",
@@ -1391,7 +1391,7 @@ def export_selected_metric_pngs_bandlimited(
                 ax_empty = fig.add_subplot(right[r, c])
                 ax_empty.axis("off")
 
-            png_path = os.path.join(out_dir, f"{metric}_bandlimited.png")
+            png_path = os.path.join(out_dir, f"{metric}_bandlimited.eps")
             fig.savefig(png_path)
             plt.close(fig)
 
