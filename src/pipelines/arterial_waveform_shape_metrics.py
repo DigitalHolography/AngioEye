@@ -123,7 +123,6 @@ class ArterialSegExample(ProcessPipeline):
 
         return float(np.interp(q, d_full, tau_full))
 
-
     def _peak_width_over_T(self, v: np.ndarray, alpha: float) -> float:
         """
         Beat-normalized near-peak width:
@@ -651,7 +650,7 @@ class ArterialSegExample(ProcessPipeline):
         vv = np.where(np.isfinite(v), v, 0.0)
         d_full = np.concatenate(([0.0], np.cumsum(vv) / m0))
         tau_full = np.linspace(0.0, 1.0, v.size + 1)
-        return float(np.trapz(d_full - tau_full, tau_full))
+        return float(np.trapezoid(d_full - tau_full, tau_full))
 
     def _normalized_cumulative_displacement_samples(
         self, v: np.ndarray, Tbeat: float, m0: float
@@ -828,7 +827,9 @@ class ArterialSegExample(ProcessPipeline):
             }
 
         # Cumulative displacement geometry sampled on normalized phase
-        d_full = np.concatenate(([0.0], np.cumsum(np.where(np.isfinite(vv), vv, 0.0)) / m0_sum))
+        d_full = np.concatenate(
+            ([0.0], np.cumsum(np.where(np.isfinite(vv), vv, 0.0)) / m0_sum)
+        )
         tau_full = np.linspace(0.0, 1.0, n + 1)
         cumulative = np.interp(tau, tau_full, d_full)
         d_star = np.asarray(cumulative, dtype=float)
@@ -853,11 +854,20 @@ class ArterialSegExample(ProcessPipeline):
         if V is not None and H >= 1:
             mags = np.abs(V[1 : H + 1])
             phases = np.angle(V[1 : H + 1])
-
             harmonic_magnitudes[:H] = mags
             harmonic_phases[:H] = phases
+            mag_sum = float(np.nansum(mags))
+            if np.isfinite(mag_sum) and mag_sum > 0:
+                harmonic_weights[:H] = mags / (mag_sum + self.eps)
 
-        d_samples = self._normalized_cumulative_displacement_samples(vv, Tbeat, m0_sum)
+            if H >= 2 and np.abs(V[1]) > self.eps:
+                phi1 = float(np.angle(V[1]))
+                h_phase = min(H, self.H_PHASE_RESIDUAL)
+                for h in range(2, h_phase + 1):
+                    if np.abs(V[h]) > self.eps:
+                        delta_phi_all[h - 2] = self._wrap_pi(
+                            float(np.angle(V[h])) - h * phi1
+                        )
 
         metrics = self._compute_metrics_1d(vv, Tbeat)
 
@@ -1517,12 +1527,8 @@ class ArterialSegExample(ProcessPipeline):
                 self.ratio_vend_end, dtype=float
             )
             metrics["global/params/eps"] = np.asarray(self.eps, dtype=float)
-            metrics["global/params/ratio_W50"] = np.asarray(
-                self.ratio_W50, dtype=float
-            )
-            metrics["global/params/ratio_W75"] = np.asarray(
-                self.ratio_W75, dtype=float
-            )
+            metrics["global/params/ratio_W50"] = np.asarray(self.ratio_W50, dtype=float)
+            metrics["global/params/ratio_W75"] = np.asarray(self.ratio_W75, dtype=float)
             metrics["global/params/H_LOW_MAX"] = np.asarray(self.H_LOW_MAX, dtype=int)
             metrics["global/params/H_HIGH_MIN"] = np.asarray(self.H_HIGH_MIN, dtype=int)
             metrics["global/params/H_HIGH_MAX"] = np.asarray(self.H_HIGH_MAX, dtype=int)
@@ -1533,9 +1539,9 @@ class ArterialSegExample(ProcessPipeline):
             graphics_raw = self._compute_graphics_support_block(v_raw_gl, T)
             graphics_band = self._compute_graphics_support_block(v_band_gl, T)
             for name, arr in graphics_raw.items():
-                metrics[f"graphics_support/raw/{name}"] = arr
+                metrics[f"global/raw/{name}"] = arr
 
             for name, arr in graphics_band.items():
-                metrics[f"graphics_support/bandlimited/{name}"] = arr
+                metrics[f"global/bandlimited/{name}"] = arr
 
         return ProcessResult(metrics=metrics)
