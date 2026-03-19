@@ -792,7 +792,6 @@ class ArterialSegExample(ProcessPipeline):
 
         tau = np.linspace(0.0, 1.0, n, endpoint=False)
         dt = Tbeat / n
-        t = np.arange(n, dtype=float) * dt
         m0 = float(m0_sum * dt)
 
         vmax = float(np.nanmax(vv))

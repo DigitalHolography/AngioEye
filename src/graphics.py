@@ -1,10 +1,11 @@
 import os
 import re
+import shutil
 import tempfile
 import zipfile
 from collections import defaultdict
 from tkinter import Tk, filedialog
-import shutil
+
 import h5py
 import matplotlib.pyplot as plt
 import numpy as np
@@ -306,7 +307,7 @@ def plot_group_delta_phi_stats(ax, group_stats, group_name):
     ax.axhline(np.pi, color="black", linewidth=0.8, linestyle="--")
     ax.axhline(-np.pi, color="black", linewidth=0.8, linestyle="--")
 
-    for h, m, s in zip(hs, mu, sigma, strict=False):
+    for h, m, __ in zip(hs, mu, sigma, strict=False):
         if not np.isfinite(m):
             continue
 
@@ -1282,9 +1283,6 @@ def export_selected_metric_pngs_bandlimited(all_results, zip_path, out_dir):
             grp_std = grp.std()
 
             rep_file = select_representative_file_per_group(df, value_col="mean")
-
-            # ===== Layout figure (gauche scatter + droite 2x2) =====
-            n_groups = len(groups)
 
             fig = plt.figure(figsize=(15, 6.2), dpi=200)
 
