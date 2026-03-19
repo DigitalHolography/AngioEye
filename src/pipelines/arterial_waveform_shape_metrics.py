@@ -711,10 +711,6 @@ class ArterialSegExample(ProcessPipeline):
         return E_slope, E_curv
 
     def _compute_graphics_support_1d(self, v: np.ndarray, Tbeat: float) -> dict:
-        """
-        Calcule toutes les valeurs intermédiaires utiles à graphics.py
-        à partir d'un seul signal 1D (le signal moyen du fichier).
-        """
         v = self._rectify_keep_nan(v)
         n = int(v.size)
 
@@ -723,95 +719,175 @@ class ArterialSegExample(ProcessPipeline):
 
         vv = np.where(np.isfinite(v), v, np.nan)
         m0 = float(np.nansum(vv))
-        if m0 <= 0:
-            return {}
-
         tau = np.linspace(0.0, 1.0, n, endpoint=False)
-        dt = Tbeat / n
-        t = np.arange(n, dtype=float) * dt
-
         vmax = float(np.nanmax(vv))
         vmin = float(np.nanmin(vv))
-        vmean = float(self._safe_nanmean(vv))
+        vmean = float(np.nanmean(vv))
+        if m0 <= 0:
+            metrics = self._compute_metrics_1d(vv, Tbeat)
+            return {
+                "signal_mean": np.asarray(vv, dtype=float),
+                "tau": np.asarray(tau, dtype=float),
+                "cumulative": np.full((n,), np.nan, dtype=float),
+                "d_star": np.full((n,), np.nan, dtype=float),
+                "d0_star": np.asarray(tau, dtype=float),
+                "delta_dti_curve": np.full((n,), np.nan, dtype=float),
+                "vb": np.full((n,), np.nan, dtype=float),
+                "dvdt": np.full((n,), np.nan, dtype=float),
+                "d2vdt2": np.full((n,), np.nan, dtype=float),
+                "vmax": np.asarray(vmax, dtype=float),
+                "vmin": np.asarray(vmin, dtype=float),
+                "vmean": np.asarray(vmean, dtype=float),
+                "harmonic_magnitudes": np.full((self.H_MAX,), np.nan, dtype=float),
+                "harmonic_weights": np.full((self.H_MAX,), np.nan, dtype=float),
+                "harmonic_phases": np.full((self.H_MAX,), np.nan, dtype=float),
+                "delta_phi_all": np.full(
+                    (max(self.H_PHASE_RESIDUAL - 1, 0),), np.nan, dtype=float
+                ),
+                "m0": np.asarray(m0, dtype=float),
+                "vend": np.asarray(np.nan, dtype=float),
+                "late_window_start_idx": np.asarray(-1, dtype=int),
+                "late_window_end_idx": np.asarray(-1, dtype=int),
+                **{k: np.asarray(val, dtype=float) for k, val in metrics.items()},
+            }
 
-        # Cumulative
+        dt = Tbeat / n
         cumulative = np.nancumsum(vv) / (m0 + self.eps)
         d_star = np.asarray(cumulative, dtype=float)
         d0_star = np.asarray(tau, dtype=float)
         delta_dti_curve = d_star - d0_star
 
-        hp = self._harmonic_pack(vv, Tbeat)
-        V = hp["V"]
-        vb = hp["vb"]
-        H = hp["H"]
-
-        if V is not None and H >= 1:
-            mags = np.abs(V[1 : H + 1])
-            mags = np.where(np.isfinite(mags), mags, np.nan)
-            mag_sum = float(np.nansum(mags))
-            harmonic_weights = (
-                mags / (mag_sum + self.eps)
-                if mag_sum > 0
-                else np.full_like(mags, np.nan)
-            )
-
-            phases = np.angle(V[1 : H + 1])
-            phi1 = float(np.angle(V[1])) if H >= 1 else np.nan
-            delta_phi_all = np.full((max(H - 1, 0),), np.nan, dtype=float)
-            for h in range(2, H + 1):
-                delta_phi_all[h - 2] = self._wrap_pi(float(np.angle(V[h])) - h * phi1)
-        else:
-            harmonic_weights = np.array([], dtype=float)
-            mags = np.array([], dtype=float)
-            phases = np.array([], dtype=float)
-            delta_phi_all = np.array([], dtype=float)
-
         dvdt = np.gradient(np.where(np.isfinite(vv), vv, 0.0), dt)
         d2vdt2 = np.gradient(dvdt, dt)
 
-        d_samples = self._normalized_cumulative_displacement_samples(vv, Tbeat, m0)
+        hp = self._harmonic_pack(vv, Tbeat)
+        V = hp["V"]
+        vb = hp["vb"]
+        H = int(hp["H"])
+
+        harmonic_magnitudes = np.full((self.H_MAX,), np.nan, dtype=float)
+        harmonic_weights = np.full((self.H_MAX,), np.nan, dtype=float)
+        harmonic_phases = np.full((self.H_MAX,), np.nan, dtype=float)
+        delta_phi_all = np.full(
+            (max(self.H_PHASE_RESIDUAL - 1, 0),), np.nan, dtype=float
+        )
+
+        if V is not None and H >= 1:
+            mags = np.abs(V[1 : H + 1])
+            phases = np.angle(V[1 : H + 1])
+
+            harmonic_magnitudes[:H] = mags
+            harmonic_phases[:H] = phases
+
+            mag_sum = float(np.nansum(mags))
+            if mag_sum > 0:
+                harmonic_weights[:H] = mags / (mag_sum + self.eps)
+
+            phi1 = float(np.angle(V[1]))
+            h_phase = min(H, self.H_PHASE_RESIDUAL)
+            for h in range(2, h_phase + 1):
+                delta_phi_all[h - 2] = self._wrap_pi(float(np.angle(V[h])) - h * phi1)
 
         metrics = self._compute_metrics_1d(vv, Tbeat)
 
         k0, k1 = self._late_window_indices(n)
         vend = float(self._safe_nanmean(vv[k0:k1])) if k1 > k0 else np.nan
 
+        vb_out = np.full((n,), np.nan, dtype=float)
+        if vb is not None:
+            vb_out[: min(len(vb), n)] = np.asarray(vb[:n], dtype=float)
+
         return {
-            "delta_dti_curve": np.asarray(delta_dti_curve, dtype=float),
             "signal_mean": np.asarray(vv, dtype=float),
             "tau": np.asarray(tau, dtype=float),
             "cumulative": np.asarray(cumulative, dtype=float),
-            "vb": np.asarray(vb, dtype=float)
-            if vb is not None
-            else np.full((n,), np.nan),
+            "d_star": np.asarray(d_star, dtype=float),
+            "d0_star": np.asarray(d0_star, dtype=float),
+            "delta_dti_curve": np.asarray(delta_dti_curve, dtype=float),
+            "vb": vb_out,
             "dvdt": np.asarray(dvdt, dtype=float),
             "d2vdt2": np.asarray(d2vdt2, dtype=float),
-            "harmonic_magnitudes": np.asarray(mags, dtype=float),
-            "harmonic_weights": np.asarray(harmonic_weights, dtype=float),
-            "harmonic_phases": np.asarray(phases, dtype=float),
-            "delta_phi_all": np.asarray(delta_phi_all, dtype=float),
+            "harmonic_magnitudes": harmonic_magnitudes,
+            "harmonic_weights": harmonic_weights,
+            "harmonic_phases": harmonic_phases,
+            "delta_phi_all": delta_phi_all,
+            "vend": np.asarray(vend, dtype=float),
             "vmax": np.asarray(vmax, dtype=float),
             "vmin": np.asarray(vmin, dtype=float),
             "vmean": np.asarray(vmean, dtype=float),
             "m0": np.asarray(m0, dtype=float),
-            "vend": np.asarray(vend, dtype=float),
             "late_window_start_idx": np.asarray(k0, dtype=int),
             "late_window_end_idx": np.asarray(k1, dtype=int),
-            **{k: np.asarray(v, dtype=float) for k, v in metrics.items()},
-            **{k: np.asarray(v, dtype=float) for k, v in d_samples.items()},
+            **{k: np.asarray(val, dtype=float) for k, val in metrics.items()},
         }
 
-    def _compute_graphics_support_global(
+    def _compute_graphics_support_block(
         self, v_global: np.ndarray, T: np.ndarray
     ) -> dict:
         n_beats = int(T.shape[1])
         v_global = self._ensure_time_by_beat(v_global, n_beats)
         v_global = self._rectify_keep_nan(v_global)
 
-        mean_signal = np.nanmean(v_global, axis=1)
-        Tref = float(np.nanmean(T))
+        n_t = int(v_global.shape[0])
+        h_mag = self.H_MAX
+        h_phi = max(self.H_PHASE_RESIDUAL - 1, 0)
 
-        return self._compute_graphics_support_1d(mean_signal, Tref)
+        out = {
+            "signal_mean": np.full((n_t, n_beats), np.nan, dtype=float),
+            "tau": np.full((n_t, n_beats), np.nan, dtype=float),
+            "cumulative": np.full((n_t, n_beats), np.nan, dtype=float),
+            "d_star": np.full((n_t, n_beats), np.nan, dtype=float),
+            "d0_star": np.full((n_t, n_beats), np.nan, dtype=float),
+            "delta_dti_curve": np.full((n_t, n_beats), np.nan, dtype=float),
+            "vb": np.full((n_t, n_beats), np.nan, dtype=float),
+            "dvdt": np.full((n_t, n_beats), np.nan, dtype=float),
+            "m0": np.full((n_beats,), np.nan),
+            "d2vdt2": np.full((n_t, n_beats), np.nan, dtype=float),
+            "harmonic_magnitudes": np.full((n_beats, h_mag), np.nan, dtype=float),
+            "harmonic_weights": np.full((n_beats, h_mag), np.nan, dtype=float),
+            "harmonic_phases": np.full((n_beats, h_mag), np.nan, dtype=float),
+            "delta_phi_all": np.full((n_beats, h_phi), np.nan, dtype=float),
+            "vend": np.full((n_beats,), np.nan, dtype=float),
+            "late_window_start_idx": np.full((n_beats,), -1, dtype=int),
+            "late_window_end_idx": np.full((n_beats,), -1, dtype=int),
+            "vmax": np.full((n_beats,), np.nan, dtype=float),
+            "vmin": np.full((n_beats,), np.nan, dtype=float),
+            "vmean": np.full((n_beats,), np.nan, dtype=float),
+        }
+
+        for k in self._metric_keys():
+            out[k[0]] = np.full((n_beats,), np.nan, dtype=float)
+
+        for beat_idx in range(n_beats):
+            Tbeat = float(T[0][beat_idx])
+            v = v_global[:, beat_idx]
+            s = self._compute_graphics_support_1d(v, Tbeat)
+
+            out["signal_mean"][:, beat_idx] = s["signal_mean"]
+            out["tau"][:, beat_idx] = s["tau"]
+            out["cumulative"][:, beat_idx] = s["cumulative"]
+            out["d_star"][:, beat_idx] = s["d_star"]
+            out["d0_star"][:, beat_idx] = s["d0_star"]
+            out["delta_dti_curve"][:, beat_idx] = s["delta_dti_curve"]
+            out["vb"][:, beat_idx] = s["vb"]
+            out["dvdt"][:, beat_idx] = s["dvdt"]
+            out["d2vdt2"][:, beat_idx] = s["d2vdt2"]
+            out["m0"][beat_idx] = s["m0"]
+            out["harmonic_magnitudes"][beat_idx, :] = s["harmonic_magnitudes"]
+            out["harmonic_weights"][beat_idx, :] = s["harmonic_weights"]
+            out["harmonic_phases"][beat_idx, :] = s["harmonic_phases"]
+            out["delta_phi_all"][beat_idx, :] = s["delta_phi_all"]
+            out["vmax"][beat_idx] = s["vmax"]
+            out["vmin"][beat_idx] = s["vmin"]
+            out["vmean"][beat_idx] = s["vmean"]
+            out["vend"][beat_idx] = s["vend"]
+            out["late_window_start_idx"][beat_idx] = s["late_window_start_idx"]
+            out["late_window_end_idx"][beat_idx] = s["late_window_end_idx"]
+
+            for k in self._metric_keys():
+                out[k[0]][beat_idx] = s[k[0]]
+
+        return out
 
     def _compute_metrics_1d(self, v: np.ndarray, Tbeat: float) -> dict:
         """
@@ -1319,8 +1395,6 @@ class ArterialSegExample(ProcessPipeline):
 
             out_raw = self._compute_block_global(v_raw_gl, T)
             out_band = self._compute_block_global(v_band_gl, T)
-            graphics_raw = self._compute_graphics_support_global(v_raw_gl, T)
-            graphics_band = self._compute_graphics_support_global(v_band_gl, T)
             for k in self._metric_keys():
                 metrics[f"global/raw/{k[0]}"] = with_attrs(
                     out_raw[k[0]],
@@ -1360,6 +1434,8 @@ class ArterialSegExample(ProcessPipeline):
             metrics["global/params/H_PHASE_RESIDUAL"] = np.asarray(
                 self.H_PHASE_RESIDUAL, dtype=int
             )
+            graphics_raw = self._compute_graphics_support_block(v_raw_gl, T)
+            graphics_band = self._compute_graphics_support_block(v_band_gl, T)
             for name, arr in graphics_raw.items():
                 metrics[f"graphics_support/raw/{name}"] = arr
 
