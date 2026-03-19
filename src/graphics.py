@@ -108,6 +108,42 @@ LATEX_FORMULAS = {
 }
 
 
+def extract_graphics_support(h5_path, mode="bandlimited"):
+    base = f"{GRAPHICS_SUPPORT_FOLDER}{mode}"
+    out = {}
+
+    with h5py.File(h5_path, "r") as f:
+        if base not in f:
+            return None
+        grp = f[base]
+        for key in grp.keys():
+            arr = np.array(grp[key])
+            out[key] = arr.item() if arr.shape == () else arr
+
+    return out
+
+
+def select_support_beat(support, beat_idx):
+    out = {}
+    for k, v in support.items():
+        arr = np.asarray(v)
+        if arr.ndim == 2:
+            if k in {
+                "harmonic_magnitudes",
+                "harmonic_weights",
+                "harmonic_phases",
+                "delta_phi_all",
+            }:
+                out[k] = arr[beat_idx, :]
+            else:
+                out[k] = arr[:, beat_idx]
+        elif arr.ndim == 1 and arr.shape[0] > beat_idx:
+            out[k] = arr[beat_idx]
+        else:
+            out[k] = v
+    return out
+
+
 def harmonic_weights_from_signal(v, h_max=H_MAX):
     V, vb, H, w_h = harmonic_pack(v)
     if V is None or H is None or H < 1:
@@ -215,37 +251,6 @@ def quantile_time_over_T(v, q):
     idx = max(0, min(v.size - 1, idx))
 
     return float(idx / v.size), c, idx
-
-
-def delta_phi_from_signal(v, h_max=H_MAX):
-    """
-    Retourne un dict {h: delta_phi_h} calculé à partir d'un signal.
-    """
-    v = np.asarray(v, dtype=float)
-    v = np.where(np.isfinite(v), v, np.nan)
-
-    if v.size < 4:
-        return None
-
-    w = rectify_keep_nan(v)
-
-    w_fft = np.where(np.isfinite(w), w, 0.0)
-
-    Vfull = np.fft.rfft(w_fft) / float(len(w_fft))
-    H = int(min(h_max, Vfull.size - 1))
-
-    if H < 2:
-        return None
-
-    phi1 = float(np.angle(Vfull[1]))
-    out = {}
-
-    for h in range(2, H + 1):
-        phih = float(np.angle(Vfull[h]))
-        dphi = float((phih - h * phi1 + np.pi) % (2.0 * np.pi) - np.pi)
-        out[h] = dphi
-
-    return out
 
 
 def circular_mean(angles):
@@ -1245,9 +1250,6 @@ def export_selected_metric_pngs_bandlimited(
 ):
     os.makedirs(out_dir, exist_ok=True)
 
-    if "bandlimited" not in all_results:
-        r
-
     with tempfile.TemporaryDirectory() as tmpdir:
         with zipfile.ZipFile(zip_path, "r") as z:
             z.extractall(tmpdir)
@@ -1368,7 +1370,9 @@ def export_selected_metric_pngs_bandlimited(
                     ax.set_title(f"{g}", fontsize=14)
                 elif path and os.path.exists(path):
                     support = extract_graphics_support(path, mode="bandlimited")
-                    plot_metric_illustration(ax, metric, support, path)
+                    support_beat = select_support_beat(support, 0)
+                    plot_metric_illustration(ax, metric, support_beat, path)
+
                     ax.set_title(f" {g} ", fontsize=14)
 
                     ymin, ymax = ax.get_ylim()
@@ -1391,7 +1395,7 @@ def export_selected_metric_pngs_bandlimited(
                 ax_empty = fig.add_subplot(right[r, c])
                 ax_empty.axis("off")
 
-            png_path = os.path.join(out_dir, f"{metric}_bandlimited.eps")
+            png_path = os.path.join(out_dir, f"{metric}_bandlimited.png")
             fig.savefig(png_path)
             plt.close(fig)
 
@@ -1729,6 +1733,36 @@ def build_metric_figure(df, metric, mode, ymin, ymax, single_group):
     fig.update_layout(yaxis_title=metric, yaxis_title_font=dict(size=15))
 
     return fig
+
+
+def extract_mean_support_per_file(h5_path, mode="bandlimited"):
+    support = extract_graphics_support(h5_path, mode)
+    if not support:
+        return None
+
+    out = {}
+
+    for k, v in support.items():
+        arr = np.asarray(v)
+
+        if arr.ndim == 2:
+            if k in {
+                "harmonic_magnitudes",
+                "harmonic_weights",
+                "harmonic_phases",
+                "delta_phi_all",
+            }:
+                out[k] = np.nanmean(arr, axis=0)
+            else:
+                out[k] = np.nanmean(arr, axis=1)
+
+        elif arr.ndim == 1:
+            out[k] = np.nanmean(arr)
+
+        else:
+            out[k] = v
+
+    return out
 
 
 def extract_mean_signal_per_file(h5_path, dataset_path):
