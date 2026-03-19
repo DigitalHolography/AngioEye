@@ -14,7 +14,7 @@ import plotly.graph_objects as go
 from matplotlib import gridspec
 from matplotlib.ticker import FormatStrFormatter
 
-GRAPHICS_SUPPORT_FOLDER = "/Pipelines/arterial_waveform_shape_metrics/graphics_support/"
+GRAPHICS_SUPPORT_FOLDER = "/Pipelines/arterial_waveform_shape_metrics/global/"
 METRIC_FOLDER = "/Pipelines/arterial_waveform_shape_metrics/global/"
 VALID_METRIC_FOLDERS = ["raw", "bandlimited"]
 SELECTED_METRICS_PNG = {
@@ -56,8 +56,10 @@ SELECTED_METRICS_PNG = {
     "E_slope",
     "E_curv",
     "phase_locking_residual",
+    "W50_over_T",
+    "W75_over_T",
+    "N_H_over_T",
 }
-SIGNAL_DATASET_PATH = "/Artery/VelocityPerBeat/VelocitySignalPerBeatBandLimited/value"
 METRIC_ALIASES = {
     "Hspec": "spectral_entropy",
 }
@@ -105,6 +107,9 @@ LATEX_FORMULAS = {
     "E_slope": r"$E_{\mathrm{slope}}$",
     "E_curv": r"$E_{\mathrm{curv}}$",
     "phase_locking_residual": r"$E_{\phi}$",
+    "W50_over_T": r"$W_{50}/T$",
+    "W75_over_T": r"$W_{75}/T$",
+    "N_H_over_T": r"$N_H/T$",
 }
 
 
@@ -142,41 +147,6 @@ def select_support_beat(support, beat_idx):
         else:
             out[k] = v
     return out
-
-
-def harmonic_weights_from_signal(v, h_max=H_MAX):
-    V, vb, H, w_h = harmonic_pack(v)
-    if V is None or H is None or H < 1:
-        return None, None, None, None
-
-    mags = np.abs(V[1 : H + 1])
-    mags = np.where(np.isfinite(mags), mags, np.nan)
-    s = float(np.nansum(mags))
-    if s <= 0:
-        return V, vb, H, None
-
-    w_h = mags / (s + EPS)
-    return V, vb, H, w_h
-
-
-def wrap_to_pi(x):
-    return (x + np.pi) % (2.0 * np.pi) - np.pi
-
-
-def quantile_idx_from_cumsum(C, q):
-    idx = int(np.searchsorted(C, q, side="left"))
-    idx = max(0, min(len(C) - 1, idx))
-    return idx
-
-
-def safe_rectified_signal(sig):
-    sig = np.asarray(sig, dtype=float)
-    return np.where(np.isfinite(sig), np.maximum(sig, 0.0), np.nan)
-
-
-def rectify_keep_nan(v):
-    v = np.asarray(v, dtype=float)
-    return np.where(np.isfinite(v), np.maximum(v, 0.0), np.nan)
 
 
 def draw_inline_formulas_ax(ax, formulas, y=0.5, fontsize=16, gap=0.03):
@@ -232,27 +202,6 @@ def draw_formula_header(fig, formula, y=0.98, fontsize=14, pad_top=0.86):
         fig.text(0.02, y, formula, ha="left", va="top", fontsize=fontsize)
 
 
-def quantile_time_over_T(v, q):
-    """
-    Reproduit ArterialSegExample._quantile_time_over_T
-    Ici pas besoin de Tbeat : t_q/T = idx/n
-    """
-    v = np.asarray(v, dtype=float)
-    if v.size == 0 or not np.any(np.isfinite(v)):
-        return np.nan, None, None  # value, cum, idx
-
-    w = np.where(np.isfinite(v), v, np.nan)
-    m0 = float(np.nansum(w))
-    if m0 <= 0:
-        return np.nan, None, None
-
-    c = np.cumsum(w) / m0
-    idx = int(np.searchsorted(c, q, side="left"))
-    idx = max(0, min(v.size - 1, idx))
-
-    return float(idx / v.size), c, idx
-
-
 def circular_mean(angles):
     angles = np.asarray(angles, dtype=float)
     angles = angles[np.isfinite(angles)]
@@ -299,9 +248,19 @@ def compute_group_delta_phi_stats(zip_path, mode="bandlimited"):
                         continue
 
                     dphi = np.asarray(support.get("delta_phi_all", []), dtype=float)
-                    for i, val in enumerate(dphi, start=2):
-                        if np.isfinite(val):
-                            group_values[group_name][i].append(val)
+
+                    if dphi.ndim == 2:
+                        for beat_idx in range(dphi.shape[0]):
+                            row = dphi[beat_idx]
+                            for h, val in enumerate(row, start=2):
+                                if np.isfinite(val):
+                                    group_values[group_name][h].append(val)
+
+                    elif dphi.ndim == 1:
+                        for h, val in enumerate(dphi, start=2):
+                            if np.isfinite(val):
+                                group_values[group_name][h].append(val)
+
                 except Exception:
                     continue
 
@@ -336,83 +295,78 @@ def plot_group_delta_phi_stats(ax, group_stats, group_name):
     hs = data["h"]
     mu = data["mean"]
     sigma = data["std"]
-
-    ax.errorbar(
+    ax.bar(
         hs,
         mu,
-        yerr=sigma,
-        fmt="o",
-        color="black",
-        ecolor="black",
-        elinewidth=1.5,
-        capsize=4,
-        markersize=6,
+        width=0.7,
+        color="#EC5241",
+        edgecolor="black",
     )
-
     ax.axhline(0, color="black", linewidth=1.0)
     ax.axhline(np.pi, color="black", linewidth=0.8, linestyle="--")
     ax.axhline(-np.pi, color="black", linewidth=0.8, linestyle="--")
 
+    for h, m, s in zip(hs, mu, sigma, strict=False):
+        if not np.isfinite(m):
+            continue
+
+        va = "bottom" if m >= 0 else "top"
+        offset = 0.08 if m >= 0 else -0.08
+
+        ax.text(
+            h,
+            m + offset,
+            f"{m:.2f}",
+            ha="center",
+            va=va,
+            fontsize=10,
+        )
+
     ax.set_xlim(1.5, max(hs) + 0.5)
     ax.set_ylim(-1.1 * np.pi, 1.1 * np.pi)
     ax.set_xticks(hs)
+
     ax.set_xlabel("Harmonic n (a.u.)", fontsize=14)
-    ax.set_ylabel(r"Group mean $\delta\phi_n$ (rad)", fontsize=14, labelpad=12)
+    ax.set_ylabel(r"Mean $\delta\phi_n$ (rad)", fontsize=14, labelpad=12)
+
     ax.set_yticks([-np.pi, -np.pi / 2, 0, np.pi / 2, np.pi])
-    ax.set_yticklabels([r"$-\pi$", r"$-\pi/2$", r"$0$", r"$\pi/2$", r"$\pi$"])
+    ax.set_yticklabels(
+        [r"$-\pi$", r"$-\pi/2$", r"$0$", r"$\pi/2$", r"$\pi$"],
+        fontsize=12,
+    )
+
     ax.set_title(group_name, fontsize=14)
 
 
-def harmonic_pack(v):
-    """
-    Reproduit _harmonic_pack sans Tbeat (pas nécessaire pour vb)
-    """
-    v = np.asarray(v, dtype=float)
-    w = np.where(np.isfinite(v), v, np.nan)
-    n = w.size
-    if n < 2:
-        return None, None, None
+def build_group_signal_figure(group_name, data):
+    fig = go.Figure()
 
-    Vfull = np.fft.rfft(w) / float(n)
-    H = int(min(H_MAX, Vfull.size - 1))
-    V = Vfull[: H + 1].copy()
+    x = np.asarray(data["x"], dtype=float)
+    mean = np.asarray(data["mean"], dtype=float)
 
-    Vtrunc = np.zeros_like(Vfull)
-    Vtrunc[: H + 1] = V
-    vb = np.fft.irfft(Vtrunc * float(n), n=n)
-    mags = np.abs(V[1 : H + 1])
-    mags = np.where(np.isfinite(mags), mags, np.nan)
-    s = float(np.nansum(mags))
-    if s <= 0:
-        return V, vb, H, None
-    w = mags / (s + EPS)
-    return V, vb, H, w
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=mean,
+            mode="lines",
+            line=dict(width=3),
+            name=group_name,
+        )
+    )
 
+    y_max = np.nanmax(mean) if np.any(np.isfinite(mean)) else 1.0
 
-def crest_factor_from_vb(vb):
-    if vb is None or vb.size == 0:
-        return np.nan
-    x = np.where(np.isfinite(vb), vb, np.nan)
-    rms = float(np.sqrt(np.nanmean(x * x)))
-    if rms <= 0:
-        return np.nan
-    return float(np.nanmax(x) / rms)
+    fig.update_yaxes(range=[0, y_max * 1.05])
 
+    fig.update_layout(
+        height=450,
+        xaxis_title="Time",
+        yaxis_title="Velocity",
+        template="simple_white",
+        showlegend=False,
+    )
 
-def spectral_entropy_from_harmonics(V):
-    """
-    Reproduit _spectral_entropy_from_harmonics (appelé spectral_entropy)
-    """
-    if V is None or V.size < 2:
-        return np.nan
-    mags = np.abs(V[1:])
-    mags = np.where(np.isfinite(mags), mags, np.nan)
-    s = float(np.nansum(mags))
-    if s <= 0:
-        return np.nan
-    p = mags / s
-    p = np.clip(p, EPS, 1.0)
-    return float(-np.nansum(p * np.log(p)))
+    return fig
 
 
 def find_control_group_name(groups):
@@ -424,25 +378,6 @@ def find_control_group_name(groups):
         if "control" in gl or gl in {"ctrl", "ctl", "controls"}:
             return g
     return None
-
-
-def extract_graphics_support(h5_path, mode="bandlimited"):
-    base = f"{GRAPHICS_SUPPORT_FOLDER}{mode}"
-    out = {}
-
-    with h5py.File(h5_path, "r") as f:
-        if base not in f:
-            return None
-
-        grp = f[base]
-        for key in grp.keys():
-            arr = np.array(grp[key])
-            if arr.shape == ():
-                out[key] = arr.item()
-            else:
-                out[key] = arr
-
-    return out
 
 
 def plot_metric_illustration(ax, metric, support, path=None):
@@ -533,7 +468,6 @@ def plot_metric_illustration(ax, metric, support, path=None):
         info_box("Signal too short")
         return
 
-    tau = np.linspace(0.0, 1.0, n, endpoint=False)
     # =========================
     # RI
     # =========================
@@ -1240,14 +1174,83 @@ def plot_metric_illustration(ax, metric, support, path=None):
         info_box([rf"$E_\phi={e_phi:.4f}$"])
         ax.set_xlabel("Harmonic n (a.u.)", fontsize=14)
         ax.set_ylabel(r"$\delta \phi_n$ (rad)", fontsize=14, labelpad=12)
+    elif metric == "W50_over_T":
+        w50 = float(support["W50_over_T"])
+        vmax = float(support["vmax"])
+        thr = 0.5 * vmax
+
+        mask = np.isfinite(sig) & (sig >= thr)
+
+        ax.plot(tau, sig, linewidth=3, color="#EC5241")
+        ax.axhline(thr, linestyle="--", linewidth=1, color="black")
+        ax.fill_between(
+            tau,
+            0,
+            sig,
+            where=mask,
+            color="#F2CCC7",
+            interpolate=True,
+        )
+
+        info_box(
+            [
+                rf"$W_{{50}}/T = {w50:.3f}$",
+                rf"$0.5\,V_{{max}} = {thr:.3f}$",
+            ]
+        )
+        ax.set_xlabel("rectified time : t/T", fontsize=14)
+        ax.set_ylabel(r"$v_b \: (mm/s)$", fontsize=14, labelpad=12)
+    elif metric == "W75_over_T":
+        w75 = float(support["W75_over_T"])
+        vmax = float(support["vmax"])
+        thr = 0.75 * vmax
+
+        mask = np.isfinite(sig) & (sig >= thr)
+
+        ax.plot(tau, sig, linewidth=3, color="#EC5241")
+        ax.axhline(thr, linestyle="--", linewidth=1, color="black")
+        ax.fill_between(
+            tau,
+            0,
+            sig,
+            where=mask,
+            color="#F2CCC7",
+            interpolate=True,
+        )
+
+        info_box(
+            [
+                rf"$W_{{75}}/T = {w75:.3f}$",
+                rf"$0.75\,V_{{max}} = {thr:.3f}$",
+            ]
+        )
+        ax.set_xlabel("rectified time : t/T", fontsize=14)
+        ax.set_ylabel(r"$v_b \: (mm/s)$", fontsize=14, labelpad=12)
+    elif metric == "N_H_over_T":
+        m0 = float(support["m0"])
+        nh_over_t = float(support["N_H_over_T"])
+
+        p = sig / (m0 + EPS)
+
+        ax.plot(tau, p, linewidth=3, color="#EC5241")
+        ax.fill_between(
+            tau,
+            0,
+            p,
+            where=np.isfinite(p),
+            color="#F2CCC7",
+            interpolate=True,
+        )
+
+        info_box([rf"$N_H/T = {nh_over_t:.3f}$"])
+        ax.set_xlabel("rectified time : t/T", fontsize=14)
+        ax.set_ylabel(r"$p(\tau)\: (a.u.)$", fontsize=14, labelpad=10)
 
     else:
         info_box(f"No illustration for {metric}")
 
 
-def export_selected_metric_pngs_bandlimited(
-    all_results, zip_path, out_dir, dataset_path=SIGNAL_DATASET_PATH
-):
+def export_selected_metric_pngs_bandlimited(all_results, zip_path, out_dir):
     os.makedirs(out_dir, exist_ok=True)
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -1395,7 +1398,7 @@ def export_selected_metric_pngs_bandlimited(
                 ax_empty = fig.add_subplot(right[r, c])
                 ax_empty.axis("off")
 
-            png_path = os.path.join(out_dir, f"{metric}_bandlimited.png")
+            png_path = os.path.join(out_dir, f"{metric}_bandlimited.eps")
             fig.savefig(png_path)
             plt.close(fig)
 
@@ -1674,7 +1677,7 @@ def build_metric_figure(df, metric, mode, ymin, ymax, single_group):
                 x=group_df["index"],
                 y=group_df["mean"],
                 mode="markers",
-                marker=dict(color="black", size=7, opacity=0.6),
+                marker=dict(color=color_map[g], size=7, opacity=0.6),
                 showlegend=False,
             )
         )
@@ -1688,12 +1691,8 @@ def build_metric_figure(df, metric, mode, ymin, ymax, single_group):
                 y=[group_df["mean"].mean()],
                 mode="markers",
                 marker=dict(
-                    size=25,
-                    color="white",  # intérieur creux
-                    line=dict(
-                        color="black",  # bordure noire
-                        width=2,
-                    ),
+                    size=20,
+                    color=color_map[g],  # intérieur creux
                 ),
                 error_y=dict(
                     type="data",
@@ -1765,18 +1764,7 @@ def extract_mean_support_per_file(h5_path, mode="bandlimited"):
     return out
 
 
-def extract_mean_signal_per_file(h5_path, dataset_path):
-    with h5py.File(h5_path, "r") as f:
-        signal = np.array(f[dataset_path])  # shape (time, beats)
-
-    # moyenne sur les beats
-    mean_signal = signal.mean(axis=1)
-
-    return mean_signal
-
-
-def compute_group_mean_signals(zip_path, dataset_path):
-
+def compute_group_mean_signals(zip_path, mode="bandlimited"):
     group_signals = defaultdict(list)
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -1794,16 +1782,24 @@ def compute_group_mean_signals(zip_path, dataset_path):
 
             for file in h5_files:
                 h5_path = os.path.join(root, file)
-                signal = extract_mean_signal_per_file(h5_path, dataset_path)
+
+                support_mean = extract_mean_support_per_file(h5_path, mode=mode)
+                if support_mean is None or "signal_mean" not in support_mean:
+                    continue
+
+                signal = np.asarray(support_mean["signal_mean"], dtype=float)
+                if signal.ndim != 1 or signal.size == 0:
+                    continue
+
                 group_signals[group_name].append(signal)
 
     group_curves = {}
 
     for group, signals in group_signals.items():
         min_len = min(len(s) for s in signals)
-        aligned = np.array([s[:min_len] for s in signals])
+        aligned = np.array([s[:min_len] for s in signals], dtype=float)
 
-        group_mean = np.mean(aligned, axis=0)
+        group_mean = np.nanmean(aligned, axis=0)
 
         group_curves[group] = {
             "x": np.arange(min_len),
@@ -1814,15 +1810,15 @@ def compute_group_mean_signals(zip_path, dataset_path):
 
 
 def build_comparison_signal_figure(group_curves):
-
     fig = go.Figure()
 
     groups = sorted(group_curves.keys())
+    if not groups:
+        return fig
+
     max_len = max(len(group_curves[g]["x"]) for g in groups)
-
     x_common = np.arange(max_len)
-
-    global_max = 0
+    global_max = 0.0
 
     color_map = {
         g: c
@@ -1835,12 +1831,16 @@ def build_comparison_signal_figure(group_curves):
 
     for group in groups:
         data = group_curves[group]
+        y_old = np.asarray(data["mean"], dtype=float)
 
-        y_old = data["mean"]
+        y_interp = np.interp(
+            x_common,
+            np.linspace(0, max_len - 1, len(y_old)),
+            y_old,
+        )
 
-        y_interp = np.interp(x_common, np.linspace(0, max_len - 1, len(y_old)), y_old)
-
-        global_max = max(global_max, np.max(y_interp))
+        if np.any(np.isfinite(y_interp)):
+            global_max = max(global_max, float(np.nanmax(y_interp)))
 
         fig.add_trace(
             go.Scatter(
@@ -1848,9 +1848,12 @@ def build_comparison_signal_figure(group_curves):
                 y=y_interp,
                 mode="lines",
                 name=group,
-                line=dict(color=color_map[group], width=3),
+                line=dict(color=color_map.get(group, "black"), width=3),
             )
         )
+
+    if global_max <= 0:
+        global_max = 1.0
 
     fig.update_yaxes(range=[0, global_max * 1.05])
 
@@ -1865,37 +1868,7 @@ def build_comparison_signal_figure(group_curves):
     return fig
 
 
-def build_group_signal_figure(group_name, data):
-
-    fig = go.Figure()
-
-    x = data["x"]
-    mean = data["mean"]
-
-    fig.add_trace(
-        go.Scatter(
-            x=x,
-            y=mean,
-            mode="lines",
-            line=dict(width=3),
-        )
-    )
-    y_max = np.max(mean)
-
-    fig.update_yaxes(range=[0, y_max])
-
-    fig.update_layout(
-        height=450,
-        xaxis_title="Time",
-        yaxis_title="Velocity",
-        template="simple_white",
-    )
-
-    return fig
-
-
 def save_dashboard(all_results, original_zip, single_group):
-
     dashboard_file = "metric_dashboard.html"
 
     with open(dashboard_file, "w") as f:
@@ -1917,7 +1890,6 @@ body {
     font-family: Arial, sans-serif;
 }
 
-/* ===== HEADER ===== */
 .header {
     display: flex;
     align-items: center;
@@ -1935,14 +1907,12 @@ body {
     margin: 0;
 }
 
-/* ===== METRIC BLOCK ===== */
 .metric-block {
     margin-top: 5px;
     padding-top: 5px;
     border-top: 3px solid #ddd;
 }
 
-/* ===== metric title ===== */
 .metric-title {
     font-size: 15px;
     font-weight: bold;
@@ -1954,7 +1924,7 @@ body {
         flex-direction: column;
     }
 }
-/* ===== RAW/BANDLIMITED ROW ===== */
+
 .row {
     display: flex;
     flex-direction: row;
@@ -1962,26 +1932,26 @@ body {
     width: 100%;
     align-items: flex-start eliminar;
 }
+
 .plotly-graph-div {
     width: 100% !important;
 }
 
-/* ===== each plot ===== */
 .plot {
     flex: 1 1 50%;
     width: 100%;
 }
 
-/* ===== mode titles ===== */
 .mode-title {
     font-size:10px;
     font-weight:bold;
     margin-bottom:5px;
     letter-spacing:1px;
 }
+
 .signal-grid {
     display: grid;
-    grid-template-columns: 1fr 1fr; /* 2 colonnes */
+    grid-template-columns: 1fr 1fr;
     gap: 20px;
     width: 100%;
     margin-bottom: 40px;
@@ -1990,7 +1960,6 @@ body {
 .signal-plot {
     width: 100%;
 }
-
 </style>
 </head>
 <body>
@@ -1999,7 +1968,7 @@ body {
     all_metrics = set()
     for mode in all_results:
         all_metrics.update(all_results[mode].keys())
-    dashboard_file = "metric_dashboard.html"
+
     img = load_first_m0_image(original_zip)
     if img is not None:
         heatmap_fig = build_heatmap(img)
@@ -2011,17 +1980,15 @@ body {
                     <h1>Metrics Analysis</h1>
                     </div>""")
 
-    dataset_path = "/Artery/VelocityPerBeat/VelocitySignalPerBeat/value"
-    dataset_path_bl = "/Artery/VelocityPerBeat/VelocitySignalPerBeatBandLimited/value"
+    group_curves = compute_group_mean_signals(original_zip, mode="raw")
+    group_curves_bl = compute_group_mean_signals(original_zip, mode="bandlimited")
 
-    group_curves = compute_group_mean_signals(original_zip, dataset_path)
-    group_curves_bl = compute_group_mean_signals(original_zip, dataset_path_bl)
     group_comparison_curves = build_comparison_signal_figure(group_curves)
     group_comparison_curves_bl = build_comparison_signal_figure(group_curves_bl)
+
     png_dir = os.path.join(os.path.dirname(dashboard_file), "export_png")
-    export_selected_metric_pngs_bandlimited(
-        all_results, original_zip, png_dir, dataset_path=dataset_path_bl
-    )
+    export_selected_metric_pngs_bandlimited(all_results, original_zip, png_dir)
+
     print("PNGs exportés dans :", png_dir)
     replace_folder_in_zip(original_zip, png_dir, arc_folder="export_png")
     if os.path.isdir(png_dir):
@@ -2098,7 +2065,7 @@ body {
         # ----- HTML metric header -----
         with open(dashboard_file, "a") as f:
             f.write('<div class="metric-block">')
-            f.write(f'<div class="metric-title">{metric + " = " + definition[0]}</div>')
+            f.write(f'<div class="metric-title">{metric + " = " + definition}</div>')
             f.write('<div class="row">')
 
         # ======================
@@ -2170,12 +2137,4 @@ if __name__ == "__main__":
     dataset_path_bl = "/Artery/VelocityPerBeat/VelocitySignalPerBeatBandLimited/value"
 
     results, single_group = analyze_zip(zip_path)
-    dashboard_file = "metric_dashboard.html"
-    png_dir = os.path.join(os.path.dirname(dashboard_file), "export_png")
-    export_selected_metric_pngs_bandlimited(
-        results, zip_path, png_dir, dataset_path=dataset_path_bl
-    )
-    replace_folder_in_zip(zip_path, png_dir, arc_folder="export_png")
-    if os.path.isdir(png_dir):
-        shutil.rmtree(png_dir)
-    # save_dashboard(results, zip_path, single_group)
+    save_dashboard(results, zip_path, single_group)
