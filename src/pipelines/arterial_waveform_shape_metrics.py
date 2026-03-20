@@ -475,6 +475,7 @@ class ArterialSegExample(ProcessPipeline):
 
         weights = []
         residuals2 = []
+        
         for n in range(2, Huse + 1):
             if np.abs(V[n]) <= self.eps:
                 continue
@@ -484,6 +485,7 @@ class ArterialSegExample(ProcessPipeline):
             if np.isfinite(dphi) and np.isfinite(w) and w > 0:
                 weights.append(w)
                 residuals2.append(dphi * dphi)
+        
 
         if len(weights) == 0:
             return np.nan
@@ -651,7 +653,7 @@ class ArterialSegExample(ProcessPipeline):
         vv = np.where(np.isfinite(v), v, 0.0)
         d_full = np.concatenate(([0.0], np.cumsum(vv) / m0))
         tau_full = np.linspace(0.0, 1.0, v.size + 1)
-        return float(np.trapz(d_full - tau_full, tau_full))
+        return float(np.trapezoid(d_full - tau_full, tau_full))
 
     def _normalized_cumulative_displacement_samples(
         self, v: np.ndarray, Tbeat: float, m0: float
@@ -853,9 +855,20 @@ class ArterialSegExample(ProcessPipeline):
         if V is not None and H >= 1:
             mags = np.abs(V[1 : H + 1])
             phases = np.angle(V[1 : H + 1])
-
             harmonic_magnitudes[:H] = mags
             harmonic_phases[:H] = phases
+            mag_sum = float(np.nansum(mags))
+            if np.isfinite(mag_sum) and mag_sum > 0:
+                harmonic_weights[:H] = mags / (mag_sum + self.eps)
+
+            if H >= 2 and np.abs(V[1]) > self.eps:
+                phi1 = float(np.angle(V[1]))
+                h_phase = min(H, self.H_PHASE_RESIDUAL)
+                for h in range(2, h_phase + 1):
+                    if np.abs(V[h]) > self.eps:
+                        delta_phi_all[h - 2] = self._wrap_pi(
+                            float(np.angle(V[h])) - h * phi1
+                        )
 
         d_samples = self._normalized_cumulative_displacement_samples(vv, Tbeat, m0_sum)
 

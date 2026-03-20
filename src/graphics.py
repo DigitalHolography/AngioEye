@@ -56,6 +56,10 @@ SELECTED_METRICS_PNG = {
     "E_slope",
     "E_curv",
     "phase_locking_residual",
+    "W50_over_T",
+    "W75_over_T",
+    "N_H_over_T",
+
 }
 SIGNAL_DATASET_PATH = "/Artery/VelocityPerBeat/VelocitySignalPerBeatBandLimited/value"
 METRIC_ALIASES = {
@@ -105,6 +109,9 @@ LATEX_FORMULAS = {
     "E_slope": r"$E_{\mathrm{slope}}$",
     "E_curv": r"$E_{\mathrm{curv}}$",
     "phase_locking_residual": r"$E_{\phi}$",
+    "W50_over_T": r"$W_{50}/T$",
+    "W75_over_T": r"$W_{75}/T$",
+    "N_H_over_T" : r"$N_{H}/T$",
 }
 
 
@@ -818,6 +825,16 @@ def plot_metric_illustration(ax, metric, support, path=None):
         )
         hline_label(vmax, "Vmax", va="bottom")
         ax.axhline(vend, linestyle="--", linewidth=1, color="black")
+        ax.text(
+            0,
+            vend,
+            rf" $\overline{{Vend}}={vend:.3g}$",
+            transform=ax.get_yaxis_transform(),
+            ha="left",
+            va="bottom",
+            fontsize=12,
+            bbox=dict(facecolor="white", edgecolor="none"),
+        )
         info_box([rf"$R_{{SD}}={ratio:.3f}$"])
         ax.set_xlabel("rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
@@ -1213,7 +1230,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
         ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
 
     elif metric == "E_curv":
-        e_curv = float(support["E_curv"])
+        e_curv =  float(support["E_curv"])
 
         ax.plot(tau, sig, linewidth=3, color="#EC5241", label="signal")
         ax2 = ax.twinx()
@@ -1231,15 +1248,92 @@ def plot_metric_illustration(ax, metric, support, path=None):
         ax.set_xlabel("rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
 
-    elif metric == "phase_locking_residual":
-        e_phi = float(support["phase_locking_residual"])
-        xh = np.arange(2, len(delta_phi_all) + 2)
+    
 
-        ax.axhline(0, color="black", linewidth=1.0)
-        ax.plot(xh, delta_phi_all, "o-", color="#EC5241", linewidth=2)
-        info_box([rf"$E_\phi={e_phi:.4f}$"])
-        ax.set_xlabel("Harmonic n (a.u.)", fontsize=14)
-        ax.set_ylabel(r"$\delta \phi_n$ (rad)", fontsize=14, labelpad=12)
+    elif metric == "W50_over_T":
+        vmax = float(support["vmax"])
+        threshold = 0.5 * vmax
+        W50_over_T = float(support["W50_over_T"])
+        
+        ax.plot(tau, sig, linewidth=3, color="#EC5241")
+
+                
+        hline_label(vmax, "Vmax", va="bottom")
+        ax.axhline(threshold, linestyle="--", linewidth=1, color="black")
+        ax.text(
+            0,
+            threshold,
+            "",
+            transform=ax.get_yaxis_transform(),
+            ha="left",
+            va="bottom",
+            fontsize=12,
+            bbox=dict(facecolor="white", edgecolor="none"),
+        )
+        ax.fill_between(
+            tau, threshold, sig, 
+            where=(sig >= threshold),
+            color="#F2CCC7", 
+            label=r"Area $\geq 0.5 V_{max}$"
+        )
+        info_box([rf"$Vmax = {vmax:.2f}$",rf"$W50/T = {W50_over_T:.3f}$"])
+        
+
+        vline_to_curve(
+            W50_over_T, tau, sig, y0=0.0, color="black", linestyles="--", linewidth=1
+        )
+        ax.set_xlabel("rectified time : t/T", fontsize=14)
+        ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
+    
+    elif metric == "W75_over_T":
+        vmax = float(support["vmax"])
+        threshold = 0.75 * vmax
+        W75_over_T = float(support["W75_over_T"])
+        
+        ax.plot(tau, sig, linewidth=3, color="#EC5241")
+
+                
+        hline_label(vmax, "Vmax", va="bottom")
+        ax.axhline(threshold, linestyle="--", linewidth=1, color="black")
+        ax.text(
+            0,
+            threshold,
+            "",
+            transform=ax.get_yaxis_transform(),
+            ha="left",
+            va="bottom",
+            fontsize=12,
+            bbox=dict(facecolor="white", edgecolor="none"),
+        )
+        ax.fill_between(
+            tau, threshold, sig, 
+            where=(sig >= threshold),
+            color="#F2CCC7", 
+            label=r"Area $\geq 075 V_{max}$"
+        )
+        info_box([rf"$Vmax = {vmax:.2f}$",rf"$W50/T = {W75_over_T:.3f}$"])
+        
+
+        vline_to_curve(
+            W75_over_T, tau, sig, y0=0.0, color="black", linestyles="--", linewidth=1
+        )
+        ax.set_xlabel("rectified time : t/T", fontsize=14)
+        ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
+
+    elif metric == "N_H_over_T":
+        m0 = float(support["m0"])
+        p = sig / (m0 + EPS)
+        n_h_over_t = float(support["N_H_over_T"])
+        
+
+        ax.plot(tau, p, linewidth=3, color="#EC5241")
+        ax.fill_between(tau, 0, p, where=np.isfinite(p), color="#F2CCC7")
+
+        
+        info_box([rf"$N_{{H}}/T \approx {n_h_over_t:.3f}$"])
+
+        ax.set_xlabel("rectified time : t/T", fontsize=14)
+        ax.set_ylabel(r"$p(\tau)\: (a.u.)$", fontsize=14, labelpad=10)
 
     else:
         info_box(f"No illustration for {metric}")
