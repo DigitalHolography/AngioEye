@@ -26,15 +26,15 @@ dev = ["ruff", "pre-commit", "pyinstaller"]
 
 [project.scripts]
 # This allows users to simply type 'angioeye' in their terminal
-angioeye = "angio_eye:main"
-angioeye-cli = "cli:main"
+angioeye = "launcher:main"
+angioeye-cli = "launcher:cli_main"
 build-installer = "scripts.build_installer:main"
 
 lint-tool = "scripts.ruff_linter:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
-py-modules = ["angio_eye", "cli", "app_settings", "graphics"]
+py-modules = ["angio_eye", "cli", "app_settings", "graphics", "launcher"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -89,6 +89,8 @@ angioeye
 python src/angio_eye.py
 ```
 
+When you run `angioeye` from inside the repository checkout, the launcher prefers the local `src/` tree so newly added or edited pipelines are picked up without needing a full reinstall.
+
 ### CLI
 
 The CLI is designed for batch processing in headless environments or clusters.

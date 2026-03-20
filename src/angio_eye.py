@@ -1,4 +1,5 @@
 import os
+import shutil
 import tempfile
 import threading
 import time
@@ -77,7 +78,6 @@ class ProcessApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("HDF5 Process")
-        self.geometry("800x600")
         self.settings_store = AppSettingsStore()
         self.pipeline_registry: dict[str, PipelineDescriptor] = {}
         self.pipeline_catalog: dict[str, PipelineDescriptor] = {}
@@ -99,11 +99,24 @@ class ProcessApp(tk.Tk):
         self.postprocess_library_summary_var = tk.StringVar(value="")
         self._settings_warning_shown = False
 
+        self._set_initial_window_size()
         self._apply_theme()
         self._build_ui()
         self._register_pipelines()
         self._register_postprocesses()
         self._reset_batch_output()
+
+    def _set_initial_window_size(self) -> None:
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        width = max(980, min(1320, screen_width - 80))
+        height = max(820, min(1020, screen_height - 80))
+        width = min(width, screen_width)
+        height = min(height, screen_height)
+        x = max((screen_width - width) // 2, 0)
+        y = max((screen_height - height) // 2, 0)
+        self.geometry(f"{width}x{height}+{x}+{y}")
+        self.minsize(min(980, width), min(760, height))
 
     def _apply_theme(self) -> None:
         """
@@ -1053,8 +1066,6 @@ class ProcessApp(tk.Tk):
         self._reset_batch_output("Starting batch run...\n")
 
         tempdir: tempfile.TemporaryDirectory | None = None
-        temp_output_dir: tempfile.TemporaryDirectory | None = None
-        clean_temp_output = False
         try:
             data_root, tempdir = self._prepare_data_root(data_path)
             inputs = self._find_h5_inputs(data_root)
@@ -1065,96 +1076,98 @@ class ProcessApp(tk.Tk):
                 tempdir.cleanup()
             return
 
-        output_dir = base_output_dir
-        if self.batch_zip_var.get():
-            temp_output_dir = tempfile.TemporaryDirectory(dir=base_output_dir)
-            output_dir = Path(temp_output_dir.name)
+        work_output_dir: Path | None = None
+        clean_work_output = False
+        try:
+            output_dir = base_output_dir
+            if self.batch_zip_var.get():
+                work_output_dir = Path(tempfile.mkdtemp(dir=base_output_dir))
+                output_dir = work_output_dir
 
-        failures: list[str] = []
-        processed_outputs: list[Path] = []
-        for h5_path in inputs:
-            try:
-                relative_parent = self._relative_input_parent(h5_path, data_root)
-                combined_output = self._run_pipelines_on_file(
-                    h5_path,
-                    pipelines,
-                    output_dir,
-                    output_relative_parent=relative_parent,
+            failures: list[str] = []
+            processed_outputs: list[Path] = []
+            for h5_path in inputs:
+                try:
+                    relative_parent = self._relative_input_parent(h5_path, data_root)
+                    combined_output = self._run_pipelines_on_file(
+                        h5_path,
+                        pipelines,
+                        output_dir,
+                        output_relative_parent=relative_parent,
+                    )
+                    processed_outputs.append(combined_output)
+                except Exception as exc:  # noqa: BLE001
+                    failures.append(f"{h5_path}: {exc}")
+                    self._log_batch(f"[FAIL] {h5_path.name}: {exc}")
+
+            if postprocesses and processed_outputs:
+                self._run_postprocesses(
+                    postprocesses=postprocesses,
+                    output_dir=output_dir,
+                    processed_outputs=processed_outputs,
+                    input_path=data_path,
+                    selected_pipeline_names=selected_names,
+                    failures=failures,
                 )
-                processed_outputs.append(combined_output)
-            except Exception as exc:  # noqa: BLE001
-                failures.append(f"{h5_path}: {exc}")
-                self._log_batch(f"[FAIL] {h5_path.name}: {exc}")
-
-        if postprocesses and processed_outputs:
-            self._run_postprocesses(
-                postprocesses=postprocesses,
-                output_dir=output_dir,
-                processed_outputs=processed_outputs,
-                input_path=data_path,
-                selected_pipeline_names=selected_names,
-                failures=failures,
-            )
-        elif postprocesses:
-            self._log_batch(
-                "[POST SKIP] No successful pipeline outputs were generated, "
-                "so postprocess steps were skipped."
-            )
-
-        summary_msg: str
-        if self.batch_zip_var.get():
-            try:
-                zip_name = self.batch_zip_name_var.get().strip() or "outputs.zip"
-                if not zip_name.lower().endswith(".zip"):
-                    zip_name += ".zip"
-                self._log_batch("[ZIP] Preparing archive...")
-                last_progress_log = 0.0
-
-                def _zip_progress(done: int, total: int, _rel_path: Path) -> None:
-                    nonlocal last_progress_log
-                    now = time.monotonic()
-                    if done == total or (now - last_progress_log) >= 0.5:
-                        pct = 100 if total == 0 else int((done * 100) / total)
-                        self._log_batch(f"[ZIP] {done}/{total} files ({pct}%)")
-                        last_progress_log = now
-                        try:
-                            # Keep the UI responsive while archiving large batches.
-                            self.update()
-                        except tk.TclError:
-                            pass
-
-                zip_path = self._zip_output_dir(
-                    output_dir,
-                    target_path=base_output_dir / zip_name,
-                    progress_callback=_zip_progress,
+            elif postprocesses:
+                self._log_batch(
+                    "[POST SKIP] No successful pipeline outputs were generated, "
+                    "so postprocess steps were skipped."
                 )
-                self._log_batch(f"[ZIP] Archive created: {zip_path}")
-                summary_msg = f"ZIP archive: {zip_path}"
-                # Mark for cleanup so only the archive remains
-                clean_temp_output = True
-            except Exception as exc:  # noqa: BLE001
-                self._log_batch(f"[ZIP FAIL] {exc}")
-                messagebox.showerror(
-                    "Zip failed", f"Could not create ZIP archive: {exc}"
-                )
+
+            summary_msg: str
+            if self.batch_zip_var.get():
+                try:
+                    zip_name = self.batch_zip_name_var.get().strip() or "outputs.zip"
+                    if not zip_name.lower().endswith(".zip"):
+                        zip_name += ".zip"
+                    self._log_batch("[ZIP] Preparing archive...")
+                    last_progress_log = 0.0
+
+                    def _zip_progress(done: int, total: int, _rel_path: Path) -> None:
+                        nonlocal last_progress_log
+                        now = time.monotonic()
+                        if done == total or (now - last_progress_log) >= 0.5:
+                            pct = 100 if total == 0 else int((done * 100) / total)
+                            self._log_batch(f"[ZIP] {done}/{total} files ({pct}%)")
+                            last_progress_log = now
+                            try:
+                                # Keep the UI responsive while archiving large batches.
+                                self.update()
+                            except tk.TclError:
+                                pass
+
+                    zip_path = self._zip_output_dir(
+                        output_dir,
+                        target_path=base_output_dir / zip_name,
+                        progress_callback=_zip_progress,
+                    )
+                    self._log_batch(f"[ZIP] Archive created: {zip_path}")
+                    summary_msg = f"ZIP archive: {zip_path}"
+                    clean_work_output = True
+                except Exception as exc:  # noqa: BLE001
+                    self._log_batch(f"[ZIP FAIL] {exc}")
+                    messagebox.showerror(
+                        "Zip failed", f"Could not create ZIP archive: {exc}"
+                    )
+                    summary_msg = f"Outputs stored under: {output_dir}"
+            else:
                 summary_msg = f"Outputs stored under: {output_dir}"
-        else:
-            summary_msg = f"Outputs stored under: {output_dir}"
 
-        self._log_batch(f"Completed. {summary_msg}")
+            self._log_batch(f"Completed. {summary_msg}")
 
-        if failures:
-            self._show_batch_error_dialog(
-                f"{len(failures)} failure(s). See log for details.\n\n{summary_msg}",
-                initial_dir=base_output_dir,
-            )
-        else:
-            messagebox.showinfo("Batch completed", summary_msg)
-
-        if clean_temp_output and temp_output_dir is not None:
-            temp_output_dir.cleanup()
-        if tempdir is not None:
-            tempdir.cleanup()
+            if failures:
+                self._show_batch_error_dialog(
+                    f"{len(failures)} failure(s). See log for details.\n\n{summary_msg}",
+                    initial_dir=base_output_dir,
+                )
+            else:
+                messagebox.showinfo("Batch completed", summary_msg)
+        finally:
+            if tempdir is not None:
+                tempdir.cleanup()
+            if clean_work_output and work_output_dir is not None:
+                shutil.rmtree(work_output_dir, ignore_errors=True)
 
     def _validate_postprocess_selection(
         self,
