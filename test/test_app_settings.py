@@ -28,7 +28,9 @@ class AppSettingsTests(unittest.TestCase):
         self.assertEqual(visibility, {"a": True, "b": True})
         self.assertTrue(changed)
 
-    def test_normalize_pipeline_visibility_hides_new_pipelines_after_first_run(self) -> None:
+    def test_normalize_pipeline_visibility_hides_new_pipelines_after_first_run(
+        self,
+    ) -> None:
         visibility, changed = normalize_pipeline_visibility(
             ["a", "b", "c"],
             {"a": True, "b": False},
