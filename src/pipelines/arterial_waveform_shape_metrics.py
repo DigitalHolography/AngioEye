@@ -412,6 +412,7 @@ class ArterialSegExample(ProcessPipeline):
 
         weights = []
         residuals2 = []
+        
         for n in range(2, Huse + 1):
             if np.abs(V[n]) <= self.eps:
                 continue
@@ -421,6 +422,7 @@ class ArterialSegExample(ProcessPipeline):
             if np.isfinite(dphi) and np.isfinite(w) and w > 0:
                 weights.append(w)
                 residuals2.append(dphi * dphi)
+        
 
         if len(weights) == 0:
             return np.nan

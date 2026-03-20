@@ -753,6 +753,16 @@ def plot_metric_illustration(ax, metric, support, path=None):
         )
         hline_label(vmax, "Vmax", va="bottom")
         ax.axhline(vend, linestyle="--", linewidth=1, color="black")
+        ax.text(
+            0,
+            vend,
+            rf" $\overline{{Vend}}={vend:.3g}$",
+            transform=ax.get_yaxis_transform(),
+            ha="left",
+            va="bottom",
+            fontsize=12,
+            bbox=dict(facecolor="white", edgecolor="none"),
+        )
         info_box([rf"$R_{{SD}}={ratio:.3f}$"])
         ax.set_xlabel("rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
@@ -1148,7 +1158,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
         ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
 
     elif metric == "E_curv":
-        e_curv = float(support["E_curv"])
+        e_curv =  float(support["E_curv"])
 
         ax.plot(tau, sig, linewidth=3, color="#EC5241", label="signal")
         ax2 = ax.twinx()
@@ -1166,9 +1176,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
         ax.set_xlabel("rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
 
-    elif metric == "phase_locking_residual":
-        e_phi = float(support["phase_locking_residual"])
-        xh = np.arange(2, len(delta_phi_all) + 2)
+    
 
         ax.axhline(0, color="black", linewidth=1.0)
         ax.plot(xh, delta_phi_all, "o-", color="#EC5241", linewidth=2)
