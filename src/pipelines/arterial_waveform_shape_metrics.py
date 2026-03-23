@@ -800,7 +800,8 @@ class ArterialSegExample(ProcessPipeline):
 
         dvdt = np.gradient(np.where(np.isfinite(vv), vv, 0.0), dt)
         d2vdt2 = np.gradient(dvdt, dt)
-
+        dvdt_norm = (Tbeat**3 / ((m0 + self.eps) ** 2)) * (dvdt**2)
+        d2vdt2_norm = (Tbeat**3 / ((m0 + self.eps) ** 2)) * (d2vdt2**2)
         hp = self._harmonic_pack(vv, Tbeat)
         V = hp["V"]
         vb = hp["vb"]
@@ -890,6 +891,8 @@ class ArterialSegExample(ProcessPipeline):
             "vb": vb_out,
             "dvdt": np.asarray(dvdt, dtype=float),
             "d2vdt2": np.asarray(d2vdt2, dtype=float),
+            "dvdt_norm": np.asarray(dvdt_norm, dtype=float),
+            "d2vdt2_norm": np.asarray(d2vdt2_norm, dtype=float),
             "harmonic_magnitudes": harmonic_magnitudes,
             "harmonic_weights": harmonic_weights,
             "harmonic_energies": harmonic_energies,
@@ -938,12 +941,14 @@ class ArterialSegExample(ProcessPipeline):
             "d0_star": np.full((n_t, n_beats), np.nan, dtype=float),
             "delta_dti_curve": np.full((n_t, n_beats), np.nan, dtype=float),
             "vb": np.full((n_t, n_beats), np.nan, dtype=float),
-            "dvdt": np.full((n_t, n_beats), np.nan, dtype=float),
             "m0": np.full((n_beats,), np.nan),
             "E_total": np.full((n_beats,), np.nan, dtype=float),
             "E_low": np.full((n_beats,), np.nan, dtype=float),
             "E_high": np.full((n_beats,), np.nan, dtype=float),
+            "dvdt": np.full((n_t, n_beats), np.nan, dtype=float),
+            "dvdt_norm": np.full((n_t, n_beats), np.nan, dtype=float),
             "d2vdt2": np.full((n_t, n_beats), np.nan, dtype=float),
+            "d2vdt2_norm": np.full((n_t, n_beats), np.nan, dtype=float),
             "harmonic_magnitudes": np.full((n_beats, h_mag + 1), np.nan, dtype=float),
             "harmonic_weights": np.full((n_beats, h_mag), np.nan, dtype=float),
             "harmonic_phases": np.full((n_beats, h_mag), np.nan, dtype=float),
@@ -986,6 +991,8 @@ class ArterialSegExample(ProcessPipeline):
             out["vb"][:, beat_idx] = s["vb"]
             out["dvdt"][:, beat_idx] = s["dvdt"]
             out["d2vdt2"][:, beat_idx] = s["d2vdt2"]
+            out["dvdt_norm"][:, beat_idx] = s["dvdt_norm"]
+            out["d2vdt2_norm"][:, beat_idx] = s["d2vdt2_norm"]
             out["m0"][beat_idx] = s["m0"]
             out["harmonic_magnitudes"][beat_idx, :] = s["harmonic_magnitudes"]
             out["harmonic_weights"][beat_idx, :] = s["harmonic_weights"]
