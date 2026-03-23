@@ -18,58 +18,57 @@ GRAPHICS_SUPPORT_FOLDER = "/Pipelines/arterial_waveform_shape_metrics/global/"
 METRIC_FOLDER = "/Pipelines/arterial_waveform_shape_metrics/global/"
 VALID_METRIC_FOLDERS = ["raw", "bandlimited"]
 SELECTED_METRICS_PNG = {
+    "mu_t_over_T",
     "RI",
     "PI",
-    "crest_factor",
-    "t50_over_T",
     "R_VTI",
     "SF_VTI",
-    "spectral_entropy",
-    "mu_t_over_T",
     "sigma_t_over_T",
-    "delta_phi2",
+    "W50_over_T",
+    "E_low_over_E_total",
+    "E_high_over_E_total",
     "t_max_over_T",
     "t_min_over_T",
     "Delta_t_over_T",
+    "slope_rise_normalized",
+    "slope_fall_normalized",
     "t_up_over_T",
     "t_down_over_T",
     "S_decay",
-    "Delta_DTI",
-    "E_high_over_E_total",
-    "E_low_over_E_total",
+    "crest_factor",
     "R_SD",
-    "slope_fall_normalized",
-    "slope_rise_normalized",
+    "Delta_DTI",
     "gamma_t",
+    "spectral_entropy",
+    "delta_phi2",
+    "rho_h_90",
     "mu_h",
     "sigma_h",
-    "N_eff",
     "N_eff_over_T",
+    "N_H_over_T",
+    "phase_locking_residual",
     "E_recon_H_MAX",
     "Q_t_skew",
     "Q_t_width",
+    "R_Q_t",
     "Q_d_skew",
     "Q_d_width",
     "R_Q_d",
-    "R_Q_t",
     "v_end_over_v_mean",
     "E_slope",
     "E_curv",
-    "phase_locking_residual",
-    "W50_over_T",
-    "W75_over_T",
-    "N_H_over_T",
 }
 METRIC_ALIASES = {
     "Hspec": "spectral_entropy",
 }
 EPS = 1e-12
 H_MAX = 10
-H_LOW_MAX = 2
+H_LOW_MAX = 3
 H_HIGH_MIN = 4
 H_HIGH_MAX = 8
 LATEX_FORMULAS = {
     "RI": r"$\rm RI$",
+    "rho_h_90": r"$\rho_{h,90}$",
     "crest_factor": r"$\rm CF$",
     "t50_over_T": r"$t_{50}/T$",
     "R_VTI": r"$R_{VTI}$",
@@ -94,7 +93,6 @@ LATEX_FORMULAS = {
     "gamma_t": r"$\gamma_t$",
     "mu_h": r"$\mu_h$",
     "sigma_h": r"$\sigma_h$",
-    "N_eff": r"$N_{\mathrm{eff}}$",
     "N_eff_over_T": r"$N_{\mathrm{eff}}/T$",
     "E_recon_H_MAX": r"$E_{\mathrm{recon},H_{\max}}$",
     "Q_t_skew": r"$Q_{\mathrm{t,skew}}$",
@@ -108,7 +106,6 @@ LATEX_FORMULAS = {
     "E_curv": r"$E_{\mathrm{curv}}$",
     "phase_locking_residual": r"$E_{\phi}$",
     "W50_over_T": r"$W_{50}/T$",
-    "W75_over_T": r"$W_{75}/T$",
     "N_H_over_T": r"$N_H/T$",
 }
 
@@ -137,15 +134,20 @@ def select_support_beat(support, beat_idx):
                 "harmonic_magnitudes",
                 "harmonic_weights",
                 "harmonic_phases",
+                "harmonic_energies",
+                "harmonic_energies_weights",
                 "delta_phi_all",
             }:
-                out[k] = arr[beat_idx, :]
+    
+                out[k] = arr[beat_idx,:]
+                
             else:
                 out[k] = arr[:, beat_idx]
         elif arr.ndim == 1 and arr.shape[0] > beat_idx:
             out[k] = arr[beat_idx]
         else:
             out[k] = v
+   
     return out
 
 
@@ -396,6 +398,8 @@ def plot_metric_illustration(ax, metric, support, path=None):
     harmonic_magnitudes = np.asarray(
         support.get("harmonic_magnitudes", []), dtype=float
     )
+    harmonic_energies = np.asarray(support.get("harmonic_energies", []), dtype=float)
+    harmonic_energies_weights = np.asarray(support.get("harmonic_energies_weights", []), dtype=float)
     harmonic_phases = np.asarray(support.get("harmonic_phases", []), dtype=float)
     delta_phi_all = np.asarray(support.get("delta_phi_all", []), dtype=float)
 
@@ -774,9 +778,35 @@ def plot_metric_illustration(ax, metric, support, path=None):
         info_box([rf"$\gamma_t={gamma_t:.3f}$"])
         ax.set_xlabel("rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
+    elif metric == "rho_h_90":
+        w_h = np.asarray(harmonic_energies_weights, dtype=float)
+        w_h = w_h[np.isfinite(w_h)]
+        H = len(w_h)
 
+        if H == 0:
+            info_box("Missing harmonic weights")
+            return
+
+        csum = np.cumsum(w_h)
+        xh = np.arange(1, H + 1)
+        rho = float(support["rho_h_90"])
+        h90 = rho * H
+
+        ax.step(xh, csum, where="mid", color="#EC5241", linewidth=2)
+        ax.axhline(0.90, linestyle="--", color="black", linewidth=1)
+        ax.axvline(h90, linestyle="--", color="black", linewidth=1)
+
+        info_box(
+            [
+                rf"$\rho_{{h,90}} = {rho:.3f}$",
+                rf"$h_{{90}} = {h90:.2f}$",
+            ]
+        )
+        ax.set_xlabel("Harmonic n (a.u.)", fontsize=14)
+        ax.set_ylabel(r"Energy weights $w_n$", fontsize=14, labelpad=12)
+        ax.set_ylim(0, 1.05)
     elif metric == "mu_h":
-        w_h = harmonic_weights
+        w_h = harmonic_energies_weights
         mu_h = float(support["mu_h"])
         xh = np.arange(1, len(w_h) + 1)
 
@@ -787,7 +817,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
         ax.set_ylabel(r"$w_n\:(a.u.)$", fontsize=14, labelpad=12)
 
     elif metric == "sigma_h":
-        w_h = harmonic_weights
+        w_h = harmonic_energies_weights
         mu_h = float(support["mu_h"])
         sigma_h = float(support["sigma_h"])
         xh = np.arange(1, len(w_h) + 1)
@@ -877,7 +907,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
         ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
 
     elif metric in {"Hspec", "spectral_entropy"}:
-        p = harmonic_weights
+        p = harmonic_energies_weights
         hn = len(p)
         ent = float(support["spectral_entropy"])
         xh = np.arange(1, hn + 1)
@@ -904,9 +934,9 @@ def plot_metric_illustration(ax, metric, support, path=None):
         ax.set_ylabel(r"$p_n \: (a.u.)$", fontsize=14, labelpad=12)
 
     elif metric == "E_low_over_E_total":
-        mags2 = np.r_[0.0, harmonic_magnitudes] ** 2
-        e_low = float(np.nansum(mags2[1:H_LOW_MAX]))
-        e_total = float(np.nansum(mags2))
+        mags2 = harmonic_energies
+        e_low = float(support["E_low"])
+        e_total = float(support["E_total"])
         ratio = float(support["E_low_over_E_total"])
         xh = np.arange(0, len(mags2))
 
@@ -925,13 +955,13 @@ def plot_metric_illustration(ax, metric, support, path=None):
         ax.set_ylabel(r"$|V_n|^2 \: (a.u.)$", fontsize=14, labelpad=12)
 
     elif metric == "E_high_over_E_total":
-        mags2 = np.r_[0.0, harmonic_magnitudes] ** 2
-        e_high = float(np.nansum(mags2[H_HIGH_MIN:H_HIGH_MAX]))
-        e_total = float(np.nansum(mags2))
+        mags2 = harmonic_energies
+
+        e_high = float(support["E_high"])
+        e_total = float(support["E_total"])
         ratio = float(support["E_high_over_E_total"])
         xh = np.arange(0, len(mags2))
 
-        ax.set_yscale("log")
         ax.bar(xh[1:H_HIGH_MIN], mags2[1:H_HIGH_MIN], color="#cccccc")
         ax.bar(xh[H_HIGH_MIN:H_HIGH_MAX], mags2[H_HIGH_MIN:H_HIGH_MAX], color="#EC5241")
         ax.bar(xh[H_HIGH_MAX:], mags2[H_HIGH_MAX:], color="#cccccc")
@@ -1200,32 +1230,6 @@ def plot_metric_illustration(ax, metric, support, path=None):
         )
         ax.set_xlabel("rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v_b \: (mm/s)$", fontsize=14, labelpad=12)
-    elif metric == "W75_over_T":
-        w75 = float(support["W75_over_T"])
-        vmax = float(support["vmax"])
-        thr = 0.75 * vmax
-
-        mask = np.isfinite(sig) & (sig >= thr)
-
-        ax.plot(tau, sig, linewidth=3, color="#EC5241")
-        ax.axhline(thr, linestyle="--", linewidth=1, color="black")
-        ax.fill_between(
-            tau,
-            0,
-            sig,
-            where=mask,
-            color="#F2CCC7",
-            interpolate=True,
-        )
-
-        info_box(
-            [
-                rf"$W_{{75}}/T = {w75:.3f}$",
-                rf"$0.75\,V_{{max}} = {thr:.3f}$",
-            ]
-        )
-        ax.set_xlabel("rectified time : t/T", fontsize=14)
-        ax.set_ylabel(r"$v_b \: (mm/s)$", fontsize=14, labelpad=12)
     elif metric == "N_H_over_T":
         m0 = float(support["m0"])
         nh_over_t = float(support["N_H_over_T"])
@@ -1280,7 +1284,6 @@ def export_selected_metric_pngs_bandlimited(all_results, zip_path, out_dir):
             grp = df.groupby("group")["mean"]
             grp_mean = grp.mean()
             grp_std = grp.std()
-
             rep_file = select_representative_file_per_group(df, value_col="mean")
 
             # ===== Layout figure (gauche scatter + droite 2x2) =====
@@ -1373,6 +1376,7 @@ def export_selected_metric_pngs_bandlimited(all_results, zip_path, out_dir):
                     ax.set_title(f"{g}", fontsize=14)
                 elif path and os.path.exists(path):
                     support = extract_graphics_support(path, mode="bandlimited")
+            
                     support_beat = select_support_beat(support, 0)
                     plot_metric_illustration(ax, metric, support_beat, path)
 
@@ -1398,7 +1402,7 @@ def export_selected_metric_pngs_bandlimited(all_results, zip_path, out_dir):
                 ax_empty = fig.add_subplot(right[r, c])
                 ax_empty.axis("off")
 
-            png_path = os.path.join(out_dir, f"{metric}_bandlimited.eps")
+            png_path = os.path.join(out_dir, f"{metric}_bandlimited.png")
             fig.savefig(png_path)
             plt.close(fig)
 
@@ -1566,6 +1570,7 @@ def select_representative_file_per_group(df_metric: pd.DataFrame, value_col="mea
         # index du patient le plus proche de la médiane
         idx = int(np.nanargmin(np.abs(vals - med)))
         rep[g] = gdf.iloc[idx]["file"]
+    
     return rep
 
 
@@ -2137,4 +2142,12 @@ if __name__ == "__main__":
     dataset_path_bl = "/Artery/VelocityPerBeat/VelocitySignalPerBeatBandLimited/value"
 
     results, single_group = analyze_zip(zip_path)
-    save_dashboard(results, zip_path, single_group)
+    dashboard_file = "metric_dashboard.html"
+    png_dir = os.path.join(os.path.dirname(dashboard_file), "export_png")
+    export_selected_metric_pngs_bandlimited(
+        results, zip_path, png_dir
+    )
+    replace_folder_in_zip(zip_path, png_dir, arc_folder="export_png")
+    if os.path.isdir(png_dir):
+        shutil.rmtree(png_dir)
+    #save_dashboard(results, zip_path, single_group)
