@@ -276,6 +276,41 @@ class ArterialSegExample(ProcessPipeline):
         h90 = float(np.interp(0.90, C_full, h_full))
         return float(h90 / H)
 
+    def _rho_h_90_support_from_harmonics(self, V: np.ndarray) -> dict:
+        out = {
+            "rho_h_90": np.nan,
+            "h_90": np.nan,
+            "harmonic_energy_cumsum": np.full((self.H_MAX,), np.nan, dtype=float),
+        }
+
+        if V is None:
+            return out
+
+        H = int(V.size - 1)
+        if H < 1:
+            return out
+
+        power = np.abs(V[1 : H + 1]) ** 2
+        power = np.where(np.isfinite(power), power, np.nan)
+
+        s = float(np.nansum(power))
+        if (not np.isfinite(s)) or s <= 0:
+            return out
+
+        w = power / s
+        C = np.cumsum(w)
+
+        out["harmonic_energy_cumsum"][:H] = C
+
+        C_full = np.concatenate(([0.0], C))
+        h_full = np.arange(0, H + 1, dtype=float)
+
+        h90 = float(np.interp(0.90, C_full, h_full))
+        out["h_90"] = h90
+        out["rho_h_90"] = float(h90 / H)
+
+        return out
+
     def _spectral_entropy_from_harmonics(self, V: np.ndarray) -> float:
         """
         Spectral entropy of harmonic-energy distribution over n=1..H:
@@ -804,7 +839,7 @@ class ArterialSegExample(ProcessPipeline):
                         )
 
         metrics = self._compute_metrics_1d(vv, Tbeat)
-
+        rho_support = self._rho_h_90_support_from_harmonics(V)
         k0, k1 = self._late_window_indices(n)
         vend = float(self._safe_nanmean(vv[k0:k1])) if k1 > k0 else np.nan
 
@@ -813,6 +848,8 @@ class ArterialSegExample(ProcessPipeline):
             vb_out[: min(len(vb), n)] = np.asarray(vb[:n], dtype=float)
 
         return {
+            "harmonic_energy_cumsum": rho_support["harmonic_energy_cumsum"],
+            "h_90": np.asarray(rho_support["h_90"], dtype=float),
             "H_MAX": np.asarray(self.H_MAX, dtype=int),
             "H_LOW_MAX": np.asarray(self.H_LOW_MAX, dtype=int),
             "H_HIGH_MIN": np.asarray(self.H_HIGH_MIN, dtype=int),
@@ -857,6 +894,8 @@ class ArterialSegExample(ProcessPipeline):
         h_phi = max(self.H_PHASE_RESIDUAL - 1, 0)
 
         out = {
+            "harmonic_energy_cumsum": np.full((n_beats, h_mag), np.nan, dtype=float),
+            "h_90": np.full((n_beats,), np.nan, dtype=float),
             "H_MAX": np.asarray(self.H_MAX, dtype=int),
             "H_LOW_MAX": np.asarray(self.H_LOW_MAX, dtype=int),
             "H_HIGH_MIN": np.asarray(self.H_HIGH_MIN, dtype=int),
@@ -895,6 +934,8 @@ class ArterialSegExample(ProcessPipeline):
             Tbeat = float(T[0][beat_idx])
             v = v_global[:, beat_idx]
             s = self._compute_graphics_support_1d(v, Tbeat)
+            out["harmonic_energy_cumsum"][beat_idx, :] = s["harmonic_energy_cumsum"]
+            out["h_90"][beat_idx] = s["h_90"]
             out["E_total"][beat_idx] = s["E_total"]
             out["E_low"][beat_idx] = s["E_low"]
             out["E_high"][beat_idx] = s["E_high"]
