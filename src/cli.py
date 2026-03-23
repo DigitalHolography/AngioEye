@@ -2,11 +2,12 @@
 Command-line interface to run AngioEye pipelines over a collection of HDF5 files.
 
 Usage example:
-    python cli.py --data data/ --pipelines pipelines.txt --output ./results --zip --zip-name my_run.zip
+    python cli.py --data data/ --pipelines pipelines.txt --postprocess postprocess.txt --output ./results --zip --zip-name my_run.zip
 
 Inputs:
     --data / -d        Path to a directory (recursively scanned), a single .h5/.hdf5 file, or a .zip archive of .h5 files.
     --pipelines / -p   Text file listing pipeline names (one per line, '#' and blank lines ignored).
+    --postprocess      Optional text file listing postprocess names (one per line, '#' and blank lines ignored).
     --output / -o      Base directory where results will be written (input subfolder layout is preserved).
     --zip / -z         When set, compress the outputs into a .zip archive after completion.
     --zip-name         Optional filename for the archive (default: outputs.zip).
@@ -32,11 +33,21 @@ from pipelines import (
 )
 from pipelines.core.errors import format_pipeline_exception
 from pipelines.core.utils import write_combined_results_h5
+from postprocess import (
+    PostprocessContext,
+    PostprocessDescriptor,
+    load_postprocess_catalog,
+)
 
 
 def _build_pipeline_registry() -> dict[str, PipelineDescriptor]:
     available, _ = load_pipeline_catalog()
     # pipelines = load_all_pipelines()
+    return {p.name: p for p in available}
+
+
+def _build_postprocess_registry() -> dict[str, PostprocessDescriptor]:
+    available, _ = load_postprocess_catalog()
     return {p.name: p for p in available}
 
 
@@ -65,6 +76,48 @@ def _load_pipeline_list(
             "No pipelines selected (file is empty or only contains comments)."
         )
     return selected
+
+
+def _load_postprocess_list(
+    path: Path, registry: dict[str, PostprocessDescriptor]
+) -> list[PostprocessDescriptor]:
+    raw_lines = path.read_text(encoding="utf-8").splitlines()
+    selected: list[PostprocessDescriptor] = []
+    missing: list[str] = []
+    for line in raw_lines:
+        name = line.strip()
+        if not name or name.startswith("#"):
+            continue
+        postprocess = registry.get(name)
+        if postprocess is None:
+            missing.append(name)
+        else:
+            selected.append(postprocess)
+    if missing:
+        available = ", ".join(registry.keys())
+        raise ValueError(
+            f"Unknown postprocess step(s): {', '.join(missing)}. Available: {available}"
+        )
+    return selected
+
+
+def _validate_postprocess_selection(
+    postprocesses: Sequence[PostprocessDescriptor],
+    selected_pipeline_names: Sequence[str],
+) -> None:
+    selected_set = set(selected_pipeline_names)
+    errors = []
+    for postprocess in postprocesses:
+        missing_required = [
+            name for name in postprocess.required_pipelines if name not in selected_set
+        ]
+        if missing_required:
+            errors.append(
+                f"{postprocess.name} requires pipeline(s): "
+                f"{', '.join(missing_required)}"
+            )
+    if errors:
+        raise ValueError("\n".join(errors))
 
 
 def _find_h5_inputs(path: Path) -> list[Path]:
@@ -177,12 +230,23 @@ def _zip_output_dir(
 def run_cli(
     data_path: Path,
     pipelines_file: Path,
+    postprocess_file: Path | None,
     output_dir: Path,
     zip_outputs: bool = False,
     zip_name: str | None = None,
 ) -> int:
     registry = _build_pipeline_registry()
     pipelines = _load_pipeline_list(pipelines_file, registry)
+    postprocess_registry = _build_postprocess_registry()
+    postprocesses = (
+        _load_postprocess_list(postprocess_file, postprocess_registry)
+        if postprocess_file is not None
+        else []
+    )
+    _validate_postprocess_selection(
+        postprocesses,
+        selected_pipeline_names=[pipeline.name for pipeline in pipelines],
+    )
     data_root, tempdir = _prepare_data_root(data_path)
     work_tempdir_path: Path | None = None
     clean_work_output = False
@@ -200,18 +264,51 @@ def run_cli(
             work_root = work_tempdir_path
 
         failures: list[str] = []
+        processed_outputs: list[Path] = []
         for h5_path in inputs:
             try:
                 relative_parent = _relative_input_parent(h5_path, data_root)
-                _run_pipelines_on_file(
+                combined_output = _run_pipelines_on_file(
                     h5_path,
                     pipelines,
                     work_root,
                     output_relative_parent=relative_parent,
                 )
+                processed_outputs.append(combined_output)
             except Exception as exc:  # noqa: BLE001
                 failures.append(f"{h5_path}: {exc}")
                 print(f"[FAIL] {h5_path.name}: {exc}", file=sys.stderr)
+
+        if postprocesses and processed_outputs:
+            context = PostprocessContext(
+                output_dir=work_root,
+                processed_files=tuple(processed_outputs),
+                selected_pipelines=tuple(pipeline.name for pipeline in pipelines),
+                input_path=data_path,
+                zip_outputs=zip_outputs,
+            )
+            for descriptor in postprocesses:
+                print(f"[POST] Running {descriptor.name}...")
+                try:
+                    result = descriptor.instantiate().run(context)
+                except Exception as exc:  # noqa: BLE001
+                    msg = (
+                        f"Postprocess '{descriptor.name}' failed: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                    failures.append(msg)
+                    print(f"[POST FAIL] {msg}", file=sys.stderr)
+                    continue
+                if result.summary:
+                    print(f"[POST OK] {descriptor.name}: {result.summary}")
+                else:
+                    print(f"[POST OK] {descriptor.name}")
+        elif postprocesses:
+            print(
+                "[POST SKIP] No successful pipeline outputs were generated, "
+                "so postprocess steps were skipped.",
+                file=sys.stderr,
+            )
 
         if zip_outputs:
             try:
@@ -279,6 +376,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Text file with pipeline names to run (one per line, '#' and blank lines ignored).",
     )
     parser.add_argument(
+        "--postprocess",
+        type=Path,
+        default=None,
+        help="Optional text file with postprocess names to run after pipelines.",
+    )
+    parser.add_argument(
         "-o",
         "--output",
         required=True,
@@ -303,6 +406,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_cli(
             args.data,
             args.pipelines,
+            args.postprocess,
             args.output,
             zip_outputs=args.zip,
             zip_name=args.zip_name,

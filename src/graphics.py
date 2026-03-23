@@ -19,58 +19,53 @@ GRAPHICS_SUPPORT_FOLDER = "/Pipelines/arterial_waveform_shape_metrics/global/"
 METRIC_FOLDER = "/Pipelines/arterial_waveform_shape_metrics/global/"
 VALID_METRIC_FOLDERS = ["raw", "bandlimited"]
 SELECTED_METRICS_PNG = {
+    "mu_t_over_T",
     "RI",
     "PI",
-    "crest_factor",
-    "t50_over_T",
     "R_VTI",
     "SF_VTI",
-    "spectral_entropy",
-    "mu_t_over_T",
     "sigma_t_over_T",
-    "delta_phi2",
+    "W50_over_T",
+    "E_low_over_E_total",
+    "E_high_over_E_total",
     "t_max_over_T",
     "t_min_over_T",
     "Delta_t_over_T",
+    "slope_rise_normalized",
+    "slope_fall_normalized",
     "t_up_over_T",
     "t_down_over_T",
     "S_decay",
-    "Delta_DTI",
-    "E_high_over_E_total",
-    "E_low_over_E_total",
+    "crest_factor",
     "R_SD",
-    "slope_fall_normalized",
-    "slope_rise_normalized",
+    "Delta_DTI",
     "gamma_t",
+    "spectral_entropy",
+    "delta_phi2",
+    "rho_h_90",
     "mu_h",
     "sigma_h",
-    "N_eff",
     "N_eff_over_T",
+    "N_H_over_T",
+    "phase_locking_residual",
     "E_recon_H_MAX",
     "Q_t_skew",
     "Q_t_width",
+    "R_Q_t",
     "Q_d_skew",
     "Q_d_width",
     "R_Q_d",
-    "R_Q_t",
     "v_end_over_v_mean",
     "E_slope",
     "E_curv",
-    "phase_locking_residual",
-    "W50_over_T",
-    "W75_over_T",
-    "N_H_over_T",
 }
 METRIC_ALIASES = {
     "Hspec": "spectral_entropy",
 }
 EPS = 1e-12
-H_MAX = 10
-H_LOW_MAX = 2
-H_HIGH_MIN = 4
-H_HIGH_MAX = 8
 LATEX_FORMULAS = {
     "RI": r"$\rm RI$",
+    "rho_h_90": r"$\rho_{h,90}$",
     "crest_factor": r"$\rm CF$",
     "t50_over_T": r"$t_{50}/T$",
     "R_VTI": r"$R_{VTI}$",
@@ -95,7 +90,6 @@ LATEX_FORMULAS = {
     "gamma_t": r"$\gamma_t$",
     "mu_h": r"$\mu_h$",
     "sigma_h": r"$\sigma_h$",
-    "N_eff": r"$N_{\mathrm{eff}}$",
     "N_eff_over_T": r"$N_{\mathrm{eff}}/T$",
     "E_recon_H_MAX": r"$E_{\mathrm{recon},H_{\max}}$",
     "Q_t_skew": r"$Q_{\mathrm{t,skew}}$",
@@ -109,7 +103,6 @@ LATEX_FORMULAS = {
     "E_curv": r"$E_{\mathrm{curv}}$",
     "phase_locking_residual": r"$E_{\phi}$",
     "W50_over_T": r"$W_{50}/T$",
-    "W75_over_T": r"$W_{75}/T$",
     "N_H_over_T": r"$N_H/T$",
 }
 
@@ -138,15 +131,19 @@ def select_support_beat(support, beat_idx):
                 "harmonic_magnitudes",
                 "harmonic_weights",
                 "harmonic_phases",
+                "harmonic_energies",
+                "harmonic_energies_weights",
                 "delta_phi_all",
             }:
                 out[k] = arr[beat_idx, :]
+
             else:
                 out[k] = arr[:, beat_idx]
         elif arr.ndim == 1 and arr.shape[0] > beat_idx:
             out[k] = arr[beat_idx]
         else:
             out[k] = v
+
     return out
 
 
@@ -320,11 +317,12 @@ def plot_group_delta_phi_stats(ax, group_stats, group_name):
             f"{m:.2f}",
             ha="center",
             va=va,
+            bbox=dict(facecolor="white", edgecolor="none", pad=1.0),
             fontsize=10,
         )
 
     ax.set_xlim(1.5, max(hs) + 0.5)
-    ax.set_ylim(-1.1 * np.pi, 1.1 * np.pi)
+    ax.set_ylim(-1.3 * np.pi, 1.3 * np.pi)
     ax.set_xticks(hs)
 
     ax.set_xlabel("Harmonic n (a.u.)", fontsize=14)
@@ -397,9 +395,16 @@ def plot_metric_illustration(ax, metric, support, path=None):
     harmonic_magnitudes = np.asarray(
         support.get("harmonic_magnitudes", []), dtype=float
     )
+    harmonic_energies = np.asarray(support.get("harmonic_energies", []), dtype=float)
+    harmonic_energies_weights = np.asarray(
+        support.get("harmonic_energies_weights", []), dtype=float
+    )
     harmonic_phases = np.asarray(support.get("harmonic_phases", []), dtype=float)
     delta_phi_all = np.asarray(support.get("delta_phi_all", []), dtype=float)
-
+    H_MAX = int(np.asarray(support.get("H_MAX", 10)).item())
+    H_LOW_MAX = int(np.asarray(support.get("H_LOW_MAX", 3)).item())
+    H_HIGH_MIN = int(np.asarray(support.get("H_HIGH_MIN", 4)).item())
+    H_HIGH_MAX = int(np.asarray(support.get("H_HIGH_MAX", 8)).item())
     n = sig.size
     if n < 2:
         ax.text(0.5, 0.5, "Signal too short", ha="center", va="center")
@@ -515,7 +520,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
         ax.plot(tau, sig, linewidth=3, color="#EC5241")
         hline_label(vmax, "Vmax", va="bottom")
         hline_label(vmin, "Vmin", va="top")
-        hline_label(vmean, "Vmean", va="bottom")
+        hline_label(vmean, r"$\overline{{v}}$", va="bottom")
         info_box([f"PI = {pi:.3f}"])
         ax.set_xlabel("rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
@@ -570,7 +575,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
 
         info_box([f"t10/T = {t10:.3f}, t50/T = {t50:.3f}", f"t90/T = {t90:.3f}"])
         ax.set_xlabel("rectified time : t/T", fontsize=14)
-        ax.set_ylabel(r"$C(\tau) \: (a.u.)$ ", fontsize=14, labelpad=12)
+        ax.set_ylabel(r"$d(\tau) \: (a.u.)$ ", fontsize=14, labelpad=12)
 
     elif metric == "R_VTI":
         ratio = float(support["R_VTI"])
@@ -711,7 +716,6 @@ def plot_metric_illustration(ax, metric, support, path=None):
         vline_to_curve(
             t_min, tau, sig, y0=0.0, color="black", linestyles="--", linewidth=1
         )
-        hline_label(vmean, "Vmean", va="bottom")
         info_box([rf"$S_{{decay}}= {s_decay:.3f}$"])
         ax.set_xlabel("rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
@@ -753,6 +757,16 @@ def plot_metric_illustration(ax, metric, support, path=None):
         )
         hline_label(vmax, "Vmax", va="bottom")
         ax.axhline(vend, linestyle="--", linewidth=1, color="black")
+        ax.text(
+            0,
+            vend,
+            rf" $\overline{{Vend}}={vend:.3g}$",
+            transform=ax.get_yaxis_transform(),
+            ha="left",
+            va="bottom",
+            fontsize=12,
+            bbox=dict(facecolor="white", edgecolor="none"),
+        )
         info_box([rf"$R_{{SD}}={ratio:.3f}$"])
         ax.set_xlabel("rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
@@ -775,12 +789,38 @@ def plot_metric_illustration(ax, metric, support, path=None):
         info_box([rf"$\gamma_t={gamma_t:.3f}$"])
         ax.set_xlabel("rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
+    elif metric == "rho_h_90":
+        w_h = np.asarray(harmonic_energies_weights, dtype=float)
+        w_h = w_h[np.isfinite(w_h)]
+        H = len(w_h)
 
+        if H == 0:
+            info_box("Missing harmonic weights")
+            return
+
+        csum = np.cumsum(w_h)
+        xh = np.arange(1, H + 1)
+        rho = float(support["rho_h_90"])
+        h90 = rho * H
+
+        ax.step(xh, csum, where="mid", color="#EC5241", linewidth=2)
+        ax.axhline(0.90, linestyle="--", color="black", linewidth=1)
+        ax.axvline(h90, linestyle="--", color="black", linewidth=1)
+
+        info_box(
+            [
+                rf"$\rho_{{h,90}} = {rho:.3f}$",
+                rf"$h_{{90}} = {h90:.2f}$",
+            ]
+        )
+        ax.set_xlabel("Harmonic n (a.u.)", fontsize=14)
+        ax.set_ylabel(r"Energy weights $w_n$", fontsize=14, labelpad=12)
+        ax.set_ylim(0, 1.05)
     elif metric == "mu_h":
-        w_h = harmonic_weights
+        w_h = harmonic_energies_weights
         mu_h = float(support["mu_h"])
         xh = np.arange(1, len(w_h) + 1)
-
+        ax.set_yscale("log")
         ax.bar(xh, w_h, width=0.8, color="#EC5241")
         ax.axvline(mu_h, linestyle="--", linewidth=1.2, color="black")
         info_box([rf"$\mu_h={mu_h:.3f}$", f"H={len(w_h)}"])
@@ -788,11 +828,11 @@ def plot_metric_illustration(ax, metric, support, path=None):
         ax.set_ylabel(r"$w_n\:(a.u.)$", fontsize=14, labelpad=12)
 
     elif metric == "sigma_h":
-        w_h = harmonic_weights
+        w_h = harmonic_energies_weights
         mu_h = float(support["mu_h"])
         sigma_h = float(support["sigma_h"])
         xh = np.arange(1, len(w_h) + 1)
-
+        ax.set_yscale("log")
         ax.bar(xh, w_h, width=0.8, color="#EC5241")
         ax.axvline(mu_h, linestyle="--", linewidth=1.2, color="black")
         ax.axvline(mu_h - sigma_h, linestyle=":", linewidth=1.0, color="black")
@@ -878,7 +918,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
         ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
 
     elif metric in {"Hspec", "spectral_entropy"}:
-        p = harmonic_weights
+        p = harmonic_energies_weights
         hn = len(p)
         ent = float(support["spectral_entropy"])
         xh = np.arange(1, hn + 1)
@@ -899,50 +939,76 @@ def plot_metric_illustration(ax, metric, support, path=None):
                 va="bottom",
                 bbox=dict(facecolor="white", edgecolor="none"),
             )
-
+        ax.set_yscale("log")
         info_box([f"H={hn}", f"Hspec = {ent:.3f}"])
         ax.set_xlabel("Harmonic n (a.u.)", fontsize=14)
-        ax.set_ylabel(r"$p_n \: (a.u.)$", fontsize=14, labelpad=12)
+        ax.set_ylabel(r"$\tilde a_n$ (a.u.)", fontsize=14, labelpad=12)
 
     elif metric == "E_low_over_E_total":
-        mags2 = np.r_[0.0, harmonic_magnitudes] ** 2
-        e_low = float(np.nansum(mags2[1:H_LOW_MAX]))
-        e_total = float(np.nansum(mags2))
+        mags2 = harmonic_energies
+        e_low = float(support["E_low"])
+        e_total = float(support["E_total"])
+        e_high = float(support["E_high"])
         ratio = float(support["E_low_over_E_total"])
         xh = np.arange(0, len(mags2))
 
         ax.set_yscale("log")
-        ax.bar(xh[1:H_LOW_MAX], mags2[1:H_LOW_MAX], color="#EC5241")
+        ax.bar(xh[: H_LOW_MAX + 1], mags2[: H_LOW_MAX + 1], color="#EC5241")
         ax.bar(xh[H_LOW_MAX:], mags2[H_LOW_MAX:], color="#cccccc")
-        ax.axvline(H_LOW_MAX, linestyle="--", color="black")
-        info_box(
-            [
-                f"E_low = {e_low:.3g}",
-                f"E_total = {e_total:.3g}",
-                rf"$E_{{low}}/E_{{total}} = {ratio:.3f}$",
-            ]
+        lines = [
+            f"E_low = {e_low:.3g}",
+            f"E_total = {e_total:.3g}",
+            rf"$E_{{low}}/E_{{total}} = {ratio:.3f}$",
+        ]
+        text = "\n".join([str(x) for x in lines if x is not None and str(x) != ""])
+
+        ax.text(
+            0.5,
+            0.98,
+            text,
+            transform=ax.transAxes,
+            ha="left",
+            va="top",
+            fontsize=12,
+            bbox=dict(facecolor="white", edgecolor="none", pad=1.0),
+            clip_on=True,
         )
+
         ax.set_xlabel("Harmonic n (a.u.)", fontsize=14)
         ax.set_ylabel(r"$|V_n|^2 \: (a.u.)$", fontsize=14, labelpad=12)
 
     elif metric == "E_high_over_E_total":
-        mags2 = np.r_[0.0, harmonic_magnitudes] ** 2
-        e_high = float(np.nansum(mags2[H_HIGH_MIN:H_HIGH_MAX]))
-        e_total = float(np.nansum(mags2))
+        mags2 = harmonic_energies
+        ax.set_yscale("log")
+        e_high = float(support["E_high"])
+        e_total = float(support["E_total"])
         ratio = float(support["E_high_over_E_total"])
         xh = np.arange(0, len(mags2))
 
-        ax.set_yscale("log")
         ax.bar(xh[1:H_HIGH_MIN], mags2[1:H_HIGH_MIN], color="#cccccc")
-        ax.bar(xh[H_HIGH_MIN:H_HIGH_MAX], mags2[H_HIGH_MIN:H_HIGH_MAX], color="#EC5241")
-        ax.bar(xh[H_HIGH_MAX:], mags2[H_HIGH_MAX:], color="#cccccc")
-        ax.axvline(H_HIGH_MIN, linestyle="--", color="black")
-        info_box(
-            [
-                f"E_high = {e_high:.3g}",
-                f"E_total = {e_total:.3g}",
-                rf"$E_{{high}}/E_{{total}} = {ratio:.3f}$",
-            ]
+        ax.bar(
+            xh[H_HIGH_MIN : H_HIGH_MAX + 1],
+            mags2[H_HIGH_MIN : H_HIGH_MAX + 1],
+            color="#EC5241",
+        )
+
+        lines = [
+            f"E_high = {e_high:.3g}",
+            f"E_total = {e_total:.3g}",
+            rf"$E_{{high}}/E_{{total}} = {ratio:.3f}$",
+        ]
+        text = "\n".join([str(x) for x in lines if x is not None and str(x) != ""])
+
+        ax.text(
+            0.5,
+            0.98,
+            text,
+            transform=ax.transAxes,
+            ha="left",
+            va="top",
+            fontsize=12,
+            bbox=dict(facecolor="white", edgecolor="none", pad=1.0),
+            clip_on=True,
         )
         ax.set_xlabel("Harmonic n (a.u.)", fontsize=14)
         ax.set_ylabel(r"$|V_n|^2 \: (a.u.)$", fontsize=14, labelpad=12)
@@ -985,7 +1051,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
             ]
         )
         ax.set_xlabel("rectified time : t/T", fontsize=14)
-        ax.set_ylabel(r"$C(\tau) \: (a.u.)$", fontsize=14, labelpad=12)
+        ax.set_ylabel(r"$d(\tau) \: (a.u.)$", fontsize=14, labelpad=12)
 
     elif metric == "Q_t_width":
         t25 = float(support["t25_over_T"])
@@ -997,13 +1063,15 @@ def plot_metric_illustration(ax, metric, support, path=None):
         y75 = _y_at(t75, tau, C)
         ax.vlines(t25, 0, y25, linestyle="--", linewidth=1, color="black")
         ax.vlines(t75, 0, y75, linestyle="--", linewidth=1, color="black")
+        ax.hlines(y25, 0, t25, linestyle="--", linewidth=1, color="black")
+        ax.hlines(y75, 0, t75, linestyle="--", linewidth=1, color="black")
         ax.fill_between(tau, 0, C, where=(tau >= t25) & (tau <= t75), color="#F2CCC7")
 
         info_box(
             [rf"$Q_{{t_{{width}}}}={q_t_width:.3f}$", f"t25={t25:.3f}, t75={t75:.3f}"]
         )
         ax.set_xlabel("rectified time : t/T", fontsize=14)
-        ax.set_ylabel(r"$C(\tau) \: (a.u.)$", fontsize=14, labelpad=12)
+        ax.set_ylabel(r"$d(\tau) \: (a.u.)$", fontsize=14, labelpad=12)
 
     elif metric == "R_Q_t":
         t10 = float(support["t10_over_T"])
@@ -1019,6 +1087,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
         for tq in [t10, t25, t50, t75, t90]:
             yq = _y_at(tq, tau, C)
             ax.vlines(tq, 0, yq, linestyle="--", linewidth=1, color="black")
+            ax.hlines(yq, 0, tq, linestyle="--", linewidth=1, color="black")
         ax.fill_between(tau, 0, C, where=(tau >= t25) & (tau <= t75), color="#F2CCC7")
 
         info_box(
@@ -1029,7 +1098,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
             ]
         )
         ax.set_xlabel("rectified time : t/T", fontsize=14)
-        ax.set_ylabel(r"$C(\tau) \: (a.u.)$", fontsize=14, labelpad=12)
+        ax.set_ylabel(r"$d(\tau) \: (a.u.)$", fontsize=14, labelpad=12)
 
     elif metric == "Q_d_skew":
         d10 = float(support["d10"])
@@ -1049,7 +1118,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
             ]
         )
         ax.set_xlabel("rectified time : t/T", fontsize=14)
-        ax.set_ylabel(r"$C(\tau) \: (a.u.)$", fontsize=14, labelpad=12)
+        ax.set_ylabel(r"$d(\tau) \: (a.u.)$", fontsize=14, labelpad=12)
 
     elif metric == "Q_d_width":
         d25 = float(support["d25"])
@@ -1070,7 +1139,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
             [rf"$Q_{{d_{{width}}}}={q_d_width:.3f}$", f"d25={d25:.3f}, d75={d75:.3f}"]
         )
         ax.set_xlabel("rectified time : t/T", fontsize=14)
-        ax.set_ylabel(r"$C(\tau) \: (a.u.)$", fontsize=14, labelpad=12)
+        ax.set_ylabel(r"$d(\tau) \: (a.u.)$", fontsize=14, labelpad=12)
 
     elif metric == "R_Q_d":
         d10 = float(support["d10"])
@@ -1099,7 +1168,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
             ]
         )
         ax.set_xlabel("rectified time : t/T", fontsize=14)
-        ax.set_ylabel(r"$C(\tau) \: (a.u.)$", fontsize=14, labelpad=12)
+        ax.set_ylabel(r"$d(\tau) \: (a.u.)$", fontsize=14, labelpad=12)
 
     elif metric == "v_end_over_v_mean":
         vmean = float(support["vmean"])
@@ -1112,7 +1181,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
         ax.fill_between(
             tau[i0:i1], 0, sig[i0:i1], where=np.isfinite(sig[i0:i1]), color="#F2CCC7"
         )
-        hline_label(vmean, "Vmean", va="bottom")
+        hline_label(vmean, r"$\overline{{v}}$", va="bottom")
         ax.axhline(vend, linestyle="--", linewidth=1, color="black")
         ax.text(
             0,
@@ -1166,15 +1235,6 @@ def plot_metric_illustration(ax, metric, support, path=None):
         ax.set_xlabel("rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
 
-    elif metric == "phase_locking_residual":
-        e_phi = float(support["phase_locking_residual"])
-        xh = np.arange(2, len(delta_phi_all) + 2)
-
-        ax.axhline(0, color="black", linewidth=1.0)
-        ax.plot(xh, delta_phi_all, "o-", color="#EC5241", linewidth=2)
-        info_box([rf"$E_\phi={e_phi:.4f}$"])
-        ax.set_xlabel("Harmonic n (a.u.)", fontsize=14)
-        ax.set_ylabel(r"$\delta \phi_n$ (rad)", fontsize=14, labelpad=12)
     elif metric == "W50_over_T":
         w50 = float(support["W50_over_T"])
         vmax = float(support["vmax"])
@@ -1197,32 +1257,6 @@ def plot_metric_illustration(ax, metric, support, path=None):
             [
                 rf"$W_{{50}}/T = {w50:.3f}$",
                 rf"$0.5\,V_{{max}} = {thr:.3f}$",
-            ]
-        )
-        ax.set_xlabel("rectified time : t/T", fontsize=14)
-        ax.set_ylabel(r"$v_b \: (mm/s)$", fontsize=14, labelpad=12)
-    elif metric == "W75_over_T":
-        w75 = float(support["W75_over_T"])
-        vmax = float(support["vmax"])
-        thr = 0.75 * vmax
-
-        mask = np.isfinite(sig) & (sig >= thr)
-
-        ax.plot(tau, sig, linewidth=3, color="#EC5241")
-        ax.axhline(thr, linestyle="--", linewidth=1, color="black")
-        ax.fill_between(
-            tau,
-            0,
-            sig,
-            where=mask,
-            color="#F2CCC7",
-            interpolate=True,
-        )
-
-        info_box(
-            [
-                rf"$W_{{75}}/T = {w75:.3f}$",
-                rf"$0.75\,V_{{max}} = {thr:.3f}$",
             ]
         )
         ax.set_xlabel("rectified time : t/T", fontsize=14)
@@ -1281,7 +1315,6 @@ def export_selected_metric_pngs_bandlimited(all_results, zip_path, out_dir):
             grp = df.groupby("group")["mean"]
             grp_mean = grp.mean()
             grp_std = grp.std()
-
             rep_file = select_representative_file_per_group(df, value_col="mean")
 
             fig = plt.figure(figsize=(15, 6.2), dpi=200)
@@ -1371,6 +1404,7 @@ def export_selected_metric_pngs_bandlimited(all_results, zip_path, out_dir):
                     ax.set_title(f"{g}", fontsize=14)
                 elif path and os.path.exists(path):
                     support = extract_graphics_support(path, mode="bandlimited")
+
                     support_beat = select_support_beat(support, 0)
                     plot_metric_illustration(ax, metric, support_beat, path)
 
@@ -1564,6 +1598,7 @@ def select_representative_file_per_group(df_metric: pd.DataFrame, value_col="mea
         # index du patient le plus proche de la médiane
         idx = int(np.nanargmin(np.abs(vals - med)))
         rep[g] = gdf.iloc[idx]["file"]
+
     return rep
 
 
@@ -2135,4 +2170,10 @@ if __name__ == "__main__":
     dataset_path_bl = "/Artery/VelocityPerBeat/VelocitySignalPerBeatBandLimited/value"
 
     results, single_group = analyze_zip(zip_path)
-    save_dashboard(results, zip_path, single_group)
+    dashboard_file = "metric_dashboard.html"
+    png_dir = os.path.join(os.path.dirname(dashboard_file), "export_png")
+    export_selected_metric_pngs_bandlimited(results, zip_path, png_dir)
+    replace_folder_in_zip(zip_path, png_dir, arc_folder="export_png")
+    if os.path.isdir(png_dir):
+        shutil.rmtree(png_dir)
+    # save_dashboard(results, zip_path, single_group)

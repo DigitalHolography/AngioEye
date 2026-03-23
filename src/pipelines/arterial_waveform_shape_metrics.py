@@ -31,9 +31,9 @@ class ArterialSegExample(ProcessPipeline):
     ratio_vend_start = 0.75
     ratio_vend_end = 0.90
 
-    H_LOW_MAX = 3
-    H_HIGH_MIN = 4
-    H_HIGH_MAX = 8
+    H_LOW_MAX = 1
+    H_HIGH_MIN = 2
+    H_HIGH_MAX = 10
 
     H_MAX = 10
     H_PHASE_RESIDUAL = 10
@@ -203,7 +203,7 @@ class ArterialSegExample(ProcessPipeline):
         f = np.fft.rfftfreq(n, d=1.0 / fs)
         h = f * Tbeat
 
-        E_total = float(np.sum(P))
+        E_total = float(np.sum(P[1:]))
         if not np.isfinite(E_total) or E_total <= 0:
             return np.nan, np.nan
 
@@ -275,6 +275,41 @@ class ArterialSegExample(ProcessPipeline):
         h_full = np.arange(0, H + 1, dtype=float)
         h90 = float(np.interp(0.90, C_full, h_full))
         return float(h90 / H)
+
+    def _rho_h_90_support_from_harmonics(self, V: np.ndarray) -> dict:
+        out = {
+            "rho_h_90": np.nan,
+            "h_90": np.nan,
+            "harmonic_energy_cumsum": np.full((self.H_MAX,), np.nan, dtype=float),
+        }
+
+        if V is None:
+            return out
+
+        H = int(V.size - 1)
+        if H < 1:
+            return out
+
+        power = np.abs(V[1 : H + 1]) ** 2
+        power = np.where(np.isfinite(power), power, np.nan)
+
+        s = float(np.nansum(power))
+        if (not np.isfinite(s)) or s <= 0:
+            return out
+
+        w = power / s
+        C = np.cumsum(w)
+
+        out["harmonic_energy_cumsum"][:H] = C
+
+        C_full = np.concatenate(([0.0], C))
+        h_full = np.arange(0, H + 1, dtype=float)
+
+        h90 = float(np.interp(0.90, C_full, h_full))
+        out["h_90"] = h90
+        out["rho_h_90"] = float(h90 / H)
+
+        return out
 
     def _spectral_entropy_from_harmonics(self, V: np.ndarray) -> float:
         """
@@ -753,23 +788,46 @@ class ArterialSegExample(ProcessPipeline):
         V = hp["V"]
         vb = hp["vb"]
         H = int(hp["H"])
-
-        harmonic_magnitudes = np.full((self.H_MAX,), np.nan, dtype=float)
+        harmonic_magnitudes = np.full((self.H_MAX + 1,), np.nan, dtype=float)
         harmonic_weights = np.full((self.H_MAX,), np.nan, dtype=float)
+        harmonic_energy_weights = np.full((self.H_MAX,), np.nan, dtype=float)
         harmonic_phases = np.full((self.H_MAX,), np.nan, dtype=float)
+        harmonic_energies = np.full((self.H_MAX + 1,), np.nan, dtype=float)
         delta_phi_all = np.full(
             (max(self.H_PHASE_RESIDUAL - 1, 0),), np.nan, dtype=float
         )
 
-        if V is not None and H >= 1:
-            mags = np.abs(V[1 : H + 1])
-            power = mags**2
-            phases = np.angle(V[1 : H + 1])
-            harmonic_magnitudes[:H] = mags
-            harmonic_phases[:H] = phases
-            power_sum = float(np.nansum(power))
+        E_total = np.nan
+        E_low = np.nan
+        E_high = np.nan
+
+        if V is not None and H >= 0:
+            mags = np.abs(V[: H + 1])  # indices 0..H
+            power = mags**2  # |V_n|^2
+            harmonic_energies[: H + 1] = power
+            harmonic_magnitudes[: H + 1] = mags
+
+            if H >= 1:
+                phases = np.angle(V[1 : H + 1])
+                harmonic_phases[:H] = phases
+
+            power_h = power[1 : H + 1]
+            mags_h = mags[1 : H + 1]
+
+            power_sum = float(np.nansum(power_h))
+            mag_sum = float(np.nansum(mags_h))
+
+            E_total = power_sum
+            E_low = float(np.nansum(power[1 : self.H_LOW_MAX + 1]))
+            E_high = float(np.nansum(power[self.H_HIGH_MIN : self.H_HIGH_MAX + 1]))
+
+            # poids énergie : définis seulement sur n>=1
             if np.isfinite(power_sum) and power_sum > 0:
-                harmonic_weights[:H] = power / (power_sum + self.eps)
+                harmonic_energy_weights[0:H] = power_h / (power_sum + self.eps)
+
+            # poids amplitude : définis seulement sur n>=1
+            if np.isfinite(mag_sum) and mag_sum > 0:
+                harmonic_weights[0:H] = mags_h / (mag_sum + self.eps)
 
             if H >= 2 and np.abs(V[1]) > self.eps:
                 phi1 = float(np.angle(V[1]))
@@ -781,7 +839,7 @@ class ArterialSegExample(ProcessPipeline):
                         )
 
         metrics = self._compute_metrics_1d(vv, Tbeat)
-
+        rho_support = self._rho_h_90_support_from_harmonics(V)
         k0, k1 = self._late_window_indices(n)
         vend = float(self._safe_nanmean(vv[k0:k1])) if k1 > k0 else np.nan
 
@@ -790,6 +848,15 @@ class ArterialSegExample(ProcessPipeline):
             vb_out[: min(len(vb), n)] = np.asarray(vb[:n], dtype=float)
 
         return {
+            "harmonic_energy_cumsum": rho_support["harmonic_energy_cumsum"],
+            "h_90": np.asarray(rho_support["h_90"], dtype=float),
+            "H_MAX": np.asarray(self.H_MAX, dtype=int),
+            "H_LOW_MAX": np.asarray(self.H_LOW_MAX, dtype=int),
+            "H_HIGH_MIN": np.asarray(self.H_HIGH_MIN, dtype=int),
+            "H_HIGH_MAX": np.asarray(self.H_HIGH_MAX, dtype=int),
+            "E_total": np.asarray(E_total, dtype=float),
+            "E_low": np.asarray(E_low, dtype=float),
+            "E_high": np.asarray(E_high, dtype=float),
             "signal_mean": np.asarray(vv, dtype=float),
             "tau": np.asarray(tau, dtype=float),
             "cumulative": np.asarray(cumulative, dtype=float),
@@ -801,6 +868,8 @@ class ArterialSegExample(ProcessPipeline):
             "d2vdt2": np.asarray(d2vdt2, dtype=float),
             "harmonic_magnitudes": harmonic_magnitudes,
             "harmonic_weights": harmonic_weights,
+            "harmonic_energies": harmonic_energies,
+            "harmonic_energies_weights": harmonic_energy_weights,
             "harmonic_phases": harmonic_phases,
             "delta_phi_all": delta_phi_all,
             "vend": np.asarray(vend, dtype=float),
@@ -825,6 +894,12 @@ class ArterialSegExample(ProcessPipeline):
         h_phi = max(self.H_PHASE_RESIDUAL - 1, 0)
 
         out = {
+            "harmonic_energy_cumsum": np.full((n_beats, h_mag), np.nan, dtype=float),
+            "h_90": np.full((n_beats,), np.nan, dtype=float),
+            "H_MAX": np.asarray(self.H_MAX, dtype=int),
+            "H_LOW_MAX": np.asarray(self.H_LOW_MAX, dtype=int),
+            "H_HIGH_MIN": np.asarray(self.H_HIGH_MIN, dtype=int),
+            "H_HIGH_MAX": np.asarray(self.H_HIGH_MAX, dtype=int),
             "signal_mean": np.full((n_t, n_beats), np.nan, dtype=float),
             "tau": np.full((n_t, n_beats), np.nan, dtype=float),
             "cumulative": np.full((n_t, n_beats), np.nan, dtype=float),
@@ -834,10 +909,15 @@ class ArterialSegExample(ProcessPipeline):
             "vb": np.full((n_t, n_beats), np.nan, dtype=float),
             "dvdt": np.full((n_t, n_beats), np.nan, dtype=float),
             "m0": np.full((n_beats,), np.nan),
+            "E_total": np.full((n_beats,), np.nan, dtype=float),
+            "E_low": np.full((n_beats,), np.nan, dtype=float),
+            "E_high": np.full((n_beats,), np.nan, dtype=float),
             "d2vdt2": np.full((n_t, n_beats), np.nan, dtype=float),
-            "harmonic_magnitudes": np.full((n_beats, h_mag), np.nan, dtype=float),
+            "harmonic_magnitudes": np.full((n_beats, h_mag + 1), np.nan, dtype=float),
             "harmonic_weights": np.full((n_beats, h_mag), np.nan, dtype=float),
             "harmonic_phases": np.full((n_beats, h_mag), np.nan, dtype=float),
+            "harmonic_energies": np.full((n_beats, h_mag + 1), np.nan, dtype=float),
+            "harmonic_energies_weights": np.full((n_beats, h_mag), np.nan, dtype=float),
             "delta_phi_all": np.full((n_beats, h_phi), np.nan, dtype=float),
             "vend": np.full((n_beats,), np.nan, dtype=float),
             "late_window_start_idx": np.full((n_beats,), -1, dtype=int),
@@ -854,7 +934,11 @@ class ArterialSegExample(ProcessPipeline):
             Tbeat = float(T[0][beat_idx])
             v = v_global[:, beat_idx]
             s = self._compute_graphics_support_1d(v, Tbeat)
-
+            out["harmonic_energy_cumsum"][beat_idx, :] = s["harmonic_energy_cumsum"]
+            out["h_90"][beat_idx] = s["h_90"]
+            out["E_total"][beat_idx] = s["E_total"]
+            out["E_low"][beat_idx] = s["E_low"]
+            out["E_high"][beat_idx] = s["E_high"]
             out["signal_mean"][:, beat_idx] = s["signal_mean"]
             out["tau"][:, beat_idx] = s["tau"]
             out["cumulative"][:, beat_idx] = s["cumulative"]
@@ -872,6 +956,10 @@ class ArterialSegExample(ProcessPipeline):
             out["vmax"][beat_idx] = s["vmax"]
             out["vmin"][beat_idx] = s["vmin"]
             out["vmean"][beat_idx] = s["vmean"]
+            out["harmonic_energies"][beat_idx, :] = s["harmonic_energies"]
+            out["harmonic_energies_weights"][beat_idx, :] = s[
+                "harmonic_energies_weights"
+            ]
             out["vend"][beat_idx] = s["vend"]
             out["late_window_start_idx"][beat_idx] = s["late_window_start_idx"]
             out["late_window_end_idx"][beat_idx] = s["late_window_end_idx"]

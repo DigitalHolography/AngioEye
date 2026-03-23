@@ -5,8 +5,10 @@ from PyInstaller.utils.hooks import collect_submodules
 datas = []
 hiddenimports = []
 datas += collect_data_files('pipelines')
+datas += collect_data_files('postprocess')
 datas += collect_data_files('sv_ttk')
 hiddenimports += collect_submodules('pipelines')
+hiddenimports += collect_submodules('postprocess')
 
 
 a = Analysis(

@@ -17,6 +17,7 @@ dependencies = ["numpy>=1.24", "h5py>=3.9", "sv-ttk>=2.6"]
 [project.optional-dependencies]
 # For specific pipelines
 pipelines = ["torch>=2.2", "pandas>=2.1"]
+postprocess = ["matplotlib>=3.8", "pandas>=2.1", "plotly>=5.18"]
 
 # For developers
 dev = ["ruff", "pre-commit", "pyinstaller"]
@@ -25,15 +26,15 @@ dev = ["ruff", "pre-commit", "pyinstaller"]
 
 [project.scripts]
 # This allows users to simply type 'angioeye' in their terminal
-angioeye = "angio_eye:main"
-angioeye-cli = "cli:main"
+angioeye = "launcher:main"
+angioeye-cli = "launcher:cli_main"
 build-installer = "scripts.build_installer:main"
 
 lint-tool = "scripts.ruff_linter:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
-py-modules = ["angio_eye", "cli", "app_settings"]
+py-modules = ["angio_eye", "cli", "app_settings", "graphics", "launcher"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
