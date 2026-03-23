@@ -34,7 +34,7 @@ class ArterialSegExample(ProcessPipeline):
     H_LOW_MAX = 1
     H_HIGH_MIN = 2
     H_HIGH_MAX = 10
-
+    H_CUMSUM_INTERP_POINTS = 256
     H_MAX = 10
     H_PHASE_RESIDUAL = 10
 
@@ -281,6 +281,13 @@ class ArterialSegExample(ProcessPipeline):
             "rho_h_90": np.nan,
             "h_90": np.nan,
             "harmonic_energy_cumsum": np.full((self.H_MAX,), np.nan, dtype=float),
+            "harmonic_energy_cumsum_h": np.full((self.H_MAX,), np.nan, dtype=float),
+            "harmonic_energy_cumsum_interp": np.full(
+                (self.H_CUMSUM_INTERP_POINTS,), np.nan, dtype=float
+            ),
+            "harmonic_energy_cumsum_h_interp": np.full(
+                (self.H_CUMSUM_INTERP_POINTS,), np.nan, dtype=float
+            ),
         }
 
         if V is None:
@@ -298,12 +305,22 @@ class ArterialSegExample(ProcessPipeline):
             return out
 
         w = power / s
-        C = np.cumsum(w)
+        C = np.cumsum(w)  # C(1), ..., C(H)
+        h = np.arange(1, H + 1, dtype=float)
 
+        # stockage discret
         out["harmonic_energy_cumsum"][:H] = C
+        out["harmonic_energy_cumsum_h"][:H] = h
 
+        # interpolation continue avec convention C(0)=0
         C_full = np.concatenate(([0.0], C))
         h_full = np.arange(0, H + 1, dtype=float)
+
+        h_interp = np.linspace(0.0, float(H), self.H_CUMSUM_INTERP_POINTS)
+        C_interp = np.interp(h_interp, h_full, C_full)
+
+        out["harmonic_energy_cumsum_h_interp"][:] = h_interp
+        out["harmonic_energy_cumsum_interp"][:] = C_interp
 
         h90 = float(np.interp(0.90, C_full, h_full))
         out["h_90"] = h90
@@ -849,6 +866,13 @@ class ArterialSegExample(ProcessPipeline):
 
         return {
             "harmonic_energy_cumsum": rho_support["harmonic_energy_cumsum"],
+            "harmonic_energy_cumsum_h": rho_support["harmonic_energy_cumsum_h"],
+            "harmonic_energy_cumsum_interp": rho_support[
+                "harmonic_energy_cumsum_interp"
+            ],
+            "harmonic_energy_cumsum_h_interp": rho_support[
+                "harmonic_energy_cumsum_h_interp"
+            ],
             "h_90": np.asarray(rho_support["h_90"], dtype=float),
             "H_MAX": np.asarray(self.H_MAX, dtype=int),
             "H_LOW_MAX": np.asarray(self.H_LOW_MAX, dtype=int),
@@ -894,6 +918,13 @@ class ArterialSegExample(ProcessPipeline):
         h_phi = max(self.H_PHASE_RESIDUAL - 1, 0)
 
         out = {
+            "harmonic_energy_cumsum_h": np.full((n_beats, h_mag), np.nan, dtype=float),
+            "harmonic_energy_cumsum_interp": np.full(
+                (n_beats, self.H_CUMSUM_INTERP_POINTS), np.nan, dtype=float
+            ),
+            "harmonic_energy_cumsum_h_interp": np.full(
+                (n_beats, self.H_CUMSUM_INTERP_POINTS), np.nan, dtype=float
+            ),
             "harmonic_energy_cumsum": np.full((n_beats, h_mag), np.nan, dtype=float),
             "h_90": np.full((n_beats,), np.nan, dtype=float),
             "H_MAX": np.asarray(self.H_MAX, dtype=int),
@@ -935,6 +966,13 @@ class ArterialSegExample(ProcessPipeline):
             v = v_global[:, beat_idx]
             s = self._compute_graphics_support_1d(v, Tbeat)
             out["harmonic_energy_cumsum"][beat_idx, :] = s["harmonic_energy_cumsum"]
+            out["harmonic_energy_cumsum_h"][beat_idx, :] = s["harmonic_energy_cumsum_h"]
+            out["harmonic_energy_cumsum_interp"][beat_idx, :] = s[
+                "harmonic_energy_cumsum_interp"
+            ]
+            out["harmonic_energy_cumsum_h_interp"][beat_idx, :] = s[
+                "harmonic_energy_cumsum_h_interp"
+            ]
             out["h_90"][beat_idx] = s["h_90"]
             out["E_total"][beat_idx] = s["E_total"]
             out["E_low"][beat_idx] = s["E_low"]
