@@ -407,9 +407,9 @@ class ProcessApp(tk.Tk):
             text="Reload pipelines",
             command=self.refresh_pipeline_catalog,
         ).grid(row=0, column=3, sticky="w", padx=(4, 0))
-        ttk.Label(
-            controls, textvariable=self.pipeline_library_summary_var
-        ).grid(row=0, column=4, sticky="e")
+        ttk.Label(controls, textvariable=self.pipeline_library_summary_var).grid(
+            row=0, column=4, sticky="e"
+        )
 
         library_container = ttk.Frame(parent)
         library_container.grid(row=2, column=0, sticky="nsew")
@@ -514,7 +514,9 @@ class ProcessApp(tk.Tk):
 
     def _register_pipelines(self) -> None:
         available, missing = load_pipeline_catalog()
-        rows = sorted([*available, *missing], key=lambda pipeline: pipeline.name.lower())
+        rows = sorted(
+            [*available, *missing], key=lambda pipeline: pipeline.name.lower()
+        )
         self.pipeline_registry = {p.name: p for p in available}
         self.pipeline_catalog = {p.name: p for p in rows}
         self.pipeline_rows = rows
@@ -587,7 +589,9 @@ class ProcessApp(tk.Tk):
         for child in self.pipeline_checks_inner.winfo_children():
             child.destroy()
         self.pipeline_check_vars = {}
-        visible_rows = [row for row in rows if self.pipeline_visibility.get(row.name, False)]
+        visible_rows = [
+            row for row in rows if self.pipeline_visibility.get(row.name, False)
+        ]
         if not visible_rows:
             ttk.Label(
                 self.pipeline_checks_inner,
@@ -634,13 +638,15 @@ class ProcessApp(tk.Tk):
         )
 
         for idx, pipeline in enumerate(rows, start=1):
-            var = tk.BooleanVar(value=self.pipeline_visibility.get(pipeline.name, False))
+            var = tk.BooleanVar(
+                value=self.pipeline_visibility.get(pipeline.name, False)
+            )
             check = ttk.Checkbutton(
                 self.pipeline_library_inner,
                 text=pipeline.name,
                 variable=var,
-                command=lambda name=pipeline.name, visible_var=var: self._set_pipeline_visibility(
-                    name, visible_var.get()
+                command=lambda name=pipeline.name, visible_var=var: (
+                    self._set_pipeline_visibility(name, visible_var.get())
                 ),
             )
             check.grid(row=idx, column=0, sticky="w", pady=(0, 6))
