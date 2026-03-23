@@ -1214,12 +1214,12 @@ def plot_metric_illustration(ax, metric, support, path=None):
 
     elif metric == "E_slope":
         e_slope = float(support["E_slope"])
-
+        dvdt_norm = support["dvdt_norm"]
         ax.plot(tau, sig, linewidth=3, color="#EC5241", label="signal")
         ax2 = ax.twinx()
         ax2.plot(
             tau,
-            dvdt**2,
+            dvdt_norm,
             linestyle="--",
             linewidth=1.5,
             color="black",
@@ -1233,12 +1233,12 @@ def plot_metric_illustration(ax, metric, support, path=None):
 
     elif metric == "E_curv":
         e_curv = float(support["E_curv"])
-
+        d2vdt2_norm = support["d2vdt2_norm"]
         ax.plot(tau, sig, linewidth=3, color="#EC5241", label="signal")
         ax2 = ax.twinx()
         ax2.plot(
             tau,
-            d2vdt2**2,
+            d2vdt2_norm,
             linestyle="--",
             linewidth=1.5,
             color="black",
@@ -1445,7 +1445,7 @@ def export_selected_metric_pngs_bandlimited(all_results, zip_path, out_dir):
                 ax_empty = fig.add_subplot(right[r, c])
                 ax_empty.axis("off")
 
-            png_path = os.path.join(out_dir, f"{metric}_bandlimited.png")
+            png_path = os.path.join(out_dir, f"{metric}_bandlimited.eps")
             fig.savefig(png_path)
             plt.close(fig)
 
