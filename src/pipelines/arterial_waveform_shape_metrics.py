@@ -31,9 +31,9 @@ class ArterialSegExample(ProcessPipeline):
     ratio_vend_start = 0.75
     ratio_vend_end = 0.90
 
-    H_LOW_MAX = 3
-    H_HIGH_MIN = 4
-    H_HIGH_MAX = 8
+    H_LOW_MAX = 1
+    H_HIGH_MIN = 2
+    H_HIGH_MAX = 10
 
     H_MAX = 10
     H_PHASE_RESIDUAL = 10
@@ -203,7 +203,7 @@ class ArterialSegExample(ProcessPipeline):
         f = np.fft.rfftfreq(n, d=1.0 / fs)
         h = f * Tbeat
 
-        E_total = float(np.sum(P))
+        E_total = float(np.sum(P[1:]))
         if not np.isfinite(E_total) or E_total <= 0:
             return np.nan, np.nan
 

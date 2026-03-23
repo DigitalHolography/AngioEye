@@ -20,10 +20,10 @@ def default_settings_path() -> Path:
     return base_dir / APP_NAME / SETTINGS_FILENAME
 
 
-def normalize_pipeline_visibility(
-    pipeline_names: Iterable[str], stored_visibility: Mapping[str, bool] | None
+def normalize_named_visibility(
+    item_names: Iterable[str], stored_visibility: Mapping[str, bool] | None
 ) -> tuple[dict[str, bool], bool]:
-    ordered_names = list(dict.fromkeys(pipeline_names))
+    ordered_names = list(dict.fromkeys(item_names))
     clean_stored = {
         name: value
         for name, value in (stored_visibility or {}).items()
@@ -45,6 +45,18 @@ def normalize_pipeline_visibility(
     if set(clean_stored) != set(visibility):
         changed = True
     return visibility, changed
+
+
+def normalize_pipeline_visibility(
+    pipeline_names: Iterable[str], stored_visibility: Mapping[str, bool] | None
+) -> tuple[dict[str, bool], bool]:
+    return normalize_named_visibility(pipeline_names, stored_visibility)
+
+
+def normalize_postprocess_visibility(
+    postprocess_names: Iterable[str], stored_visibility: Mapping[str, bool] | None
+) -> tuple[dict[str, bool], bool]:
+    return normalize_named_visibility(postprocess_names, stored_visibility)
 
 
 class AppSettingsStore:
@@ -69,8 +81,8 @@ class AppSettingsStore:
         )
         tmp_path.replace(self.path)
 
-    def load_pipeline_visibility(self) -> dict[str, bool]:
-        raw_visibility = self.load().get("pipeline_visibility", {})
+    def load_named_visibility(self, key: str) -> dict[str, bool]:
+        raw_visibility = self.load().get(key, {})
         if not isinstance(raw_visibility, dict):
             return {}
         return {
@@ -79,9 +91,21 @@ class AppSettingsStore:
             if isinstance(name, str) and isinstance(value, bool)
         }
 
-    def save_pipeline_visibility(self, visibility: Mapping[str, bool]) -> None:
+    def save_named_visibility(self, key: str, visibility: Mapping[str, bool]) -> None:
         settings = self.load()
-        settings["pipeline_visibility"] = {
+        settings[key] = {
             name: bool(visibility[name]) for name in sorted(visibility, key=str.lower)
         }
         self.save(settings)
+
+    def load_pipeline_visibility(self) -> dict[str, bool]:
+        return self.load_named_visibility("pipeline_visibility")
+
+    def save_pipeline_visibility(self, visibility: Mapping[str, bool]) -> None:
+        self.save_named_visibility("pipeline_visibility", visibility)
+
+    def load_postprocess_visibility(self) -> dict[str, bool]:
+        return self.load_named_visibility("postprocess_visibility")
+
+    def save_postprocess_visibility(self, visibility: Mapping[str, bool]) -> None:
+        self.save_named_visibility("postprocess_visibility", visibility)
