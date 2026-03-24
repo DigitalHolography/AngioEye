@@ -153,5 +153,44 @@ Use `@registerPostprocess(...)` to declare:
 - optional Python package dependencies with `required_deps`
 - required pipeline outputs with `required_pipelines`
 
+### Simple Postprocess Structure
+
+```python
+from postprocess.core.base import (
+    BatchPostprocess,
+    PostprocessContext,
+    PostprocessResult,
+    registerPostprocess,
+)
+
+
+@registerPostprocess(
+    name="My Batch Summary",
+    description="Aggregate metrics across the generated batch outputs.",
+    required_pipelines=["Basic Stats"],
+)
+class MyBatchSummary(BatchPostprocess):
+    def run(self, context: PostprocessContext) -> PostprocessResult:
+        report_path = context.output_dir / "my_batch_summary.json"
+        report_path.write_text("{}", encoding="utf-8")
+
+        return PostprocessResult(
+            summary="Generated my_batch_summary.json.",
+            generated_paths=[str(report_path)],
+            metadata={"file_count": len(context.processed_files)},
+        )
+```
+
+Inside a postprocess, you can:
+
+- read `context.output_dir`
+- read `context.processed_files`
+- read `context.selected_pipelines`
+- read `context.input_path`
+- read `context.zip_outputs`
+- write extra artifacts into `context.output_dir` before optional zipping
+- return a short `summary`, explicit `generated_paths`, and structured `metadata`
+
 The included `Graphics Dashboard` postprocess shows the intended pattern: it consumes the `arterial_waveform_shape_metrics` output and generates a cohort dashboard plus PNG exports after the batch finishes.
 `Pipeline Metrics Manifest` is a lighter built-in example that writes a JSON inventory of the generated pipeline metric datasets for the batch.
+`Postprocess Tutorial` is the minimal reference example: it writes a single JSON file showing every `PostprocessContext` field and the `PostprocessResult` output format.
