@@ -15,7 +15,7 @@ from .core.base import (
 
 
 @registerPostprocess(
-    name="Graphics Dashboard",
+    name="Variability and heterogeneity dashboard",
     description=(
         "Build the cohort HTML dashboard and PNG metric exports from arterial "
         "waveform shape metrics."
@@ -32,7 +32,7 @@ class GraphicsDashboardPostprocess(BatchPostprocess):
         if not output_dir.exists() or not output_dir.is_dir():
             raise FileNotFoundError(f"Output folder does not exist: {output_dir}")
 
-        import graphics
+        import variability_heterogeneity_dashboard
 
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_root = Path(temp_dir)
@@ -42,27 +42,22 @@ class GraphicsDashboardPostprocess(BatchPostprocess):
             cwd = Path.cwd()
             try:
                 os.chdir(temp_root)
-                all_results, single_group = graphics.analyze_zip(str(temp_zip))
+                all_results, single_group = variability_heterogeneity_dashboard.analyze_zip(str(temp_zip))
                 if not all_results:
                     raise ValueError(
                         "No compatible pipeline metrics were found for the dashboard."
                     )
-                graphics.save_dashboard(all_results, str(temp_zip), single_group)
+                variability_heterogeneity_dashboard.save_dashboard(all_results, str(temp_zip), single_group)
             finally:
                 os.chdir(cwd)
 
-            dashboard_path = self._extract_member(
-                zip_path=temp_zip,
-                member_name="metric_dashboard.html",
-                output_dir=output_dir,
-            )
             png_paths = self._extract_prefix(
                 zip_path=temp_zip,
                 member_prefix="export_png/",
                 output_dir=output_dir,
             )
 
-        created_paths = [str(dashboard_path), *[str(path) for path in png_paths]]
+        created_paths = [ *[str(path) for path in png_paths]]
         summary = f"Generated dashboard and {len(png_paths)} PNG illustration(s)."
         return PostprocessResult(summary=summary, generated_paths=created_paths)
 
