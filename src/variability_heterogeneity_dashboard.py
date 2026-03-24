@@ -12,6 +12,8 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import matplotlib
+matplotlib.use("Agg")
 from matplotlib import gridspec
 from matplotlib.ticker import FormatStrFormatter
 
@@ -203,7 +205,7 @@ def compute_segment_higher_level_metrics(arr, eps=EPS):
         "H_rad_per_branch": H_rad_per_branch,
         "branch_summary": branch_summary,
     }
-def analyze_zip_segment_metrics(zip_path, mode=SEGMENT_MODE):
+def analyze_zip(zip_path, mode=SEGMENT_MODE):
     results = defaultdict(list)
     detected_groups = set()
 
@@ -436,7 +438,7 @@ def export_segment_higher_level_pngs(results, zip_path, out_dir, mode=SEGMENT_MO
 
             rep_file = select_representative_file_per_group(df, value_col="mean")
 
-            fig = plt.figure(figsize=(15, 6.2), dpi=200)
+            fig = plt.figure(figsize=(15, 6.2), dpi=140)
             outer = gridspec.GridSpec(1, 2, width_ratios=[0.7, 1.0], wspace=0.15)
             fig.subplots_adjust(left=0.04, right=0.995, bottom=0.08, top=0.86)
 
@@ -516,7 +518,7 @@ def export_segment_higher_level_pngs(results, zip_path, out_dir, mode=SEGMENT_MO
                 ax_empty = fig.add_subplot(right[r, c])
                 ax_empty.axis("off")
 
-            png_path = os.path.join(out_dir, f"{metric_key}_{mode}.eps")
+            png_path = os.path.join(out_dir, f"{metric_key}_{mode}.png")
             fig.savefig(png_path, bbox_inches="tight")
             plt.close(fig)
 
@@ -663,7 +665,7 @@ def build_h5_path_index_from_extracted_tree(tmpdir: str):
 
 
 def save_dashboard(original_zip):
-    results, single_group = analyze_zip_segment_metrics(original_zip, mode=SEGMENT_MODE)
+    results, single_group = analyze_zip(original_zip, mode=SEGMENT_MODE)
 
     segment_png_dir = os.path.join(os.path.dirname(original_zip), "export_segment_png")
     export_segment_higher_level_pngs(results, original_zip, segment_png_dir, mode=SEGMENT_MODE)
@@ -677,5 +679,4 @@ def save_dashboard(original_zip):
 
 if __name__ == "__main__":
     zip_path = choose_zip()
-    
     save_dashboard(zip_path)

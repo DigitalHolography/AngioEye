@@ -32,8 +32,8 @@ class GraphicsDashboardPostprocess(BatchPostprocess):
         if not output_dir.exists() or not output_dir.is_dir():
             raise FileNotFoundError(f"Output folder does not exist: {output_dir}")
 
+        os.environ["MPLBACKEND"] = "Agg"
         import variability_heterogeneity_dashboard
-
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_root = Path(temp_dir)
             temp_zip = temp_root / "batch_outputs.zip"
@@ -42,18 +42,21 @@ class GraphicsDashboardPostprocess(BatchPostprocess):
             cwd = Path.cwd()
             try:
                 os.chdir(temp_root)
-                all_results, single_group = variability_heterogeneity_dashboard.analyze_zip(str(temp_zip))
-                if not all_results:
+                results, single_group = variability_heterogeneity_dashboard.analyze_zip_segment_metrics(
+                    str(temp_zip),
+                    mode="bandlimited_segment",
+                )
+                if not results:
                     raise ValueError(
-                        "No compatible pipeline metrics were found for the dashboard."
+                        "No compatible by-segment metrics were found for the variability/heterogeneity dashboard."
                     )
-                variability_heterogeneity_dashboard.save_dashboard(all_results, str(temp_zip), single_group)
+                variability_heterogeneity_dashboard.save_dashboard(str(temp_zip))
             finally:
                 os.chdir(cwd)
 
             png_paths = self._extract_prefix(
                 zip_path=temp_zip,
-                member_prefix="export_png/",
+                member_prefix="export_segment_png/",
                 output_dir=output_dir,
             )
 
