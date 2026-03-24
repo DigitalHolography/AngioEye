@@ -1199,41 +1199,43 @@ def plot_metric_illustration(ax, metric, support, path=None):
 
     elif metric == "E_slope":
         e_slope = float(support["E_slope"])
+        dvdt_norm = support["dvdt_norm"]
 
         ax.plot(tau, sig, linewidth=3, color="#EC5241", label="signal")
         ax2 = ax.twinx()
         ax2.plot(
             tau,
-            dvdt**2,
+            dvdt_norm,
             linestyle="--",
             linewidth=1.5,
             color="black",
             label=r"$\dot v^2$",
         )
-        ax2.set_ylabel(r"$\dot v^2$", fontsize=12)
+        ax2.set_ylabel(r"$\frac{T^3}{M_0^2 + \epsilon} * \dot v^2$", fontsize=10)
         ax2.set_yticks([])
         info_box([rf"$E_{{slope}}={e_slope:.4f}$"])
-        ax.set_xlabel("rectified time : t/T", fontsize=14)
-        ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
+        ax.set_xlabel("rectified time : t/T", fontsize=12)
+        ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=12, labelpad=10)
 
     elif metric == "E_curv":
         e_curv = float(support["E_curv"])
+        d2vdt2_norm = support["d2vdt2_norm"]
 
         ax.plot(tau, sig, linewidth=3, color="#EC5241", label="signal")
         ax2 = ax.twinx()
         ax2.plot(
             tau,
-            d2vdt2**2,
+            d2vdt2_norm,
             linestyle="--",
             linewidth=1.5,
             color="black",
             label=r"$\ddot v^2$",
         )
         ax2.set_yticks([])
-        ax2.set_ylabel(r"$\ddot v^2$", fontsize=12)
-        info_box([rf"$E_{{curv}}={e_curv:.4f}$"])
-        ax.set_xlabel("rectified time : t/T", fontsize=14)
-        ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
+        ax2.set_ylabel(r"$\frac{T^5}{M_0^2 + \epsilon} *\ddot v^2$", fontsize=10)
+        info_box([rf"$E_{{curv}}={e_curv:.0f}$"])
+        ax.set_xlabel("rectified time : t/T", fontsize=12)
+        ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=12, labelpad=10)
 
     elif metric == "W50_over_T":
         w50 = float(support["W50_over_T"])
@@ -1430,7 +1432,7 @@ def export_selected_metric_pngs_bandlimited(all_results, zip_path, out_dir):
                 ax_empty = fig.add_subplot(right[r, c])
                 ax_empty.axis("off")
 
-            png_path = os.path.join(out_dir, f"{metric}_bandlimited.eps")
+            png_path = os.path.join(out_dir, f"{metric}_bandlimited.png")
             fig.savefig(png_path)
             plt.close(fig)
 

@@ -784,6 +784,9 @@ class ArterialSegExample(ProcessPipeline):
         dvdt = np.gradient(np.where(np.isfinite(vv), vv, 0.0), dt)
         d2vdt2 = np.gradient(dvdt, dt)
 
+        dvdt_norm= ((Tbeat**3) / (m0**2 +self.eps)) * (dvdt**2)
+        d2vdt2_norm = ((Tbeat**5) / (m0**2 +self.eps)) * (d2vdt2**2)
+
         hp = self._harmonic_pack(vv, Tbeat)
         V = hp["V"]
         vb = hp["vb"]
@@ -880,6 +883,9 @@ class ArterialSegExample(ProcessPipeline):
             "late_window_start_idx": np.asarray(k0, dtype=int),
             "late_window_end_idx": np.asarray(k1, dtype=int),
             **{k: np.asarray(val, dtype=float) for k, val in metrics.items()},
+
+            "dvdt_norm" : np.asarray(dvdt_norm, dtype=float),
+            "d2vdt2_norm" : np.asarray(d2vdt2_norm, dtype=float),
         }
 
     def _compute_graphics_support_block(
@@ -925,6 +931,8 @@ class ArterialSegExample(ProcessPipeline):
             "vmax": np.full((n_beats,), np.nan, dtype=float),
             "vmin": np.full((n_beats,), np.nan, dtype=float),
             "vmean": np.full((n_beats,), np.nan, dtype=float),
+            "dvdt_norm": np.full((n_t,n_beats), np.nan, dtype=float),
+            "d2vdt2_norm": np.full((n_t,n_beats), np.nan, dtype=float),
         }
 
         for k in self._metric_keys():
@@ -963,6 +971,8 @@ class ArterialSegExample(ProcessPipeline):
             out["vend"][beat_idx] = s["vend"]
             out["late_window_start_idx"][beat_idx] = s["late_window_start_idx"]
             out["late_window_end_idx"][beat_idx] = s["late_window_end_idx"]
+            out["dvdt_norm"][:,beat_idx] = s["dvdt_norm"]
+            out["d2vdt2_norm"][:,beat_idx] = s["d2vdt2_norm"]
 
             for k in self._metric_keys():
                 out[k[0]][beat_idx] = s[k[0]]
