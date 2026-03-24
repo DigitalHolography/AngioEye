@@ -784,8 +784,8 @@ class ArterialSegExample(ProcessPipeline):
         dvdt = np.gradient(np.where(np.isfinite(vv), vv, 0.0), dt)
         d2vdt2 = np.gradient(dvdt, dt)
 
-        dvdt_norm= ((Tbeat**3) / (m0**2 +self.eps)) * (dvdt**2)
-        d2vdt2_norm = ((Tbeat**5) / (m0**2 +self.eps)) * (d2vdt2**2)
+        dvdt_norm= ((Tbeat**3) / (m0 + self.eps) ** 2) * (dvdt**2)
+        d2vdt2_norm = ((Tbeat**5) / (m0 + self.eps) ** 2) * (d2vdt2**2)
 
         hp = self._harmonic_pack(vv, Tbeat)
         V = hp["V"]

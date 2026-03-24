@@ -1211,7 +1211,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
             color="black",
             label=r"$\dot v^2$",
         )
-        ax2.set_ylabel(r"$\frac{T^3}{M_0^2 + \epsilon} * \dot v^2$", fontsize=10)
+        ax2.set_ylabel(r"$\frac{T^3}{(M_0 + \epsilon)^2} * \dot v^2$", fontsize=10)
         ax2.set_yticks([])
         info_box([rf"$E_{{slope}}={e_slope:.4f}$"])
         ax.set_xlabel("rectified time : t/T", fontsize=12)
@@ -1232,7 +1232,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
             label=r"$\ddot v^2$",
         )
         ax2.set_yticks([])
-        ax2.set_ylabel(r"$\frac{T^5}{M_0^2 + \epsilon} *\ddot v^2$", fontsize=10)
+        ax2.set_ylabel(r"$\frac{T^5}{(M_0 + \epsilon)^2} *\ddot v^2$", fontsize=10)
         info_box([rf"$E_{{curv}}={e_curv:.0f}$"])
         ax.set_xlabel("rectified time : t/T", fontsize=12)
         ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=12, labelpad=10)
