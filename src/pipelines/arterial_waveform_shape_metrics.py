@@ -15,7 +15,9 @@ class ArterialSegExample(ProcessPipeline):
     v_raw_segment_input = (
         "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegment/value"
     )
-    v_band_segment_input = "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegmentBandLimited/value"
+    v_band_segment_input = (
+        "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegmentBandLimited/value"
+    )
 
     v_raw_global_input = "/Artery/VelocityPerBeat/VelocitySignalPerBeat/value"
     v_band_global_input = (
@@ -34,7 +36,7 @@ class ArterialSegExample(ProcessPipeline):
     H_LOW_MAX = 1
     H_HIGH_MIN = 2
     H_HIGH_MAX = 10
-
+    H_CUMSUM_INTERP_POINTS = 256
     H_MAX = 10
     H_PHASE_RESIDUAL = 10
 
@@ -281,6 +283,13 @@ class ArterialSegExample(ProcessPipeline):
             "rho_h_90": np.nan,
             "h_90": np.nan,
             "harmonic_energy_cumsum": np.full((self.H_MAX,), np.nan, dtype=float),
+            "harmonic_energy_cumsum_h": np.full((self.H_MAX,), np.nan, dtype=float),
+            "harmonic_energy_cumsum_interp": np.full(
+                (self.H_CUMSUM_INTERP_POINTS,), np.nan, dtype=float
+            ),
+            "harmonic_energy_cumsum_h_interp": np.full(
+                (self.H_CUMSUM_INTERP_POINTS,), np.nan, dtype=float
+            ),
         }
 
         if V is None:
@@ -299,11 +308,19 @@ class ArterialSegExample(ProcessPipeline):
 
         w = power / s
         C = np.cumsum(w)
+        h = np.arange(1, H + 1, dtype=float)
 
         out["harmonic_energy_cumsum"][:H] = C
+        out["harmonic_energy_cumsum_h"][:H] = h
 
         C_full = np.concatenate(([0.0], C))
         h_full = np.arange(0, H + 1, dtype=float)
+
+        h_interp = np.linspace(0.0, float(H), self.H_CUMSUM_INTERP_POINTS)
+        C_interp = np.interp(h_interp, h_full, C_full)
+
+        out["harmonic_energy_cumsum_h_interp"][:] = h_interp
+        out["harmonic_energy_cumsum_interp"][:] = C_interp
 
         h90 = float(np.interp(0.90, C_full, h_full))
         out["h_90"] = h90
@@ -771,7 +788,6 @@ class ArterialSegExample(ProcessPipeline):
         vmin = float(np.nanmin(vv))
         vmean = float(np.nanmean(vv))
 
-        # Cumulative displacement geometry sampled on normalized phase
         d_full = np.concatenate(
             ([0.0], np.cumsum(np.where(np.isfinite(vv), vv, 0.0)) / m0_sum)
         )
@@ -783,10 +799,8 @@ class ArterialSegExample(ProcessPipeline):
 
         dvdt = np.gradient(np.where(np.isfinite(vv), vv, 0.0), dt)
         d2vdt2 = np.gradient(dvdt, dt)
-
-        dvdt_norm= ((Tbeat**3) / (m0 + self.eps) ** 2) * (dvdt**2)
-        d2vdt2_norm = ((Tbeat**5) / (m0 + self.eps) ** 2) * (d2vdt2**2)
-
+        dvdt_norm = (Tbeat**3 / ((m0 + self.eps) ** 2)) * (dvdt**2)
+        d2vdt2_norm = (Tbeat**3 / ((m0 + self.eps) ** 2)) * (d2vdt2**2)
         hp = self._harmonic_pack(vv, Tbeat)
         V = hp["V"]
         vb = hp["vb"]
@@ -805,8 +819,8 @@ class ArterialSegExample(ProcessPipeline):
         E_high = np.nan
 
         if V is not None and H >= 0:
-            mags = np.abs(V[: H + 1])  # indices 0..H
-            power = mags**2  # |V_n|^2
+            mags = np.abs(V[: H + 1])
+            power = mags**2
             harmonic_energies[: H + 1] = power
             harmonic_magnitudes[: H + 1] = mags
 
@@ -824,11 +838,9 @@ class ArterialSegExample(ProcessPipeline):
             E_low = float(np.nansum(power[1 : self.H_LOW_MAX + 1]))
             E_high = float(np.nansum(power[self.H_HIGH_MIN : self.H_HIGH_MAX + 1]))
 
-            # poids énergie : définis seulement sur n>=1
             if np.isfinite(power_sum) and power_sum > 0:
                 harmonic_energy_weights[0:H] = power_h / (power_sum + self.eps)
 
-            # poids amplitude : définis seulement sur n>=1
             if np.isfinite(mag_sum) and mag_sum > 0:
                 harmonic_weights[0:H] = mags_h / (mag_sum + self.eps)
 
@@ -852,6 +864,13 @@ class ArterialSegExample(ProcessPipeline):
 
         return {
             "harmonic_energy_cumsum": rho_support["harmonic_energy_cumsum"],
+            "harmonic_energy_cumsum_h": rho_support["harmonic_energy_cumsum_h"],
+            "harmonic_energy_cumsum_interp": rho_support[
+                "harmonic_energy_cumsum_interp"
+            ],
+            "harmonic_energy_cumsum_h_interp": rho_support[
+                "harmonic_energy_cumsum_h_interp"
+            ],
             "h_90": np.asarray(rho_support["h_90"], dtype=float),
             "H_MAX": np.asarray(self.H_MAX, dtype=int),
             "H_LOW_MAX": np.asarray(self.H_LOW_MAX, dtype=int),
@@ -869,6 +888,8 @@ class ArterialSegExample(ProcessPipeline):
             "vb": vb_out,
             "dvdt": np.asarray(dvdt, dtype=float),
             "d2vdt2": np.asarray(d2vdt2, dtype=float),
+            "dvdt_norm": np.asarray(dvdt_norm, dtype=float),
+            "d2vdt2_norm": np.asarray(d2vdt2_norm, dtype=float),
             "harmonic_magnitudes": harmonic_magnitudes,
             "harmonic_weights": harmonic_weights,
             "harmonic_energies": harmonic_energies,
@@ -883,9 +904,6 @@ class ArterialSegExample(ProcessPipeline):
             "late_window_start_idx": np.asarray(k0, dtype=int),
             "late_window_end_idx": np.asarray(k1, dtype=int),
             **{k: np.asarray(val, dtype=float) for k, val in metrics.items()},
-
-            "dvdt_norm" : np.asarray(dvdt_norm, dtype=float),
-            "d2vdt2_norm" : np.asarray(d2vdt2_norm, dtype=float),
         }
 
     def _compute_graphics_support_block(
@@ -900,6 +918,13 @@ class ArterialSegExample(ProcessPipeline):
         h_phi = max(self.H_PHASE_RESIDUAL - 1, 0)
 
         out = {
+            "harmonic_energy_cumsum_h": np.full((n_beats, h_mag), np.nan, dtype=float),
+            "harmonic_energy_cumsum_interp": np.full(
+                (n_beats, self.H_CUMSUM_INTERP_POINTS), np.nan, dtype=float
+            ),
+            "harmonic_energy_cumsum_h_interp": np.full(
+                (n_beats, self.H_CUMSUM_INTERP_POINTS), np.nan, dtype=float
+            ),
             "harmonic_energy_cumsum": np.full((n_beats, h_mag), np.nan, dtype=float),
             "h_90": np.full((n_beats,), np.nan, dtype=float),
             "H_MAX": np.asarray(self.H_MAX, dtype=int),
@@ -913,12 +938,14 @@ class ArterialSegExample(ProcessPipeline):
             "d0_star": np.full((n_t, n_beats), np.nan, dtype=float),
             "delta_dti_curve": np.full((n_t, n_beats), np.nan, dtype=float),
             "vb": np.full((n_t, n_beats), np.nan, dtype=float),
-            "dvdt": np.full((n_t, n_beats), np.nan, dtype=float),
             "m0": np.full((n_beats,), np.nan),
             "E_total": np.full((n_beats,), np.nan, dtype=float),
             "E_low": np.full((n_beats,), np.nan, dtype=float),
             "E_high": np.full((n_beats,), np.nan, dtype=float),
+            "dvdt": np.full((n_t, n_beats), np.nan, dtype=float),
+            "dvdt_norm": np.full((n_t, n_beats), np.nan, dtype=float),
             "d2vdt2": np.full((n_t, n_beats), np.nan, dtype=float),
+            "d2vdt2_norm": np.full((n_t, n_beats), np.nan, dtype=float),
             "harmonic_magnitudes": np.full((n_beats, h_mag + 1), np.nan, dtype=float),
             "harmonic_weights": np.full((n_beats, h_mag), np.nan, dtype=float),
             "harmonic_phases": np.full((n_beats, h_mag), np.nan, dtype=float),
@@ -931,8 +958,6 @@ class ArterialSegExample(ProcessPipeline):
             "vmax": np.full((n_beats,), np.nan, dtype=float),
             "vmin": np.full((n_beats,), np.nan, dtype=float),
             "vmean": np.full((n_beats,), np.nan, dtype=float),
-            "dvdt_norm": np.full((n_t,n_beats), np.nan, dtype=float),
-            "d2vdt2_norm": np.full((n_t,n_beats), np.nan, dtype=float),
         }
 
         for k in self._metric_keys():
@@ -943,6 +968,13 @@ class ArterialSegExample(ProcessPipeline):
             v = v_global[:, beat_idx]
             s = self._compute_graphics_support_1d(v, Tbeat)
             out["harmonic_energy_cumsum"][beat_idx, :] = s["harmonic_energy_cumsum"]
+            out["harmonic_energy_cumsum_h"][beat_idx, :] = s["harmonic_energy_cumsum_h"]
+            out["harmonic_energy_cumsum_interp"][beat_idx, :] = s[
+                "harmonic_energy_cumsum_interp"
+            ]
+            out["harmonic_energy_cumsum_h_interp"][beat_idx, :] = s[
+                "harmonic_energy_cumsum_h_interp"
+            ]
             out["h_90"][beat_idx] = s["h_90"]
             out["E_total"][beat_idx] = s["E_total"]
             out["E_low"][beat_idx] = s["E_low"]
@@ -956,6 +988,8 @@ class ArterialSegExample(ProcessPipeline):
             out["vb"][:, beat_idx] = s["vb"]
             out["dvdt"][:, beat_idx] = s["dvdt"]
             out["d2vdt2"][:, beat_idx] = s["d2vdt2"]
+            out["dvdt_norm"][:, beat_idx] = s["dvdt_norm"]
+            out["d2vdt2_norm"][:, beat_idx] = s["d2vdt2_norm"]
             out["m0"][beat_idx] = s["m0"]
             out["harmonic_magnitudes"][beat_idx, :] = s["harmonic_magnitudes"]
             out["harmonic_weights"][beat_idx, :] = s["harmonic_weights"]
@@ -971,8 +1005,6 @@ class ArterialSegExample(ProcessPipeline):
             out["vend"][beat_idx] = s["vend"]
             out["late_window_start_idx"][beat_idx] = s["late_window_start_idx"]
             out["late_window_end_idx"][beat_idx] = s["late_window_end_idx"]
-            out["dvdt_norm"][:,beat_idx] = s["dvdt_norm"]
-            out["d2vdt2_norm"][:,beat_idx] = s["d2vdt2_norm"]
 
             for k in self._metric_keys():
                 out[k[0]][beat_idx] = s[k[0]]
@@ -1261,10 +1293,11 @@ class ArterialSegExample(ProcessPipeline):
     def _compute_block_segment(self, v_block: np.ndarray, T: np.ndarray):
         """
         v_block: (n_t, n_beats, n_branches, n_radii)
+
         Returns:
-          per-segment arrays: (n_beats, n_segments)
-          per-branch arrays:  (n_beats, n_branches)   (median over radii)
-          global arrays:      (n_beats,)              (mean over all branches & radii)
+          per-segment arrays: (n_beats, n_branches, n_radii)
+          per-branch arrays:  (n_beats, n_branches)          (median over radii)
+          global arrays:      (n_beats,)                     (median over all branch-radius values)
         """
         if v_block.ndim != 4:
             raise ValueError(
@@ -1272,10 +1305,9 @@ class ArterialSegExample(ProcessPipeline):
             )
 
         n_t, n_beats, n_branches, n_radii = v_block.shape
-        n_segments = n_branches * n_radii
 
         seg = {
-            k[0]: np.full((n_beats, n_segments), np.nan, dtype=float)
+            k[0]: np.full((n_beats, n_branches, n_radii), np.nan, dtype=float)
             for k in self._metric_keys()
         }
         br = {
@@ -1298,25 +1330,25 @@ class ArterialSegExample(ProcessPipeline):
                     v = v_block[:, beat_idx, branch_idx, radius_idx]
                     m = self._compute_metrics_1d(v, Tbeat)
 
-                    seg_idx = branch_idx * n_radii + radius_idx
                     for k in self._metric_keys():
-                        seg[k[0]][beat_idx, seg_idx] = m[k[0]]
-                        br_vals[k[0]].append(m[k[0]])
-                        gl_vals[k[0]].append(m[k[0]])
+                        key = k[0]
+                        seg[key][beat_idx, branch_idx, radius_idx] = m[key]
+                        br_vals[key].append(m[key])
+                        gl_vals[key].append(m[key])
 
                 for k in self._metric_keys():
-                    br[k[0]][beat_idx, branch_idx] = self._safe_nanmedian(
-                        np.asarray(br_vals[k[0]], dtype=float)
+                    key = k[0]
+                    br[key][beat_idx, branch_idx] = self._safe_nanmedian(
+                        np.asarray(br_vals[key], dtype=float)
                     )
 
             for k in self._metric_keys():
-                gl[k[0]][beat_idx] = self._safe_nanmean(
-                    np.asarray(gl_vals[k[0]], dtype=float)
+                key = k[0]
+                gl[key][beat_idx] = self._safe_nanmedian(
+                    np.asarray(gl_vals[key], dtype=float)
                 )
 
-        seg_order_note = (
-            "seg_idx = branch_idx * n_radii + radius_idx (branch-major flattening)"
-        )
+        seg_order_note = "segment arrays are stored as (beat, branch, radius)"
         return seg, br, gl, n_branches, n_radii, seg_order_note
 
     def _compute_block_global(self, v_global: np.ndarray, T: np.ndarray):
@@ -1426,12 +1458,18 @@ class ArterialSegExample(ProcessPipeline):
             pack(
                 "by_segment/bandlimited_segment",
                 seg_b,
-                {"segment_indexing": [seg_note]},
+                {
+                    "definition": ["per-segment metrics stored as (beat, branch, radius)"],
+                    "segment_indexing": [seg_note],
+                },
             )
             pack(
                 "by_segment/raw_segment",
                 seg_r,
-                {"segment_indexing": [seg_note]},
+                {
+                    "definition": ["per-segment metrics stored as (beat, branch, radius)"],
+                    "segment_indexing": [seg_note],
+                },
             )
 
             pack(
@@ -1448,12 +1486,12 @@ class ArterialSegExample(ProcessPipeline):
             pack(
                 "by_segment/bandlimited_global",
                 gl_b,
-                {"definition": ["mean over branches and radii"]},
+                {"definition": ["median over all branch-radius segment values per beat"]},
             )
             pack(
                 "by_segment/raw_global",
                 gl_r,
-                {"definition": ["mean over branches and radii"]},
+                {"definition": ["median over all branch-radius segment values per beat"]},
             )
 
             metrics["by_segment/params/ratio_R_VTI"] = np.asarray(
@@ -1535,6 +1573,7 @@ class ArterialSegExample(ProcessPipeline):
             metrics["global/params/H_PHASE_RESIDUAL"] = np.asarray(
                 self.H_PHASE_RESIDUAL, dtype=int
             )
+
             graphics_raw = self._compute_graphics_support_block(v_raw_gl, T)
             graphics_band = self._compute_graphics_support_block(v_band_gl, T)
             for name, arr in graphics_raw.items():

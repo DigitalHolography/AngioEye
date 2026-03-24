@@ -133,6 +133,10 @@ def select_support_beat(support, beat_idx):
                 "harmonic_phases",
                 "harmonic_energies",
                 "harmonic_energies_weights",
+                "harmonic_energy_cumsum",
+                "harmonic_energy_cumsum_h",
+                "harmonic_energy_cumsum_interp",
+                "harmonic_energy_cumsum_h_interp",
                 "delta_phi_all",
             }:
                 out[k] = arr[beat_idx, :]
@@ -790,32 +794,43 @@ def plot_metric_illustration(ax, metric, support, path=None):
         ax.set_xlabel("rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
     elif metric == "rho_h_90":
-        w_h = np.asarray(harmonic_energies_weights, dtype=float)
-        w_h = w_h[np.isfinite(w_h)]
-        H = len(w_h)
+        cumsum = np.asarray(support.get("harmonic_energy_cumsum", []), dtype=float)
+        cumsum_h = np.asarray(support.get("harmonic_energy_cumsum_h", []), dtype=float)
 
-        if H == 0:
-            info_box("Missing harmonic weights")
-            return
-
-        csum = np.cumsum(w_h)
-        xh = np.arange(1, H + 1)
-        rho = float(support["rho_h_90"])
-        h90 = rho * H
-
-        ax.step(xh, csum, where="mid", color="#EC5241", linewidth=2)
-        ax.axhline(0.90, linestyle="--", color="black", linewidth=1)
-        ax.axvline(h90, linestyle="--", color="black", linewidth=1)
-
-        info_box(
-            [
-                rf"$\rho_{{h,90}} = {rho:.3f}$",
-                rf"$h_{{90}} = {h90:.2f}$",
-            ]
+        cumsum_interp = np.asarray(
+            support.get("harmonic_energy_cumsum_interp", []), dtype=float
         )
-        ax.set_xlabel("Harmonic n (a.u.)", fontsize=14)
-        ax.set_ylabel(r"Energy weights $w_n$", fontsize=14, labelpad=12)
-        ax.set_ylim(0, 1.05)
+        cumsum_h_interp = np.asarray(
+            support.get("harmonic_energy_cumsum_h_interp", []), dtype=float
+        )
+
+        h90 = float(support.get("h_90", np.nan))
+        rho = float(support.get("rho_h_90", np.nan))
+        mask_i = np.isfinite(cumsum_interp) & np.isfinite(cumsum_h_interp)
+        mask_d = np.isfinite(cumsum) & np.isfinite(cumsum_h)
+
+        ax.plot(
+            cumsum_h_interp[mask_i],
+            cumsum_interp[mask_i],
+            color="#EC5241",
+            linewidth=2,
+        )
+
+        ax.plot(
+            cumsum_h[mask_d],
+            cumsum[mask_d],
+            "o",
+            color="black",
+            markersize=4,
+        )
+
+        ax.axhline(0.90, linestyle="--", color="black", linewidth=1)
+        if np.isfinite(h90):
+            ax.axvline(h90, linestyle="--", color="black", linewidth=1)
+            ax.plot(h90, 0.90, "o", color="black", markersize=5)
+
+        ax.set_xlabel("Harmonic index $h$ (a.u.)", fontsize=14)
+        ax.set_ylabel(r"$C(h)$", fontsize=14)
     elif metric == "mu_h":
         w_h = harmonic_energies_weights
         mu_h = float(support["mu_h"])
@@ -1200,7 +1215,6 @@ def plot_metric_illustration(ax, metric, support, path=None):
     elif metric == "E_slope":
         e_slope = float(support["E_slope"])
         dvdt_norm = support["dvdt_norm"]
-
         ax.plot(tau, sig, linewidth=3, color="#EC5241", label="signal")
         ax2 = ax.twinx()
         ax2.plot(
@@ -1211,16 +1225,15 @@ def plot_metric_illustration(ax, metric, support, path=None):
             color="black",
             label=r"$\dot v^2$",
         )
-        ax2.set_ylabel(r"$\frac{T^3}{(M_0 + \epsilon)^2} * \dot v^2$", fontsize=10)
+        ax2.set_ylabel(r"$\dot v^2$", fontsize=12)
         ax2.set_yticks([])
         info_box([rf"$E_{{slope}}={e_slope:.4f}$"])
-        ax.set_xlabel("rectified time : t/T", fontsize=12)
-        ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=12, labelpad=10)
+        ax.set_xlabel("rectified time : t/T", fontsize=14)
+        ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
 
     elif metric == "E_curv":
         e_curv = float(support["E_curv"])
         d2vdt2_norm = support["d2vdt2_norm"]
-
         ax.plot(tau, sig, linewidth=3, color="#EC5241", label="signal")
         ax2 = ax.twinx()
         ax2.plot(
@@ -1232,10 +1245,10 @@ def plot_metric_illustration(ax, metric, support, path=None):
             label=r"$\ddot v^2$",
         )
         ax2.set_yticks([])
-        ax2.set_ylabel(r"$\frac{T^5}{(M_0 + \epsilon)^2} *\ddot v^2$", fontsize=10)
-        info_box([rf"$E_{{curv}}={e_curv:.0f}$"])
-        ax.set_xlabel("rectified time : t/T", fontsize=12)
-        ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=12, labelpad=10)
+        ax2.set_ylabel(r"$\ddot v^2$", fontsize=12)
+        info_box([rf"$E_{{curv}}={e_curv:.4f}$"])
+        ax.set_xlabel("rectified time : t/T", fontsize=14)
+        ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
 
     elif metric == "W50_over_T":
         w50 = float(support["W50_over_T"])
@@ -1432,7 +1445,7 @@ def export_selected_metric_pngs_bandlimited(all_results, zip_path, out_dir):
                 ax_empty = fig.add_subplot(right[r, c])
                 ax_empty.axis("off")
 
-            png_path = os.path.join(out_dir, f"{metric}_bandlimited.png")
+            png_path = os.path.join(out_dir, f"{metric}_bandlimited.eps")
             fig.savefig(png_path)
             plt.close(fig)
 
