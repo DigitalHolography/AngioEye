@@ -6,6 +6,7 @@ from collections import defaultdict
 from tkinter import Tk, filedialog
 import shutil
 import h5py
+import warnings
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -17,17 +18,80 @@ from matplotlib.ticker import FormatStrFormatter
 GRAPHICS_SUPPORT_FOLDER = "/Pipelines/arterial_waveform_shape_metrics/global/"
 METRIC_FOLDER = "/Pipelines/arterial_waveform_shape_metrics/global/"
 VALID_METRIC_FOLDERS = ["raw", "bandlimited"]
-SELECTED_METRICS_PNG = {
+SEGMENT_METRIC_FOLDER = "/Pipelines/arterial_waveform_shape_metrics/by_segment/"
+SEGMENT_VALID_MODES = ["raw", "bandlimited"]
+SEGMENT_METRIC_FOLDER = "/Pipelines/arterial_waveform_shape_metrics/by_segment/"
+SEGMENT_MODE = "bandlimited_segment"
+EPS = 1e-12
+SEGMENT_SELECTED_METRICS = {
+    "mu_t_over_T",
+    "RI",
+    "PI",
+    "R_VTI",
+    "SF_VTI",
+    "sigma_t_over_T",
+    "W50_over_T",
+    "E_low_over_E_total",
+    "E_high_over_E_total",
+    "t_max_over_T",
+    "t_min_over_T",
+    "Delta_t_over_T",
+    "slope_rise_normalized",
+    "slope_fall_normalized",
+    "t_up_over_T",
+    "t_down_over_T",
+    "S_decay",
+    "crest_factor",
+    "R_SD",
+    "Delta_DTI",
+    "gamma_t",
+    "spectral_entropy",
+    "delta_phi2",
+    "rho_h_90",
+    "mu_h",
+    "sigma_h",
+    "N_eff_over_T",
+    "N_H_over_T",
+    "phase_locking_residual",
+    "E_recon_H_MAX",
+    "Q_t_skew",
+    "Q_t_width",
+    "R_Q_t",
+    "Q_d_skew",
+    "Q_d_width",
+    "R_Q_d",
+    "v_end_over_v_mean",
+    "E_slope",
+    "E_curv",
 }
+
+HIGHER_LEVEL_METRICS = {
+    "CV",
+    "IQR",
+    "MAD",
+    "H_seg",
+    "H_rad",
+    "H_branch",
+}
+
 EPS = 1e-12
 H_MAX = 10
 H_LOW_MAX = 3
 H_HIGH_MIN = 4
 H_HIGH_MAX = 8
-LATEX_FORMULAS = {
-}
 
 
+def extract_segment_metric(h5_path, metric_name, mode="bandlimited_segment"):
+    dataset_path = f"{SEGMENT_METRIC_FOLDER}{mode}/{metric_name}"
+    with h5py.File(h5_path, "r") as f:
+        if dataset_path not in f:
+            return None
+        arr = np.array(f[dataset_path], dtype=float)
+
+    if arr.ndim != 3:
+        return None
+
+    return arr
 def extract_graphics_support(h5_path, mode="bandlimited"):
     base = f"{GRAPHICS_SUPPORT_FOLDER}{mode}"
     out = {}
@@ -42,7 +106,152 @@ def extract_graphics_support(h5_path, mode="bandlimited"):
 
     return out
 
+def make_higher_metric_key(base_metric, higher_metric):
+    return f"{higher_metric}__{base_metric}"
 
+
+def make_higher_metric_label(base_metric, higher_metric):
+    return f"{higher_metric}({base_metric})"
+def compute_segment_higher_level_metrics(arr, eps=EPS):
+    arr = np.asarray(arr, dtype=float)
+    if arr.ndim != 3:
+        return None
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+
+        # A. variability across beats for each segment
+        seg_mean = np.nanmean(arr, axis=0)
+        seg_std = np.nanstd(arr, axis=0, ddof=1)
+        seg_cv = seg_std / (np.abs(seg_mean) + eps)
+
+        q25 = np.nanpercentile(arr, 25, axis=0)
+        q75 = np.nanpercentile(arr, 75, axis=0)
+        seg_iqr = q75 - q25
+
+        seg_med = np.nanmedian(arr, axis=0)
+        seg_mad = np.nanmedian(np.abs(arr - seg_med[None, :, :]), axis=0)
+
+        # central segment map used for spatial heterogeneity
+        seg_value = np.nanmedian(arr, axis=0)
+
+    # B. H_seg across all valid segments
+    flat_seg = seg_value[np.isfinite(seg_value)]
+    if flat_seg.size == 0:
+        H_seg = np.nan
+    elif flat_seg.size == 1:
+        H_seg = 0.0
+    else:
+        H_seg = float(
+            np.nanstd(flat_seg, ddof=1) / (np.abs(np.nanmean(flat_seg)) + eps)
+        )
+
+    # C. H_rad per branch, then median across branches
+    n_branch = seg_value.shape[0]
+    H_rad_per_branch = np.full(n_branch, np.nan, dtype=float)
+
+    for j in range(n_branch):
+        row = seg_value[j, :]
+        row = row[np.isfinite(row)]
+        if row.size == 0:
+            continue
+        elif row.size == 1:
+            H_rad_per_branch[j] = 0.0
+        else:
+            H_rad_per_branch[j] = float(
+                np.nanstd(row, ddof=1) / (np.abs(np.nanmean(row)) + eps)
+            )
+
+    H_rad = (
+        float(np.nanmedian(H_rad_per_branch))
+        if np.any(np.isfinite(H_rad_per_branch))
+        else np.nan
+    )
+
+    # D. H_branch from branch summaries
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        branch_summary = np.nanmedian(seg_value, axis=1)
+
+    valid_branch = branch_summary[np.isfinite(branch_summary)]
+
+    if valid_branch.size == 0:
+        H_branch = np.nan
+    elif valid_branch.size == 1:
+        H_branch = 0.0
+    else:
+        H_branch = float(
+            np.nanstd(valid_branch, ddof=1) / (np.abs(np.nanmean(valid_branch)) + eps)
+        )
+
+    # global summaries for beat-to-beat metrics
+    CV = float(np.nanmedian(seg_cv)) if np.any(np.isfinite(seg_cv)) else np.nan
+    IQR = float(np.nanmedian(seg_iqr)) if np.any(np.isfinite(seg_iqr)) else np.nan
+    MAD = float(np.nanmedian(seg_mad)) if np.any(np.isfinite(seg_mad)) else np.nan
+
+    return {
+        "seg_value": seg_value,
+        "seg_cv": seg_cv,
+        "seg_iqr": seg_iqr,
+        "seg_mad": seg_mad,
+        "CV": CV,
+        "IQR": IQR,
+        "MAD": MAD,
+        "H_seg": H_seg,
+        "H_rad": H_rad,
+        "H_branch": H_branch,
+        "H_rad_per_branch": H_rad_per_branch,
+        "branch_summary": branch_summary,
+    }
+def analyze_zip_segment_metrics(zip_path, mode=SEGMENT_MODE):
+    results = defaultdict(list)
+    detected_groups = set()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with zipfile.ZipFile(zip_path, "r") as z:
+            z.extractall(tmpdir)
+
+        for root, _, files in os.walk(tmpdir):
+            h5_files = sorted(f for f in files if f.endswith(".h5"))
+            if not h5_files:
+                continue
+
+            group_name = os.path.basename(root)
+            if root == tmpdir:
+                group_name = "all"
+
+            detected_groups.add(group_name)
+
+            for file in h5_files:
+                h5_path = os.path.join(root, file)
+
+                for base_metric in SEGMENT_SELECTED_METRICS:
+                    arr = extract_segment_metric(h5_path, base_metric, mode=mode)
+                    if arr is None:
+                        continue
+
+                    metric_dict = compute_segment_higher_level_metrics(arr)
+                    if metric_dict is None:
+                        continue
+
+                    for high_metric in HIGHER_LEVEL_METRICS:
+                        value = metric_dict.get(high_metric, np.nan)
+                        metric_key = make_higher_metric_key(base_metric, high_metric)
+
+                        results[metric_key].append(
+                            {
+                                "file": file,
+                                "group": group_name,
+                                "mean": value,
+                                "std": 0.0,
+                                "base_metric": base_metric,
+                                "higher_metric": high_metric,
+                                "metric_label": make_higher_metric_label(base_metric, high_metric),
+                            }
+                        )
+
+    single_group = len(detected_groups) <= 1
+    return dict(results), single_group
 def select_support_beat(support, beat_idx):
     out = {}
     for k, v in support.items():
@@ -122,80 +331,116 @@ def draw_formula_header(fig, formula, y=0.98, fontsize=14, pad_top=0.86):
         fig.text(0.02, y, formula, ha="left", va="top", fontsize=fontsize)
 
 
-def circular_mean(angles):
-    angles = np.asarray(angles, dtype=float)
-    angles = angles[np.isfinite(angles)]
-    if angles.size == 0:
-        return np.nan
-    return float(np.angle(np.mean(np.exp(1j * angles))))
 
 
-def circular_std(angles):
-    """
-    Circular std basée sur la resultant length.
-    """
-    angles = np.asarray(angles, dtype=float)
-    angles = angles[np.isfinite(angles)]
-    if angles.size == 0:
-        return np.nan
+def plot_higher_level_metric_illustration(ax, higher_metric, metric_dict):
+    seg_value = metric_dict["seg_value"]
+    seg_cv = metric_dict["seg_cv"]
+    seg_iqr = metric_dict["seg_iqr"]
+    seg_mad = metric_dict["seg_mad"]
+    H_rad_per_branch = metric_dict["H_rad_per_branch"]
+    branch_summary = metric_dict["branch_summary"]
 
-    R = np.abs(np.mean(np.exp(1j * angles)))
-    R = np.clip(R, EPS, 1.0)
-    return float(np.sqrt(-2.0 * np.log(R)))
+    def info_box(lines, fontsize=11):
+        text = "\n".join(lines)
+        ax.text(
+            0.02, 0.98, text,
+            transform=ax.transAxes,
+            ha="left", va="top",
+            fontsize=fontsize,
+            bbox=dict(facecolor="white", edgecolor="none", pad=1.0),
+        )
 
+    if higher_metric == "CV":
+        im = ax.imshow(seg_cv, aspect="auto", origin="lower")
+        ax.set_title("Segment beat-to-beat CV")
+        ax.set_xlabel("Disk")
+        ax.set_ylabel("Branch")
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        info_box([f"CV = {metric_dict['CV']:.3f}"])
 
+    elif higher_metric == "IQR":
+        im = ax.imshow(seg_iqr, aspect="auto", origin="lower")
+        ax.set_title("Segment beat-to-beat IQR")
+        ax.set_xlabel("Disk")
+        ax.set_ylabel("Branch")
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        info_box([f"IQR = {metric_dict['IQR']:.3f}"])
 
-def export_selected_metric_pngs_bandlimited(all_results, zip_path, out_dir):
+    elif higher_metric == "MAD":
+        im = ax.imshow(seg_mad, aspect="auto", origin="lower")
+        ax.set_title("Segment beat-to-beat MAD")
+        ax.set_xlabel("Disk")
+        ax.set_ylabel("Branch")
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        info_box([f"MAD = {metric_dict['MAD']:.3f}"])
+
+    elif higher_metric == "H_seg":
+        im = ax.imshow(seg_value, aspect="auto", origin="lower")
+        ax.set_title("Segment median map")
+        ax.set_xlabel("Disk")
+        ax.set_ylabel("Branch")
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        info_box([f"H_seg = {metric_dict['H_seg']:.3f}"])
+
+    elif higher_metric == "H_rad":
+        x = np.arange(len(H_rad_per_branch))
+        ax.bar(x, H_rad_per_branch, color="#EC5241", edgecolor="black")
+        ax.set_title(r"Per-branch $H^{rad}$")
+        ax.set_xlabel("Branch")
+        ax.set_ylabel("H_rad")
+        for i, v in enumerate(H_rad_per_branch):
+            if np.isfinite(v):
+                ax.text(i, v, f"{v:.2f}", ha="center", va="bottom", fontsize=9)
+        info_box([f"H_rad = {metric_dict['H_rad']:.3f}"])
+
+    elif higher_metric == "H_branch":
+        x = np.arange(len(branch_summary))
+        ax.bar(x, branch_summary, color="black")
+        ax.set_title("Branch summaries")
+        ax.set_xlabel("Branch")
+        ax.set_ylabel("Median across disks")
+        info_box([f"H_branch = {metric_dict['H_branch']:.3f}"])
+
+    else:
+        ax.text(0.5, 0.5, f"No illustration for {higher_metric}", ha="center", va="center")
+        ax.axis("off")
+
+def export_segment_higher_level_pngs(results, zip_path, out_dir, mode=SEGMENT_MODE):
     os.makedirs(out_dir, exist_ok=True)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         with zipfile.ZipFile(zip_path, "r") as z:
             z.extractall(tmpdir)
 
-        # index des chemins .h5 par groupe / fichier
         h5_index = build_h5_path_index_from_extracted_tree(tmpdir)
-        for metric in sorted(SELECTED_METRICS_PNG):
-            
-            if metric not in all_results["bandlimited"]:
+
+        for metric_key in sorted(results.keys()):
+            df = pd.DataFrame(results[metric_key]).copy()
+            if df.empty:
                 continue
 
-            df = pd.DataFrame(all_results["bandlimited"][metric]).copy()
+            base_metric = df["base_metric"].iloc[0]
+            higher_metric = df["higher_metric"].iloc[0]
+            metric_label = df["metric_label"].iloc[0]
 
-            # ordre des groupes (control en dernier)
             groups = sorted(df["group"].dropna().unique().tolist())
             control_name = find_control_group_name(groups)
             if control_name in groups:
                 groups = [g for g in groups if g != control_name] + [control_name]
 
-            # positions x pour le scatter
             x_pos = {g: i for i, g in enumerate(groups)}
-
-            # stats par groupe (sur les patients)
             grp = df.groupby("group")["mean"]
             grp_mean = grp.mean()
             grp_std = grp.std()
+
             rep_file = select_representative_file_per_group(df, value_col="mean")
 
             fig = plt.figure(figsize=(15, 6.2), dpi=200)
-
-            outer = gridspec.GridSpec(
-                1,
-                2,
-                width_ratios=[
-                    0.7,
-                    1.0,
-                ],  # un peu moins de place au scatter => + place à droite
-                wspace=0.15,  # rapproche fortement gauche/droite
-            )
-
-            # marges globales (ENLÈVE les bandes blanches inutiles)
+            outer = gridspec.GridSpec(1, 2, width_ratios=[0.7, 1.0], wspace=0.15)
             fig.subplots_adjust(left=0.04, right=0.995, bottom=0.08, top=0.86)
 
-            ax_header = fig.add_axes([0.04, 0.88, 0.955, 0.11])  # x, y, w, h
-            ax_header.axis("off")
-            # formula = LATEX_FORMULAS.get(metric, "")
-
-            # ===== Gauche: scatter =====
+            # left panel
             ax_top = fig.add_subplot(outer[0, 0])
 
             if control_name in x_pos:
@@ -204,11 +449,10 @@ def export_selected_metric_pngs_bandlimited(all_results, zip_path, out_dir):
 
             rng = np.random.default_rng(0)
             shapes = ["D", "o", "s", "^"]
+
             for i, g in enumerate(groups):
                 gdf = df[df["group"] == g]
-                x = np.full(len(gdf), x_pos[g], dtype=float) + rng.normal(
-                    0, 0.06, size=len(gdf)
-                )
+                x = np.full(len(gdf), x_pos[g], dtype=float) + rng.normal(0, 0.06, size=len(gdf))
 
                 ax_top.scatter(
                     x,
@@ -224,7 +468,7 @@ def export_selected_metric_pngs_bandlimited(all_results, zip_path, out_dir):
                         [grp_mean.loc[g]],
                         color="black",
                         yerr=[grp_std.loc[g] if pd.notna(grp_std.loc[g]) else 0],
-                        fmt=shapes[i],
+                        fmt=shapes[i % len(shapes)],
                         capsize=5,
                         markersize=12,
                         linewidth=1.2,
@@ -233,53 +477,38 @@ def export_selected_metric_pngs_bandlimited(all_results, zip_path, out_dir):
                         markeredgewidth=3,
                     )
 
-            ax_top.set_title(
-                f"{LATEX_FORMULAS[metric]} (bandlimited waveform) ", fontsize=20, pad=20
-            )
+            ax_top.set_title(metric_label, fontsize=20, pad=20)
             ax_top.set_xticks([x_pos[g] for g in groups])
             ax_top.set_xticklabels(groups, rotation=0)
             ax_top.tick_params(axis="both", labelsize=16)
             ax_top.yaxis.set_major_formatter(FormatStrFormatter("%.3g"))
             ax_top.grid(True, axis="y")
 
-            # ===== Droite: 2x2 illustrations =====
+            # right panel
             right = gridspec.GridSpecFromSubplotSpec(
-                2,
-                2,
-                subplot_spec=outer[0, 1],
-                hspace=0.5,  # <-- réduit l'écart vertical entre les 4
-                wspace=0.28,  # <-- réduit l'écart horizontal entre les 2 colonnes d'illustrations
+                2, 2, subplot_spec=outer[0, 1], hspace=0.5, wspace=0.28
             )
 
-            for i, g in enumerate(groups[:4]):  # on affiche 4 max
+            for i, g in enumerate(groups[:4]):
                 r = i // 2
                 c = i % 2
                 ax = fig.add_subplot(right[r, c])
 
                 chosen = rep_file.get(g, None)
                 path = h5_index.get(g, {}).get(chosen, None) if chosen else None
-        
+
                 if path and os.path.exists(path):
-                    support = extract_graphics_support(path, mode="bandlimited")
-
-                    support_beat = select_support_beat(support, 0)
-                    plot_metric_illustration(ax, metric, support_beat, path)
-
-                    ax.set_title(f" {g} ", fontsize=14)
-
-                    ymin, ymax = ax.get_ylim()
-                    ax.set_ylim(np.minimum(0, ymin), ymax * 1.4)
+                    arr = extract_segment_metric(path, base_metric, mode=mode)
+                    if arr is not None:
+                        metric_dict = compute_segment_higher_level_metrics(arr)
+                        plot_higher_level_metric_illustration(ax, higher_metric, metric_dict)
+                        ax.set_title(f"{g}", fontsize=14)
+                    else:
+                        ax.text(0.5, 0.5, f"No by_segment for {g}", ha="center", va="center")
+                        ax.axis("off")
                 else:
-                    ax.text(
-                        0.5,
-                        0.5,
-                        f"No representative file for {g}",
-                        ha="center",
-                        va="center",
-                    )
+                    ax.text(0.5, 0.5, f"No representative file for {g}", ha="center", va="center")
                     ax.axis("off")
-
-            # si <4 groupes, masque les cases vides
 
             for j in range(len(groups[:4]), 4):
                 r = j // 2
@@ -287,92 +516,9 @@ def export_selected_metric_pngs_bandlimited(all_results, zip_path, out_dir):
                 ax_empty = fig.add_subplot(right[r, c])
                 ax_empty.axis("off")
 
-            png_path = os.path.join(out_dir, f"{metric}_bandlimited.png")
-            fig.savefig(png_path)
+            png_path = os.path.join(out_dir, f"{metric_key}_{mode}.eps")
+            fig.savefig(png_path, bbox_inches="tight")
             plt.close(fig)
-
-def plot_group_delta_phi_stats(ax, group_stats, group_name):
-    if group_name not in group_stats:
-        ax.text(0.5, 0.5, f"No data for {group_name}", ha="center", va="center")
-        ax.axis("off")
-        return
-
-    data = group_stats[group_name]
-    hs = data["h"]
-    mu = data["mean"]
-    sigma = data["std"]
-    ax.bar(
-        hs,
-        mu,
-        width=0.7,
-        color="#EC5241",
-        edgecolor="black",
-    )
-    ax.axhline(0, color="black", linewidth=1.0)
-    ax.axhline(np.pi, color="black", linewidth=0.8, linestyle="--")
-    ax.axhline(-np.pi, color="black", linewidth=0.8, linestyle="--")
-
-    for h, m, s in zip(hs, mu, sigma, strict=False):
-        if not np.isfinite(m):
-            continue
-
-        va = "bottom" if m >= 0 else "top"
-        offset = 0.08 if m >= 0 else -0.08
-
-        ax.text(
-            h,
-            m + offset,
-            f"{m:.2f}",
-            ha="center",
-            va=va,
-            fontsize=10,
-        )
-
-    ax.set_xlim(1.5, max(hs) + 0.5)
-    ax.set_ylim(-1.1 * np.pi, 1.1 * np.pi)
-    ax.set_xticks(hs)
-
-    ax.set_xlabel("Harmonic n (a.u.)", fontsize=14)
-    ax.set_ylabel(r"Mean $\delta\phi_n$ (rad)", fontsize=14, labelpad=12)
-
-    ax.set_yticks([-np.pi, -np.pi / 2, 0, np.pi / 2, np.pi])
-    ax.set_yticklabels(
-        [r"$-\pi$", r"$-\pi/2$", r"$0$", r"$\pi/2$", r"$\pi$"],
-        fontsize=12,
-    )
-
-    ax.set_title(group_name, fontsize=14)
-
-
-def build_group_signal_figure(group_name, data):
-    fig = go.Figure()
-
-    x = np.asarray(data["x"], dtype=float)
-    mean = np.asarray(data["mean"], dtype=float)
-
-    fig.add_trace(
-        go.Scatter(
-            x=x,
-            y=mean,
-            mode="lines",
-            line=dict(width=3),
-            name=group_name,
-        )
-    )
-
-    y_max = np.nanmax(mean) if np.any(np.isfinite(mean)) else 1.0
-
-    fig.update_yaxes(range=[0, y_max * 1.05])
-
-    fig.update_layout(
-        height=450,
-        xaxis_title="Time",
-        yaxis_title="Velocity",
-        template="simple_white",
-        showlegend=False,
-    )
-
-    return fig
 
 
 def find_control_group_name(groups):
@@ -385,96 +531,6 @@ def find_control_group_name(groups):
             return g
     return None
 
-
-def plot_metric_illustration(ax, metric, support, path=None):
-    if not support:
-        ax.text(0.5, 0.5, "No graphics support", ha="center", va="center")
-        ax.axis("off")
-        return
-
-    tau = np.asarray(support["tau"], dtype=float)
-    sig = np.asarray(support["signal_mean"], dtype=float)
-    C = np.asarray(support.get("cumulative", []), dtype=float)
-    vb = np.asarray(support.get("vb", []), dtype=float)
-    dvdt = np.asarray(support.get("dvdt", []), dtype=float)
-    d2vdt2 = np.asarray(support.get("d2vdt2", []), dtype=float)
-    harmonic_weights = np.asarray(support.get("harmonic_weights", []), dtype=float)
-    harmonic_magnitudes = np.asarray(
-        support.get("harmonic_magnitudes", []), dtype=float
-    )
-    harmonic_energies = np.asarray(support.get("harmonic_energies", []), dtype=float)
-    harmonic_energies_weights = np.asarray(support.get("harmonic_energies_weights", []), dtype=float)
-    harmonic_phases = np.asarray(support.get("harmonic_phases", []), dtype=float)
-    delta_phi_all = np.asarray(support.get("delta_phi_all", []), dtype=float)
-
-    n = sig.size
-    if n < 2:
-        ax.text(0.5, 0.5, "Signal too short", ha="center", va="center")
-        ax.axis("off")
-        return
-
-    # --- helpers ---
-    def _y_at(x0, x_grid, y_grid):
-        y = np.asarray(y_grid, dtype=float)
-        x = np.asarray(x_grid, dtype=float)
-        if len(x) < 2:
-            return np.nan
-        y2 = np.where(np.isfinite(y), y, 0.0)
-        return float(np.interp(x0, x, y2))
-
-    def vline_to_curve(x0, x_grid, y_grid, y0=0.0, **kwargs):
-        y1 = _y_at(x0, x_grid, y_grid)
-        if np.isfinite(y1):
-            ax.vlines(x0, y0, y1, **kwargs)
-        return y1
-
-    def hline_label(y, label, va="bottom"):
-        ax.axhline(y, linestyle="--", linewidth=1, color="black")
-        ax.text(
-            0.98,
-            y,
-            f" {label}={y:.3g}",
-            transform=ax.get_yaxis_transform(),
-            ha="right",
-            va=va,
-            fontsize=12,
-            bbox=dict(facecolor="white", edgecolor="none"),
-        )
-
-    def info_box(lines, fontsize=12):
-        """
-        lines: str or list[str]
-        Draws the same top-left boxed annotation for all metrics.
-        """
-        if not lines:
-            return
-        if isinstance(lines, str):
-            text = lines
-        else:
-            text = "\n".join([str(x) for x in lines if x is not None and str(x) != ""])
-
-        ax.text(
-            0.02,
-            0.98,
-            text,
-            transform=ax.transAxes,
-            ha="left",
-            va="top",
-            fontsize=fontsize,
-            bbox=dict(facecolor="white", edgecolor="none", pad=1.0),
-            clip_on=True,
-        )
-
-    ax.tick_params(axis="both", labelsize=12)
-
-    def rectified(v):
-        v = np.asarray(v, dtype=float)
-        return np.where(np.isfinite(v), np.maximum(v, 0.0), np.nan)
-
-    n = sig.size
-    if n < 2:
-        info_box("Signal too short")
-        return
 
 def replace_folder_in_zip(zip_path: str, folder_path: str, arc_folder: str):
     """
@@ -522,64 +578,7 @@ def replace_file_in_zip(zip_path, file_to_add):
     os.replace(temp_zip, zip_path)
 
 
-def load_first_m0_image(zip_path):
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        with zipfile.ZipFile(zip_path, "r") as z:
-            z.extractall(tmpdir)
-
-        for root, _, files in os.walk(tmpdir):
-            for f in sorted(files):
-                if f.endswith(".h5"):
-                    h5_path = os.path.join(root, f)
-
-                    with h5py.File(h5_path, "r") as h5:
-                        img = h5["/Maps/M0_ff_img/value"][()]
-
-                    return img
-
-    return None
-
-
-def build_heatmap(img):
-
-    # transpose
-    img = img.T
-
-    h, w = img.shape
-
-    # centre
-    cy, cx = h // 2, w // 2
-
-    # rayon = moitié du carré
-    r = min(cx, cy)
-
-    # grille coordonnées
-    Y, X = np.ogrid[:h, :w]
-
-    mask = (X - cx) ** 2 + (Y - cy) ** 2 <= r**2
-
-    # appliquer masque circulaire
-    img_circle = np.full_like(img, np.nan, dtype=float)
-    img_circle[mask] = img[mask]
-
-    # heatmap
-    fig = px.imshow(img_circle, color_continuous_scale="inferno", origin="lower")
-
-    # cacher axes
-    fig.update_xaxes(visible=False)
-    fig.update_yaxes(visible=False)
-
-    fig.update_layout(
-        width=150,
-        height=150,
-        margin=dict(t=10, b=0, l=0, r=0),
-        coloraxis_showscale=False,
-        paper_bgcolor="white",
-        plot_bgcolor="white",
-    )
-
-    return fig
 
 
 def extract_sort_key(filename):
@@ -661,313 +660,22 @@ def build_h5_path_index_from_extracted_tree(tmpdir: str):
     return index
 
 
-def analyze_zip(zip_path):
 
-    all_results = defaultdict(lambda: defaultdict(list))
-    detected_groups = set()
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        with zipfile.ZipFile(zip_path, "r") as z:
-            z.extractall(tmpdir)
+def save_dashboard(original_zip):
+    results, single_group = analyze_zip_segment_metrics(original_zip, mode=SEGMENT_MODE)
 
-        for root, _, files in os.walk(tmpdir):
-            h5_files = sorted(f for f in files if f.endswith(".h5"))
-            if not h5_files:
-                continue
+    segment_png_dir = os.path.join(os.path.dirname(original_zip), "export_segment_png")
+    export_segment_higher_level_pngs(results, original_zip, segment_png_dir, mode=SEGMENT_MODE)
 
-            group_name = os.path.basename(root)
-
-            if root == tmpdir:
-                group_name = "all"
-
-            detected_groups.add(group_name)
-
-            for file in h5_files:
-                filepath = os.path.join(root, file)
-
-                metrics = extract_metrics(filepath)
-
-                for mode, metric_dict in metrics.items():
-                    for metric_name, values in metric_dict.items():
-                        all_results[mode][metric_name].append(
-                            {
-                                "file": file,
-                                "group": group_name,
-                                "mean": values["mean"],
-                                "std": values["std"],
-                                "latex_formula": values.get("latex_formula", ""),
-                            }
-                        )
-
-    single_group = len(detected_groups) < 1
-
-    return dict(all_results), single_group
-
-
-def build_metric_figure(df, metric, mode, ymin, ymax, single_group):
-
-    groups = sorted(df["group"].unique())
-    control_name = find_control_group_name(groups)
-    if control_name in groups:
-        groups = [g for g in groups if g != control_name] + [control_name]
-
-    color_map = {
-        g: c
-        for g, c in zip(
-            groups,
-            ["royalblue", "firebrick", "seagreen", "orange", "purple"],
-            strict=False,
-        )
-    }
-
-    fig = go.Figure()
-
-    fig.update_layout(autosize=True, height=400, margin=dict(t=10, b=10, l=10, r=10))
-
-    xmin = df["index"].min()
-    xmax = df["index"].max()
-
-    current = xmin + 0.5
-    toggle = True
-
-    while current <= xmax:
-        if toggle:
-            fig.add_vrect(
-                x0=current - 1,
-                x1=current,
-                fillcolor="lightblue",
-                opacity=0.2,
-                layer="below",
-                line_width=0,
-            )
-        toggle = not toggle
-        current += 1
-
-    for g in groups:
-        group_df = df[df["group"] == g]
-
-        fig.add_trace(
-            go.Scatter(
-                x=group_df["index"],
-                y=group_df["mean"],
-                mode="markers",
-                marker=dict(color=color_map[g], size=7, opacity=0.6),
-                showlegend=False,
-            )
-        )
-
-    for g in groups:
-        group_df = df[df["group"] == g]
-
-        fig.add_trace(
-            go.Scatter(
-                x=[group_df["index"].mean()],
-                y=[group_df["mean"].mean()],
-                mode="markers",
-                marker=dict(
-                    size=20,
-                    color=color_map[g],  # intérieur creux
-                ),
-                error_y=dict(
-                    type="data",
-                    array=[group_df["mean"].std()],
-                    visible=True,
-                    thickness=3,
-                    width=8,
-                ),
-                showlegend=False,
-            )
-        )
-
-    if not single_group:
-        tickvals = []
-        ticktext = []
-
-        for g in groups:
-            group_indices = df[df["group"] == g]["index"]
-            center = group_indices.mean()
-
-            color = color_map[g]
-
-            tickvals.append(center)
-            ticktext.append(f'<span style="color:{color}; font-weight:bold">{g}</span>')
-
-        fig.update_xaxes(
-            tickmode="array",
-            tickvals=tickvals,
-            ticktext=ticktext,
-            title="Patient Group",
-        )
-    else:
-        fig.update_xaxes(showticklabels=False, title="")
-
-    fig.update_yaxes(range=[ymin, ymax])
-
-    fig.update_layout(yaxis_title=metric, yaxis_title_font=dict(size=15))
-
-    return fig
-
-
-def extract_mean_support_per_file(h5_path, mode="bandlimited"):
-    support = extract_graphics_support(h5_path, mode)
-    if not support:
-        return None
-
-    out = {}
-
-    for k, v in support.items():
-        arr = np.asarray(v)
-
-        if arr.ndim == 2:
-            if k in {
-                "harmonic_magnitudes",
-                "harmonic_weights",
-                "harmonic_phases",
-                "delta_phi_all",
-            }:
-                out[k] = np.nanmean(arr, axis=0)
-            else:
-                out[k] = np.nanmean(arr, axis=1)
-
-        elif arr.ndim == 1:
-            out[k] = np.nanmean(arr)
-
-        else:
-            out[k] = v
-
-    return out
-
-
-def compute_group_mean_signals(zip_path, mode="bandlimited"):
-    group_signals = defaultdict(list)
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        with zipfile.ZipFile(zip_path, "r") as z:
-            z.extractall(tmpdir)
-
-        for root, _, files in os.walk(tmpdir):
-            h5_files = [f for f in files if f.endswith(".h5")]
-            if not h5_files:
-                continue
-
-            group_name = os.path.basename(root)
-            if root == tmpdir:
-                group_name = "all"
-
-            for file in h5_files:
-                h5_path = os.path.join(root, file)
-
-                support_mean = extract_mean_support_per_file(h5_path, mode=mode)
-                if support_mean is None or "signal_mean" not in support_mean:
-                    continue
-
-                signal = np.asarray(support_mean["signal_mean"], dtype=float)
-                if signal.ndim != 1 or signal.size == 0:
-                    continue
-
-                group_signals[group_name].append(signal)
-
-    group_curves = {}
-
-    for group, signals in group_signals.items():
-        min_len = min(len(s) for s in signals)
-        aligned = np.array([s[:min_len] for s in signals], dtype=float)
-
-        group_mean = np.nanmean(aligned, axis=0)
-
-        group_curves[group] = {
-            "x": np.arange(min_len),
-            "mean": group_mean,
-        }
-
-    return group_curves
-
-
-def build_comparison_signal_figure(group_curves):
-    fig = go.Figure()
-
-    groups = sorted(group_curves.keys())
-    if not groups:
-        return fig
-
-    max_len = max(len(group_curves[g]["x"]) for g in groups)
-    x_common = np.arange(max_len)
-    global_max = 0.0
-
-    color_map = {
-        g: c
-        for g, c in zip(
-            groups,
-            ["royalblue", "firebrick", "seagreen", "orange", "purple"],
-            strict=False,
-        )
-    }
-
-    for group in groups:
-        data = group_curves[group]
-        y_old = np.asarray(data["mean"], dtype=float)
-
-        y_interp = np.interp(
-            x_common,
-            np.linspace(0, max_len - 1, len(y_old)),
-            y_old,
-        )
-
-        if np.any(np.isfinite(y_interp)):
-            global_max = max(global_max, float(np.nanmax(y_interp)))
-
-        fig.add_trace(
-            go.Scatter(
-                x=x_common,
-                y=y_interp,
-                mode="lines",
-                name=group,
-                line=dict(color=color_map.get(group, "black"), width=3),
-            )
-        )
-
-    if global_max <= 0:
-        global_max = 1.0
-
-    fig.update_yaxes(range=[0, global_max * 1.05])
-
-    fig.update_layout(
-        height=550,
-        xaxis_title="Time index",
-        yaxis_title="Signal amplitude",
-        template="simple_white",
-        legend_title="Group",
-    )
-
-    return fig
-
-
-def save_dashboard(all_results, original_zip, single_group):
-
-    all_metrics = set()
-    for mode in all_results:
-        all_metrics.update(all_results[mode].keys())
-
-    group_curves = compute_group_mean_signals(original_zip, mode="raw")
-    group_curves_bl = compute_group_mean_signals(original_zip, mode="bandlimited")
-
-    group_comparison_curves = build_comparison_signal_figure(group_curves)
-    group_comparison_curves_bl = build_comparison_signal_figure(group_curves_bl)
-
-    png_dir = os.path.join(os.path.dirname(original_zip), "export_png")
-    export_selected_metric_pngs_bandlimited(all_results, original_zip, png_dir)
-
-    print("PNGs exportés dans :", png_dir)
-    replace_folder_in_zip(original_zip, png_dir, arc_folder="export_png")
-    if os.path.isdir(png_dir):
-        shutil.rmtree(png_dir)
+    replace_folder_in_zip(original_zip, segment_png_dir, arc_folder="export_segment_png")
+    if os.path.isdir(segment_png_dir):
+        shutil.rmtree(segment_png_dir)
 
 
 
 
 if __name__ == "__main__":
     zip_path = choose_zip()
-    dataset_path_bl = "/Artery/VelocityPerBeat/VelocitySignalPerBeatBandLimited/value"
-
-    results, single_group = analyze_zip(zip_path)
-    save_dashboard(results, zip_path, single_group)
+    
+    save_dashboard(zip_path)
