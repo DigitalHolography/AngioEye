@@ -15,9 +15,7 @@ class ArterialSegExample(ProcessPipeline):
     v_raw_segment_input = (
         "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegment/value"
     )
-    v_band_segment_input = (
-        "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegmentBandLimited/value"
-    )
+    v_band_segment_input = "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegmentBandLimited/value"
 
     v_raw_global_input = "/Artery/VelocityPerBeat/VelocitySignalPerBeat/value"
     v_band_global_input = (
@@ -800,7 +798,7 @@ class ArterialSegExample(ProcessPipeline):
         dvdt = np.gradient(np.where(np.isfinite(vv), vv, 0.0), dt)
         d2vdt2 = np.gradient(dvdt, dt)
         dvdt_norm = (Tbeat**3 / ((m0 + self.eps) ** 2)) * (dvdt**2)
-        d2vdt2_norm = (Tbeat**3 / ((m0 + self.eps) ** 2)) * (d2vdt2**2)
+        d2vdt2_norm = (Tbeat**5 / ((m0 + self.eps) ** 2)) * (d2vdt2**2)
         hp = self._harmonic_pack(vv, Tbeat)
         V = hp["V"]
         vb = hp["vb"]
@@ -1459,7 +1457,9 @@ class ArterialSegExample(ProcessPipeline):
                 "by_segment/bandlimited_segment",
                 seg_b,
                 {
-                    "definition": ["per-segment metrics stored as (beat, branch, radius)"],
+                    "definition": [
+                        "per-segment metrics stored as (beat, branch, radius)"
+                    ],
                     "segment_indexing": [seg_note],
                 },
             )
@@ -1467,7 +1467,9 @@ class ArterialSegExample(ProcessPipeline):
                 "by_segment/raw_segment",
                 seg_r,
                 {
-                    "definition": ["per-segment metrics stored as (beat, branch, radius)"],
+                    "definition": [
+                        "per-segment metrics stored as (beat, branch, radius)"
+                    ],
                     "segment_indexing": [seg_note],
                 },
             )
@@ -1486,12 +1488,20 @@ class ArterialSegExample(ProcessPipeline):
             pack(
                 "by_segment/bandlimited_global",
                 gl_b,
-                {"definition": ["median over all branch-radius segment values per beat"]},
+                {
+                    "definition": [
+                        "median over all branch-radius segment values per beat"
+                    ]
+                },
             )
             pack(
                 "by_segment/raw_global",
                 gl_r,
-                {"definition": ["median over all branch-radius segment values per beat"]},
+                {
+                    "definition": [
+                        "median over all branch-radius segment values per beat"
+                    ]
+                },
             )
 
             metrics["by_segment/params/ratio_R_VTI"] = np.asarray(

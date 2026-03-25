@@ -15,7 +15,7 @@ from .core.base import (
 
 
 @registerPostprocess(
-    name="Graphics Dashboard",
+    name="groups comparison dashboard",
     description=(
         "Build the cohort HTML dashboard and PNG metric exports from arterial "
         "waveform shape metrics."
@@ -32,7 +32,7 @@ class GraphicsDashboardPostprocess(BatchPostprocess):
         if not output_dir.exists() or not output_dir.is_dir():
             raise FileNotFoundError(f"Output folder does not exist: {output_dir}")
 
-        import graphics
+        import groups_comparison_dashboard
 
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_root = Path(temp_dir)
@@ -42,12 +42,12 @@ class GraphicsDashboardPostprocess(BatchPostprocess):
             cwd = Path.cwd()
             try:
                 os.chdir(temp_root)
-                all_results, single_group = graphics.analyze_zip(str(temp_zip))
+                all_results, single_group = groups_comparison_dashboard.analyze_zip(str(temp_zip))
                 if not all_results:
                     raise ValueError(
                         "No compatible pipeline metrics were found for the dashboard."
                     )
-                graphics.save_dashboard(all_results, str(temp_zip), single_group)
+                groups_comparison_dashboard.save_dashboard(all_results, str(temp_zip), single_group)
             finally:
                 os.chdir(cwd)
 
