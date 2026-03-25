@@ -26,7 +26,9 @@ from .core.base import (
 class GraphicsDashboardPostprocess(BatchPostprocess):
     def run(self, context: PostprocessContext) -> PostprocessResult:
         if not context.processed_files:
-            raise ValueError("No processed HDF5 outputs are available for postprocessing.")
+            raise ValueError(
+                "No processed HDF5 outputs are available for postprocessing."
+            )
 
         output_dir = context.output_dir.expanduser().resolve()
         if not output_dir.exists() or not output_dir.is_dir():
@@ -34,6 +36,7 @@ class GraphicsDashboardPostprocess(BatchPostprocess):
 
         os.environ["MPLBACKEND"] = "Agg"
         import variability_heterogeneity_dashboard
+
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_root = Path(temp_dir)
             temp_zip = temp_root / "batch_outputs.zip"
@@ -42,7 +45,7 @@ class GraphicsDashboardPostprocess(BatchPostprocess):
             cwd = Path.cwd()
             try:
                 os.chdir(temp_root)
-                results, single_group = variability_heterogeneity_dashboard.analyze_zip_segment_metrics(
+                results, single_group = variability_heterogeneity_dashboard.analyze_zip(
                     str(temp_zip),
                     mode="bandlimited_segment",
                 )
@@ -60,7 +63,7 @@ class GraphicsDashboardPostprocess(BatchPostprocess):
                 output_dir=output_dir,
             )
 
-        created_paths = [ *[str(path) for path in png_paths]]
+        created_paths = [*[str(path) for path in png_paths]]
         summary = f"Generated dashboard and {len(png_paths)} PNG illustration(s)."
         return PostprocessResult(summary=summary, generated_paths=created_paths)
 
