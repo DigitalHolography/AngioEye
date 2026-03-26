@@ -55,8 +55,7 @@ SELECTED_METRICS_PNG = {
     "Q_d_width",
     "R_Q_d",
     "v_end_over_v_mean",
-    "E_slope",
-    
+    "E_slope",    
 }
 METRIC_ALIASES = {
     "Hspec": "spectral_entropy",
@@ -99,7 +98,6 @@ LATEX_FORMULAS = {
     "R_Q_d": r"$R_{\mathrm{Q_{{d}}}}$",
     "v_end_over_v_mean": r"$R_{EM}$",
     "E_slope": r"$E_{\mathrm{slope}}$",
-    "E_curv": r"$E_{\mathrm{curv}}$",
     "phase_locking_residual": r"$E_{\phi}$",
     "W50_over_T": r"$W_{50}/T$",
     "N_H_over_T": r"$N_H/T$",
