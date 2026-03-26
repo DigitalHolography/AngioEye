@@ -15,12 +15,12 @@ from .core.base import (
 
 
 @registerPostprocess(
-    name="Variability and heterogeneity dashboard",
+    name="Variability and heterogeneity tables",
     description=(
-        "Build the cohort HTML dashboard and PNG metric exports from arterial "
-        "waveform shape metrics."
+        "Build group-level LaTeX and CSV tables for variability and heterogeneity "
+        "metrics computed from by-segment arterial waveform shape metrics."
     ),
-    required_deps=["matplotlib>=3.8", "pandas>=2.1", "plotly>=5.18"],
+    required_deps=["pandas>=2.1"],
     required_pipelines=["arterial_waveform_shape_metrics"],
 )
 class GraphicsDashboardPostprocess(BatchPostprocess):
@@ -34,7 +34,6 @@ class GraphicsDashboardPostprocess(BatchPostprocess):
         if not output_dir.exists() or not output_dir.is_dir():
             raise FileNotFoundError(f"Output folder does not exist: {output_dir}")
 
-        os.environ["MPLBACKEND"] = "Agg"
         import variability_heterogeneity_dashboard
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -45,26 +44,33 @@ class GraphicsDashboardPostprocess(BatchPostprocess):
             cwd = Path.cwd()
             try:
                 os.chdir(temp_root)
-                results, single_group = variability_heterogeneity_dashboard.analyze_zip(
+
+                results = variability_heterogeneity_dashboard.analyze_zip(
                     str(temp_zip),
                     mode="bandlimited_segment",
                 )
                 if not results:
                     raise ValueError(
-                        "No compatible by-segment metrics were found for the variability/heterogeneity dashboard."
+                        "No compatible by-segment metrics were found for the variability/heterogeneity tables."
                     )
-                variability_heterogeneity_dashboard.save_dashboard(str(temp_zip))
+
+                variability_heterogeneity_dashboard.export_group_tables(
+                    str(temp_zip),
+                    mode="bandlimited_segment",
+                )
             finally:
                 os.chdir(cwd)
 
-            png_paths = self._extract_prefix(
+            table_paths = self._extract_prefix(
                 zip_path=temp_zip,
-                member_prefix="export_segment_png/",
+                member_prefix="latex_tables/",
                 output_dir=output_dir,
             )
 
-        created_paths = [*[str(path) for path in png_paths]]
-        summary = f"Generated dashboard and {len(png_paths)} PNG illustration(s)."
+        created_paths = [str(path) for path in table_paths]
+        summary = (
+            f"Generated {len(table_paths)} variability/heterogeneity table file(s)."
+        )
         return PostprocessResult(summary=summary, generated_paths=created_paths)
 
     def _zip_folder(self, folder: Path, zip_path: Path) -> None:
@@ -81,18 +87,6 @@ class GraphicsDashboardPostprocess(BatchPostprocess):
             for file_path in files:
                 archive.write(file_path, file_path.relative_to(folder))
 
-    def _extract_member(
-        self,
-        zip_path: Path,
-        member_name: str,
-        output_dir: Path,
-    ) -> Path:
-        target = output_dir / member_name
-        with zipfile.ZipFile(zip_path, "r") as archive:
-            with archive.open(member_name) as src, target.open("wb") as dest:
-                shutil.copyfileobj(src, dest)
-        return target
-
     def _extract_prefix(
         self,
         zip_path: Path,
@@ -102,6 +96,7 @@ class GraphicsDashboardPostprocess(BatchPostprocess):
         target_dir = output_dir / member_prefix.rstrip("/")
         if target_dir.exists():
             shutil.rmtree(target_dir)
+
         extracted: list[Path] = []
         with zipfile.ZipFile(zip_path, "r") as archive:
             for member in archive.namelist():
