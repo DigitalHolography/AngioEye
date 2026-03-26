@@ -8,20 +8,49 @@ class ArterialSegExample(ProcessPipeline):
     """
     Waveform-shape metrics on per-beat, per-branch, per-radius velocity waveforms.
     Gain-invariant: all metrics are invariant to scaling of the waveform by a positive constant.
+
+    Notes
+    -----
+    - This version computes the same metrics for both arterial and venous waveforms.
+    - The registered pipeline name is intentionally kept unchanged for backward compatibility.
     """
 
-    description = "Waveform shape metrics (segment + aggregates + global), gain-invariant and robust."
+    description = (
+        "Waveform shape metrics (artery + vein; segment + aggregates + global), "
+        "gain-invariant and robust."
+    )
 
+    # ----------------------------
+    # Arterial inputs
+    # ----------------------------
     v_raw_segment_input = (
         "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegment/value"
     )
-    v_band_segment_input = "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegmentBandLimited/value"
-
+    v_band_segment_input = (
+        "/Artery/VelocityPerBeat/Segments/"
+        "VelocitySignalPerBeatPerSegmentBandLimited/value"
+    )
     v_raw_global_input = "/Artery/VelocityPerBeat/VelocitySignalPerBeat/value"
     v_band_global_input = (
         "/Artery/VelocityPerBeat/VelocitySignalPerBeatBandLimited/value"
     )
 
+    # ----------------------------
+    # Venous inputs
+    # ----------------------------
+    v_raw_segment_input_vein = (
+        "/Vein/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegment/value"
+    )
+    v_band_segment_input_vein = (
+        "/Vein/VelocityPerBeat/Segments/"
+        "VelocitySignalPerBeatPerSegmentBandLimited/value"
+    )
+    v_raw_global_input_vein = "/Vein/VelocityPerBeat/VelocitySignalPerBeat/value"
+    v_band_global_input_vein = (
+        "/Vein/VelocityPerBeat/VelocitySignalPerBeatBandLimited/value"
+    )
+
+    # Beat period input
     T_input = "/Artery/VelocityPerBeat/beatPeriodSeconds/value"
 
     eps = 1e-12
@@ -32,8 +61,6 @@ class ArterialSegExample(ProcessPipeline):
     ratio_vend_end = 0.90
 
     H_LOW_MAX = 1
-    H_HIGH_MIN = 2
-    H_HIGH_MAX = 10
     H_CUMSUM_INTERP_POINTS = 256
     H_MAX = 10
     H_PHASE_RESIDUAL = 10
@@ -182,20 +209,20 @@ class ArterialSegExample(ProcessPipeline):
         n_h_over_t = float(np.exp(entropy_like))
         return n_h_over_t if np.isfinite(n_h_over_t) else np.nan
 
-    def _spectral_ratios(self, v: np.ndarray, Tbeat: float) -> tuple[float, float]:
+    def _spectral_ratio_low(self, v: np.ndarray, Tbeat: float) -> float:
         """
-        Return (E_low/E_total, E_high/E_total) using harmonic-index bands.
+        Return E_low/E_total using harmonic-index bands.
         """
         if (not np.isfinite(Tbeat)) or Tbeat <= 0:
-            return np.nan, np.nan
+            return np.nan
 
         if v.size == 0 or not np.any(np.isfinite(v)):
-            return np.nan, np.nan
+            return np.nan
 
         vv = np.where(np.isfinite(v), v, 0.0)
         n = vv.size
         if n < 2:
-            return np.nan, np.nan
+            return np.nan
 
         fs = n / Tbeat
         X = np.fft.rfft(vv)
@@ -205,17 +232,12 @@ class ArterialSegExample(ProcessPipeline):
 
         E_total = float(np.sum(P[1:]))
         if not np.isfinite(E_total) or E_total <= 0:
-            return np.nan, np.nan
+            return np.nan
 
         low_mask = (h >= 0.9) & (h <= float(self.H_LOW_MAX) + 0.1)
-        high_mask = (h >= float(self.H_HIGH_MIN) - 0.1) & (
-            h <= float(self.H_HIGH_MAX) + 0.1
-        )
-
         E_low = float(np.sum(P[low_mask]))
-        E_high = float(np.sum(P[high_mask]))
 
-        return float(E_low / E_total), float(E_high / E_total)
+        return float(E_low / E_total)
 
     def _harmonic_pack(self, v: np.ndarray, Tbeat: float) -> dict:
         """
@@ -249,13 +271,13 @@ class ArterialSegExample(ProcessPipeline):
 
         return {"V": V, "H": H, "vb": vb, "Vfull": Vfull}
 
-    def _rho_h_90_from_harmonics(self, V: np.ndarray) -> float:
+    def _rho_h_percent_from_harmonics(self, V: np.ndarray, q: float) -> float:
         """
-        Normalized 90% harmonic-energy rolloff index:
+        Normalized harmonic-energy rolloff index at quantile q:
           w_n = |V_n|^2 / sum_{k=1..H} |V_k|^2
           C(h) = sum_{n=1..h} w_n,  C(0)=0
-          h_90 obtained by linear interpolation of cumulative energy vs harmonic index
-          rho_h_90 = h_90 / H
+          h_q obtained by linear interpolation of cumulative energy vs harmonic index
+          rho_h_q = h_q / H
         """
         if V is None:
             return np.nan
@@ -269,17 +291,20 @@ class ArterialSegExample(ProcessPipeline):
         if (not np.isfinite(s)) or s <= 0:
             return np.nan
 
+        q = float(np.clip(q, 0.0, 1.0))
         w = power / s
         C = np.cumsum(w)
         C_full = np.concatenate(([0.0], C))
         h_full = np.arange(0, H + 1, dtype=float)
-        h90 = float(np.interp(0.90, C_full, h_full))
-        return float(h90 / H)
+        hq = float(np.interp(q, C_full, h_full))
+        return float(hq / H)
 
-    def _rho_h_90_support_from_harmonics(self, V: np.ndarray) -> dict:
+    def _rho_h_support_from_harmonics(self, V: np.ndarray) -> dict:
         out = {
             "rho_h_90": np.nan,
             "h_90": np.nan,
+            "rho_h_95": np.nan,
+            "h_95": np.nan,
             "harmonic_energy_cumsum": np.full((self.H_MAX,), np.nan, dtype=float),
             "harmonic_energy_cumsum_h": np.full((self.H_MAX,), np.nan, dtype=float),
             "harmonic_energy_cumsum_interp": np.full(
@@ -321,8 +346,11 @@ class ArterialSegExample(ProcessPipeline):
         out["harmonic_energy_cumsum_interp"][:] = C_interp
 
         h90 = float(np.interp(0.90, C_full, h_full))
+        h95 = float(np.interp(0.95, C_full, h_full))
         out["h_90"] = h90
         out["rho_h_90"] = float(h90 / H)
+        out["h_95"] = h95
+        out["rho_h_95"] = float(h95 / H)
 
         return out
 
@@ -735,12 +763,11 @@ class ArterialSegExample(ProcessPipeline):
             np.nansum(np.where(np.isfinite(v), v, 0.0) * (z**3)) / (m0 + self.eps)
         )
 
-    def _derivative_energies(
+    def _derivative_energy_slope(
         self, v: np.ndarray, Tbeat: float, m0: float
-    ) -> tuple[float, float]:
+    ) -> float:
         """
         E_slope = T^3 / M0^2 * int (dv/dt)^2 dt
-        E_curv  = T^5 / M0^2 * int (d2v/dt2)^2 dt
         """
         if (
             v.size < 3
@@ -748,23 +775,19 @@ class ArterialSegExample(ProcessPipeline):
             or (not np.isfinite(Tbeat))
             or Tbeat <= 0
         ):
-            return np.nan, np.nan
+            return np.nan
         if (not np.isfinite(m0)) or m0 <= 0:
-            return np.nan, np.nan
+            return np.nan
 
         vv = np.where(np.isfinite(v), v, 0.0)
         dt = Tbeat / v.size
         M0 = m0 * dt
         if (not np.isfinite(M0)) or M0 <= 0:
-            return np.nan, np.nan
+            return np.nan
 
         dvdt = np.gradient(vv, dt)
-        d2vdt2 = np.gradient(dvdt, dt)
-
         E_slope = float((Tbeat**3) * np.sum(dvdt**2) * dt / ((M0 + self.eps) ** 2))
-        E_curv = float((Tbeat**5) * np.sum(d2vdt2**2) * dt / ((M0 + self.eps) ** 2))
-
-        return E_slope, E_curv
+        return E_slope
 
     def _compute_graphics_support_1d(self, v: np.ndarray, Tbeat: float) -> dict:
         v = self._rectify_keep_nan(v)
@@ -799,10 +822,12 @@ class ArterialSegExample(ProcessPipeline):
         d2vdt2 = np.gradient(dvdt, dt)
         dvdt_norm = (Tbeat**3 / ((m0 + self.eps) ** 2)) * (dvdt**2)
         d2vdt2_norm = (Tbeat**5 / ((m0 + self.eps) ** 2)) * (d2vdt2**2)
+
         hp = self._harmonic_pack(vv, Tbeat)
         V = hp["V"]
         vb = hp["vb"]
         H = int(hp["H"])
+
         harmonic_magnitudes = np.full((self.H_MAX + 1,), np.nan, dtype=float)
         harmonic_weights = np.full((self.H_MAX,), np.nan, dtype=float)
         harmonic_energy_weights = np.full((self.H_MAX,), np.nan, dtype=float)
@@ -814,7 +839,6 @@ class ArterialSegExample(ProcessPipeline):
 
         E_total = np.nan
         E_low = np.nan
-        E_high = np.nan
 
         if V is not None and H >= 0:
             mags = np.abs(V[: H + 1])
@@ -834,7 +858,6 @@ class ArterialSegExample(ProcessPipeline):
 
             E_total = power_sum
             E_low = float(np.nansum(power[1 : self.H_LOW_MAX + 1]))
-            E_high = float(np.nansum(power[self.H_HIGH_MIN : self.H_HIGH_MAX + 1]))
 
             if np.isfinite(power_sum) and power_sum > 0:
                 harmonic_energy_weights[0:H] = power_h / (power_sum + self.eps)
@@ -852,7 +875,7 @@ class ArterialSegExample(ProcessPipeline):
                         )
 
         metrics = self._compute_metrics_1d(vv, Tbeat)
-        rho_support = self._rho_h_90_support_from_harmonics(V)
+        rho_support = self._rho_h_support_from_harmonics(V)
         k0, k1 = self._late_window_indices(n)
         vend = float(self._safe_nanmean(vv[k0:k1])) if k1 > k0 else np.nan
 
@@ -870,13 +893,13 @@ class ArterialSegExample(ProcessPipeline):
                 "harmonic_energy_cumsum_h_interp"
             ],
             "h_90": np.asarray(rho_support["h_90"], dtype=float),
+            "h_95": np.asarray(rho_support["h_95"], dtype=float),
+            "rho_h_90": np.asarray(rho_support["rho_h_90"], dtype=float),
+            "rho_h_95": np.asarray(rho_support["rho_h_95"], dtype=float),
             "H_MAX": np.asarray(self.H_MAX, dtype=int),
             "H_LOW_MAX": np.asarray(self.H_LOW_MAX, dtype=int),
-            "H_HIGH_MIN": np.asarray(self.H_HIGH_MIN, dtype=int),
-            "H_HIGH_MAX": np.asarray(self.H_HIGH_MAX, dtype=int),
             "E_total": np.asarray(E_total, dtype=float),
             "E_low": np.asarray(E_low, dtype=float),
-            "E_high": np.asarray(E_high, dtype=float),
             "signal_mean": np.asarray(vv, dtype=float),
             "tau": np.asarray(tau, dtype=float),
             "cumulative": np.asarray(cumulative, dtype=float),
@@ -925,10 +948,11 @@ class ArterialSegExample(ProcessPipeline):
             ),
             "harmonic_energy_cumsum": np.full((n_beats, h_mag), np.nan, dtype=float),
             "h_90": np.full((n_beats,), np.nan, dtype=float),
+            "h_95": np.full((n_beats,), np.nan, dtype=float),
+            "rho_h_90": np.full((n_beats,), np.nan, dtype=float),
+            "rho_h_95": np.full((n_beats,), np.nan, dtype=float),
             "H_MAX": np.asarray(self.H_MAX, dtype=int),
             "H_LOW_MAX": np.asarray(self.H_LOW_MAX, dtype=int),
-            "H_HIGH_MIN": np.asarray(self.H_HIGH_MIN, dtype=int),
-            "H_HIGH_MAX": np.asarray(self.H_HIGH_MAX, dtype=int),
             "signal_mean": np.full((n_t, n_beats), np.nan, dtype=float),
             "tau": np.full((n_t, n_beats), np.nan, dtype=float),
             "cumulative": np.full((n_t, n_beats), np.nan, dtype=float),
@@ -939,7 +963,6 @@ class ArterialSegExample(ProcessPipeline):
             "m0": np.full((n_beats,), np.nan),
             "E_total": np.full((n_beats,), np.nan, dtype=float),
             "E_low": np.full((n_beats,), np.nan, dtype=float),
-            "E_high": np.full((n_beats,), np.nan, dtype=float),
             "dvdt": np.full((n_t, n_beats), np.nan, dtype=float),
             "dvdt_norm": np.full((n_t, n_beats), np.nan, dtype=float),
             "d2vdt2": np.full((n_t, n_beats), np.nan, dtype=float),
@@ -974,9 +997,11 @@ class ArterialSegExample(ProcessPipeline):
                 "harmonic_energy_cumsum_h_interp"
             ]
             out["h_90"][beat_idx] = s["h_90"]
+            out["h_95"][beat_idx] = s["h_95"]
+            out["rho_h_90"][beat_idx] = s["rho_h_90"]
+            out["rho_h_95"][beat_idx] = s["rho_h_95"]
             out["E_total"][beat_idx] = s["E_total"]
             out["E_low"][beat_idx] = s["E_low"]
-            out["E_high"][beat_idx] = s["E_high"]
             out["signal_mean"][:, beat_idx] = s["signal_mean"]
             out["tau"][:, beat_idx] = s["tau"]
             out["cumulative"][:, beat_idx] = s["cumulative"]
@@ -1083,13 +1108,14 @@ class ArterialSegExample(ProcessPipeline):
         d75 = d_samples["d75"]
         d90 = d_samples["d90"]
 
-        E_low_over_E_total, E_high_over_E_total = self._spectral_ratios(vv, Tbeat)
+        E_low_over_E_total = self._spectral_ratio_low(vv, Tbeat)
 
         hp = self._harmonic_pack(vv, Tbeat)
         V = hp["V"]
         vb = hp["vb"]
 
-        rho_h_90 = self._rho_h_90_from_harmonics(V)
+        rho_h_90 = self._rho_h_percent_from_harmonics(V, 0.90)
+        rho_h_95 = self._rho_h_percent_from_harmonics(V, 0.95)
         crest_factor = self._crest_factor(vv)
         spectral_entropy = self._spectral_entropy_from_harmonics(V)
         ph = self._harmonic_phases(V)
@@ -1138,7 +1164,7 @@ class ArterialSegExample(ProcessPipeline):
         Q_d_width, Q_d_skew, R_Q_d = self._d_quantile_shape_metrics(d_samples)
 
         v_end_over_v_mean = self._late_cycle_mean_fraction(vv)
-        E_slope, E_curv = self._derivative_energies(vv, Tbeat, m0)
+        E_slope = self._derivative_energy_slope(vv, Tbeat, m0)
 
         return {
             "mu_t": float(mu_t),
@@ -1161,7 +1187,6 @@ class ArterialSegExample(ProcessPipeline):
             "d75": float(d75) if np.isfinite(d75) else np.nan,
             "d90": float(d90) if np.isfinite(d90) else np.nan,
             "E_low_over_E_total": float(E_low_over_E_total),
-            "E_high_over_E_total": float(E_high_over_E_total),
             "t_max_over_T": float(t_max_over_T)
             if np.isfinite(t_max_over_T)
             else np.nan,
@@ -1195,6 +1220,7 @@ class ArterialSegExample(ProcessPipeline):
             if np.isfinite(ph["delta_phi2"])
             else np.nan,
             "rho_h_90": float(rho_h_90) if np.isfinite(rho_h_90) else np.nan,
+            "rho_h_95": float(rho_h_95) if np.isfinite(rho_h_95) else np.nan,
             "mu_h": float(mu_h) if np.isfinite(mu_h) else np.nan,
             "sigma_h": float(sigma_h) if np.isfinite(sigma_h) else np.nan,
             "N_eff_over_T": float(N_eff_over_T)
@@ -1217,7 +1243,6 @@ class ArterialSegExample(ProcessPipeline):
             if np.isfinite(v_end_over_v_mean)
             else np.nan,
             "E_slope": float(E_slope) if np.isfinite(E_slope) else np.nan,
-            "E_curv": float(E_curv) if np.isfinite(E_curv) else np.nan,
         }
 
     @staticmethod
@@ -1243,7 +1268,6 @@ class ArterialSegExample(ProcessPipeline):
             ["d75", "D(0.75T)/D(T)", ""],
             ["d90", "D(0.9T)/D(T)", ""],
             ["E_low_over_E_total", "sum(|Vn|**2,n<=k)/sum(|Vn|**2)", ""],
-            ["E_high_over_E_total", "sum(|Vn|**2,n>k)/sum(|Vn|**2)", ""],
             ["t_max_over_T", "t_max/T", ""],
             ["t_min_over_T", "t_min/T", ""],
             ["Delta_t_over_T", "(t_min-t_max)/T", ""],
@@ -1263,6 +1287,7 @@ class ArterialSegExample(ProcessPipeline):
             ["spectral_entropy", "-sum(pn*log(pn+eps))", ""],
             ["delta_phi2", "wrap(phi2-2*phi1)", "rad"],
             ["rho_h_90", "h_90/H", ""],
+            ["rho_h_95", "h_95/H", ""],
             ["mu_h", "sum_n n*|Vn|^2/sum_n |Vn|^2", ""],
             ["sigma_h", "sqrt(sum_n (n-mu_h)^2*|Vn|^2/sum_n |Vn|^2)", ""],
             ["N_eff_over_T", "N_eff/T", ""],
@@ -1285,7 +1310,6 @@ class ArterialSegExample(ProcessPipeline):
                 "",
             ],
             ["E_slope", "T^3/M0^2 * int (dv/dt)^2 dt", ""],
-            ["E_curv", "T^5/M0^2 * int (d2v/dt2)^2 dt", ""],
         ]
 
     def _compute_block_segment(self, v_block: np.ndarray, T: np.ndarray):
@@ -1371,6 +1395,168 @@ class ArterialSegExample(ProcessPipeline):
 
         return out
 
+    def _pack_segment_outputs(
+        self,
+        metrics: dict,
+        vessel_prefix: str,
+        v_raw_seg: np.ndarray,
+        v_band_seg: np.ndarray,
+        T: np.ndarray,
+    ) -> None:
+        seg_b, br_b, gl_b, nb_b, nr_b, seg_note_b = self._compute_block_segment(
+            v_band_seg, T
+        )
+        seg_r, br_r, gl_r, nb_r, nr_r, seg_note_r = self._compute_block_segment(
+            v_raw_seg, T
+        )
+
+        seg_note = seg_note_b
+        if (nb_b != nb_r) or (nr_b != nr_r):
+            seg_note = seg_note_b + " | WARNING: raw/band branch/radius dims differ."
+
+        def pack(prefix: str, d: dict, attrs_common: dict):
+            for k, arr in d.items():
+                metrics[f"{vessel_prefix}/{prefix}/{k}"] = with_attrs(arr, attrs_common)
+
+        pack(
+            "by_segment/bandlimited_segment",
+            seg_b,
+            {
+                "definition": [
+                    "per-segment metrics stored as (beat, branch, radius)"
+                ],
+                "segment_indexing": [seg_note],
+            },
+        )
+        pack(
+            "by_segment/raw_segment",
+            seg_r,
+            {
+                "definition": [
+                    "per-segment metrics stored as (beat, branch, radius)"
+                ],
+                "segment_indexing": [seg_note],
+            },
+        )
+
+        pack(
+            "by_segment/bandlimited_branch",
+            br_b,
+            {"definition": ["median over radii per branch"]},
+        )
+        pack(
+            "by_segment/raw_branch",
+            br_r,
+            {"definition": ["median over radii per branch"]},
+        )
+
+        pack(
+            "by_segment/bandlimited_global",
+            gl_b,
+            {"definition": ["median over all branch-radius segment values per beat"]},
+        )
+        pack(
+            "by_segment/raw_global",
+            gl_r,
+            {"definition": ["median over all branch-radius segment values per beat"]},
+        )
+
+        metrics[f"{vessel_prefix}/by_segment/params/ratio_R_VTI"] = np.asarray(
+            self.ratio_R_VTI, dtype=float
+        )
+        metrics[f"{vessel_prefix}/by_segment/params/ratio_SF_VTI"] = np.asarray(
+            self.ratio_SF_VTI, dtype=float
+        )
+        metrics[f"{vessel_prefix}/by_segment/params/ratio_vend_start"] = np.asarray(
+            self.ratio_vend_start, dtype=float
+        )
+        metrics[f"{vessel_prefix}/by_segment/params/ratio_vend_end"] = np.asarray(
+            self.ratio_vend_end, dtype=float
+        )
+        metrics[f"{vessel_prefix}/by_segment/params/eps"] = np.asarray(
+            self.eps, dtype=float
+        )
+        metrics[f"{vessel_prefix}/by_segment/params/ratio_W50"] = np.asarray(
+            self.ratio_W50, dtype=float
+        )
+        metrics[f"{vessel_prefix}/by_segment/params/H_LOW_MAX"] = np.asarray(
+            self.H_LOW_MAX, dtype=int
+        )
+        metrics[f"{vessel_prefix}/by_segment/params/H_MAX"] = np.asarray(
+            self.H_MAX, dtype=int
+        )
+        metrics[f"{vessel_prefix}/by_segment/params/H_PHASE_RESIDUAL"] = np.asarray(
+            self.H_PHASE_RESIDUAL, dtype=int
+        )
+
+    def _pack_global_outputs(
+        self,
+        metrics: dict,
+        vessel_prefix: str,
+        v_raw_gl: np.ndarray,
+        v_band_gl: np.ndarray,
+        T: np.ndarray,
+        latex_formulas: dict,
+    ) -> None:
+        out_raw = self._compute_block_global(v_raw_gl, T)
+        out_band = self._compute_block_global(v_band_gl, T)
+
+        for k in self._metric_keys():
+            metrics[f"{vessel_prefix}/global/raw/{k[0]}"] = with_attrs(
+                out_raw[k[0]],
+                {
+                    "unit": [k[2]],
+                    "definition": [k[1]],
+                    "latex_formula": [latex_formulas[k[0]]],
+                },
+            )
+
+            metrics[f"{vessel_prefix}/global/bandlimited/{k[0]}"] = with_attrs(
+                out_band[k[0]],
+                {
+                    "unit": [k[2]],
+                    "definition": [k[1]],
+                    "latex_formula": [latex_formulas[k[0]]],
+                },
+            )
+
+        metrics[f"{vessel_prefix}/global/params/ratio_R_VTI"] = np.asarray(
+            self.ratio_R_VTI, dtype=float
+        )
+        metrics[f"{vessel_prefix}/global/params/ratio_SF_VTI"] = np.asarray(
+            self.ratio_SF_VTI, dtype=float
+        )
+        metrics[f"{vessel_prefix}/global/params/ratio_vend_start"] = np.asarray(
+            self.ratio_vend_start, dtype=float
+        )
+        metrics[f"{vessel_prefix}/global/params/ratio_vend_end"] = np.asarray(
+            self.ratio_vend_end, dtype=float
+        )
+        metrics[f"{vessel_prefix}/global/params/eps"] = np.asarray(
+            self.eps, dtype=float
+        )
+        metrics[f"{vessel_prefix}/global/params/ratio_W50"] = np.asarray(
+            self.ratio_W50, dtype=float
+        )
+        metrics[f"{vessel_prefix}/global/params/H_LOW_MAX"] = np.asarray(
+            self.H_LOW_MAX, dtype=int
+        )
+        metrics[f"{vessel_prefix}/global/params/H_MAX"] = np.asarray(
+            self.H_MAX, dtype=int
+        )
+        metrics[f"{vessel_prefix}/global/params/H_PHASE_RESIDUAL"] = np.asarray(
+            self.H_PHASE_RESIDUAL, dtype=int
+        )
+
+        graphics_raw = self._compute_graphics_support_block(v_raw_gl, T)
+        graphics_band = self._compute_graphics_support_block(v_band_gl, T)
+
+        for name, arr in graphics_raw.items():
+            metrics[f"{vessel_prefix}/global/raw/{name}"] = arr
+
+        for name, arr in graphics_band.items():
+            metrics[f"{vessel_prefix}/global/bandlimited/{name}"] = arr
+
     def run(self, h5file) -> ProcessResult:
         latex_formulas = {
             "mu_t": r"$\mu_t=\frac{\sum_t v(t)\,t}{\sum_t v(t)}$",
@@ -1392,8 +1578,7 @@ class ArterialSegExample(ProcessPipeline):
             "d50": r"$\frac{D(0.5T)}{D(T)}$",
             "d75": r"$\frac{D(0.75T)}{D(T)}$",
             "d90": r"$\frac{D(0.9T)}{D(T)}$",
-            "E_low_over_E_total": r"$\frac{\sum_{n=1}^{k}|V_n|^2}{\sum_{n\geq 0}|V_n|^2}$",
-            "E_high_over_E_total": r"$\frac{\sum_{n=k+1}^{N}|V_n|^2}{\sum_{n\geq 0}|V_n|^2}$",
+            "E_low_over_E_total": r"$\frac{\sum_{n=1}^{k}|V_n|^2}{\sum_{n\geq 1}|V_n|^2}$",
             "t_max_over_T": r"$\frac{t_{\max}}{T}$",
             "t_min_over_T": r"$\frac{t_{\min}}{T}$",
             "Delta_t_over_T": r"$\frac{t_{\min}-t_{\max}}{T}$",
@@ -1409,6 +1594,7 @@ class ArterialSegExample(ProcessPipeline):
             "spectral_entropy": r"$-\sum_{n=1}^{N} p_n\log(p_n+\epsilon)$",
             "delta_phi2": r"$\mathrm{wrap}(\phi_2-2\phi_1)$",
             "rho_h_90": r"$\rho_{h,90}=\frac{h_{90}}{H}$",
+            "rho_h_95": r"$\rho_{h,95}=\frac{h_{95}}{H}$",
             "mu_h": r"$\mu_h=\sum_{n=1}^{N} n\,w_n,\quad w_n=\frac{|V_n|^2}{\sum_{k=1}^{N}|V_k|^2}$",
             "sigma_h": r"$\sigma_h=\sqrt{\sum_{n=1}^{N}(n-\mu_h)^2 w_n}$",
             "N_eff_over_T": r"$\frac{N_{\mathrm{eff}}}{T}=\frac{1}{T\int_0^T p(t)^2\,dt}$",
@@ -1423,173 +1609,56 @@ class ArterialSegExample(ProcessPipeline):
             "R_Q_d": r"$R_{Q_d}=\frac{Q_{d,\mathrm{skew}}}{Q_{d,\mathrm{width}}+\epsilon}$",
             "v_end_over_v_mean": r"$\frac{\bar v_{\mathrm{end}}}{v_{\mathrm{mean}}}=\frac{\mathrm{mean}_{t\in[\alpha T,\beta T]} v(t)}{\mathrm{mean}_{t\in[0,T]} v(t)}$",
             "E_slope": r"$E_{\mathrm{slope}}=\frac{T^3}{M_0^2}\int_0^T \left(\frac{dv}{dt}\right)^2 dt$",
-            "E_curv": r"$E_{\mathrm{curv}}=\frac{T^5}{M_0^2}\int_0^T \left(\frac{d^2v}{dt^2}\right)^2 dt$",
         }
 
         T = np.asarray(h5file[self.T_input])
         metrics = {}
 
-        have_seg = (self.v_raw_segment_input in h5file) and (
-            self.v_band_segment_input in h5file
-        )
-        if have_seg:
-            v_raw_seg = np.asarray(h5file[self.v_raw_segment_input])
-            v_band_seg = np.asarray(h5file[self.v_band_segment_input])
+        vessel_configs = [
+            {
+                "prefix": "artery",
+                "v_raw_segment_input": self.v_raw_segment_input,
+                "v_band_segment_input": self.v_band_segment_input,
+                "v_raw_global_input": self.v_raw_global_input,
+                "v_band_global_input": self.v_band_global_input,
+            },
+            {
+                "prefix": "vein",
+                "v_raw_segment_input": self.v_raw_segment_input_vein,
+                "v_band_segment_input": self.v_band_segment_input_vein,
+                "v_raw_global_input": self.v_raw_global_input_vein,
+                "v_band_global_input": self.v_band_global_input_vein,
+            },
+        ]
 
-            seg_b, br_b, gl_b, nb_b, nr_b, seg_note_b = self._compute_block_segment(
-                v_band_seg, T
-            )
-            seg_r, br_r, gl_r, nb_r, nr_r, seg_note_r = self._compute_block_segment(
-                v_raw_seg, T
-            )
+        for cfg in vessel_configs:
+            vessel_prefix = cfg["prefix"]
 
-            seg_note = seg_note_b
-            if (nb_b != nb_r) or (nr_b != nr_r):
-                seg_note = (
-                    seg_note_b + " | WARNING: raw/band branch/radius dims differ."
+            have_seg = (
+                cfg["v_raw_segment_input"] in h5file
+                and cfg["v_band_segment_input"] in h5file
+            )
+            if have_seg:
+                v_raw_seg = np.asarray(h5file[cfg["v_raw_segment_input"]])
+                v_band_seg = np.asarray(h5file[cfg["v_band_segment_input"]])
+                self._pack_segment_outputs(
+                    metrics, vessel_prefix, v_raw_seg, v_band_seg, T
                 )
 
-            def pack(prefix: str, d: dict, attrs_common: dict):
-                for k, arr in d.items():
-                    metrics[f"{prefix}/{k}"] = with_attrs(arr, attrs_common)
-
-            pack(
-                "by_segment/bandlimited_segment",
-                seg_b,
-                {
-                    "definition": [
-                        "per-segment metrics stored as (beat, branch, radius)"
-                    ],
-                    "segment_indexing": [seg_note],
-                },
+            have_glob = (
+                cfg["v_raw_global_input"] in h5file
+                and cfg["v_band_global_input"] in h5file
             )
-            pack(
-                "by_segment/raw_segment",
-                seg_r,
-                {
-                    "definition": [
-                        "per-segment metrics stored as (beat, branch, radius)"
-                    ],
-                    "segment_indexing": [seg_note],
-                },
-            )
-
-            pack(
-                "by_segment/bandlimited_branch",
-                br_b,
-                {"definition": ["median over radii per branch"]},
-            )
-            pack(
-                "by_segment/raw_branch",
-                br_r,
-                {"definition": ["median over radii per branch"]},
-            )
-
-            pack(
-                "by_segment/bandlimited_global",
-                gl_b,
-                {
-                    "definition": [
-                        "median over all branch-radius segment values per beat"
-                    ]
-                },
-            )
-            pack(
-                "by_segment/raw_global",
-                gl_r,
-                {
-                    "definition": [
-                        "median over all branch-radius segment values per beat"
-                    ]
-                },
-            )
-
-            metrics["by_segment/params/ratio_R_VTI"] = np.asarray(
-                self.ratio_R_VTI, dtype=float
-            )
-            metrics["by_segment/params/ratio_SF_VTI"] = np.asarray(
-                self.ratio_SF_VTI, dtype=float
-            )
-            metrics["by_segment/params/ratio_vend_start"] = np.asarray(
-                self.ratio_vend_start, dtype=float
-            )
-            metrics["by_segment/params/ratio_vend_end"] = np.asarray(
-                self.ratio_vend_end, dtype=float
-            )
-            metrics["by_segment/params/eps"] = np.asarray(self.eps, dtype=float)
-            metrics["by_segment/params/ratio_W50"] = np.asarray(
-                self.ratio_W50, dtype=float
-            )
-            metrics["by_segment/params/H_LOW_MAX"] = np.asarray(
-                self.H_LOW_MAX, dtype=int
-            )
-            metrics["by_segment/params/H_HIGH_MIN"] = np.asarray(
-                self.H_HIGH_MIN, dtype=int
-            )
-            metrics["by_segment/params/H_HIGH_MAX"] = np.asarray(
-                self.H_HIGH_MAX, dtype=int
-            )
-            metrics["by_segment/params/H_MAX"] = np.asarray(self.H_MAX, dtype=int)
-            metrics["by_segment/params/H_PHASE_RESIDUAL"] = np.asarray(
-                self.H_PHASE_RESIDUAL, dtype=int
-            )
-
-        have_glob = (self.v_raw_global_input in h5file) and (
-            self.v_band_global_input in h5file
-        )
-        if have_glob:
-            v_raw_gl = np.asarray(h5file[self.v_raw_global_input])
-            v_band_gl = np.asarray(h5file[self.v_band_global_input])
-
-            out_raw = self._compute_block_global(v_raw_gl, T)
-            out_band = self._compute_block_global(v_band_gl, T)
-            for k in self._metric_keys():
-                metrics[f"global/raw/{k[0]}"] = with_attrs(
-                    out_raw[k[0]],
-                    {
-                        "unit": [k[2]],
-                        "definition": [k[1]],
-                        "latex_formula": [latex_formulas[k[0]]],
-                    },
+            if have_glob:
+                v_raw_gl = np.asarray(h5file[cfg["v_raw_global_input"]])
+                v_band_gl = np.asarray(h5file[cfg["v_band_global_input"]])
+                self._pack_global_outputs(
+                    metrics,
+                    vessel_prefix,
+                    v_raw_gl,
+                    v_band_gl,
+                    T,
+                    latex_formulas,
                 )
-
-                metrics[f"global/bandlimited/{k[0]}"] = with_attrs(
-                    out_band[k[0]],
-                    {
-                        "unit": [k[2]],
-                        "definition": [k[1]],
-                        "latex_formula": [latex_formulas[k[0]]],
-                    },
-                )
-
-            metrics["global/params/ratio_R_VTI"] = np.asarray(
-                self.ratio_R_VTI, dtype=float
-            )
-            metrics["global/params/ratio_SF_VTI"] = np.asarray(
-                self.ratio_SF_VTI, dtype=float
-            )
-            metrics["global/params/ratio_vend_start"] = np.asarray(
-                self.ratio_vend_start, dtype=float
-            )
-            metrics["global/params/ratio_vend_end"] = np.asarray(
-                self.ratio_vend_end, dtype=float
-            )
-            metrics["global/params/eps"] = np.asarray(self.eps, dtype=float)
-            metrics["global/params/ratio_W50"] = np.asarray(self.ratio_W50, dtype=float)
-            metrics["global/params/H_LOW_MAX"] = np.asarray(self.H_LOW_MAX, dtype=int)
-            metrics["global/params/H_HIGH_MIN"] = np.asarray(self.H_HIGH_MIN, dtype=int)
-            metrics["global/params/H_HIGH_MAX"] = np.asarray(self.H_HIGH_MAX, dtype=int)
-            metrics["global/params/H_MAX"] = np.asarray(self.H_MAX, dtype=int)
-            metrics["global/params/H_PHASE_RESIDUAL"] = np.asarray(
-                self.H_PHASE_RESIDUAL, dtype=int
-            )
-
-            graphics_raw = self._compute_graphics_support_block(v_raw_gl, T)
-            graphics_band = self._compute_graphics_support_block(v_band_gl, T)
-            for name, arr in graphics_raw.items():
-                metrics[f"global/raw/{name}"] = arr
-
-            for name, arr in graphics_band.items():
-                metrics[f"global/bandlimited/{name}"] = arr
 
         return ProcessResult(metrics=metrics)
