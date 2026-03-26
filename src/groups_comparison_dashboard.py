@@ -42,6 +42,7 @@ SELECTED_METRICS_PNG = {
     "spectral_entropy",
     "delta_phi2",
     "rho_h_90",
+    "rho_h_95",
     "mu_h",
     "sigma_h",
     "N_eff_over_T",
@@ -64,6 +65,7 @@ EPS = 1e-12
 LATEX_FORMULAS = {
     "RI": r"$\rm RI$",
     "rho_h_90": r"$\rho_{h,90}$",
+    "rho_h_95": r"$\rho_{h,95}$",
     "crest_factor": r"$\rm CF$",
     "t50_over_T": r"$t_{50}/T$",
     "R_VTI": r"$R_{VTI}$",
@@ -790,6 +792,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
         info_box([rf"$\gamma_t={gamma_t:.3f}$"])
         ax.set_xlabel("rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
+
     elif metric == "rho_h_90":
         cumsum = np.asarray(support.get("harmonic_energy_cumsum", []), dtype=float)
         cumsum_h = np.asarray(support.get("harmonic_energy_cumsum_h", []), dtype=float)
@@ -803,9 +806,6 @@ def plot_metric_illustration(ax, metric, support, path=None):
 
         h90 = float(support.get("h_90", np.nan))
         rho90 = float(support.get("rho_h_90", np.nan))
-
-        h95 = float(support.get("h_95", np.nan))
-        rho95 = float(support.get("rho_h_95", np.nan))
 
         mask_i = np.isfinite(cumsum_interp) & np.isfinite(cumsum_h_interp)
         mask_d = np.isfinite(cumsum) & np.isfinite(cumsum_h)
@@ -829,6 +829,41 @@ def plot_metric_illustration(ax, metric, support, path=None):
         if np.isfinite(h90):
             ax.axvline(h90, linestyle="--", color="black", linewidth=1)
             ax.plot(h90, 0.90, "o", color="black", markersize=5)
+
+        ax.set_xlabel("Harmonic index $h$ (a.u.)", fontsize=14)
+        ax.set_ylabel(r"$C(h)$", fontsize=14)
+    elif metric == "rho_h_95":
+        cumsum = np.asarray(support.get("harmonic_energy_cumsum", []), dtype=float)
+        cumsum_h = np.asarray(support.get("harmonic_energy_cumsum_h", []), dtype=float)
+
+        cumsum_interp = np.asarray(
+            support.get("harmonic_energy_cumsum_interp", []), dtype=float
+        )
+        cumsum_h_interp = np.asarray(
+            support.get("harmonic_energy_cumsum_h_interp", []), dtype=float
+        )
+
+        h95 = float(support.get("h_95", np.nan))
+        rho95 = float(support.get("rho_h_95", np.nan))
+
+        mask_i = np.isfinite(cumsum_interp) & np.isfinite(cumsum_h_interp)
+        mask_d = np.isfinite(cumsum) & np.isfinite(cumsum_h)
+
+        
+        ax.plot(
+            cumsum_h_interp[mask_i],
+            cumsum_interp[mask_i],
+            color="#EC5241",
+            linewidth=2,
+        )
+
+        ax.plot(
+            cumsum_h[mask_d],
+            cumsum[mask_d],
+            "o",
+            color="black",
+            markersize=4,
+        )
 
         ax.axhline(0.95, linestyle="--", color="black", linewidth=1)
         if np.isfinite(h95):
