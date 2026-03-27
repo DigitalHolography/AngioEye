@@ -50,6 +50,7 @@ SELECTED_METRICS_PNG = {
     "spectral_entropy",
     "delta_phi2",
     "rho_h_90",
+    "rho_h_95",
     "mu_h",
     "sigma_h",
     "N_eff_over_T",
@@ -74,6 +75,7 @@ EPS = 1e-12
 LATEX_FORMULAS = {
     "RI": r"$\rm RI$",
     "rho_h_90": r"$\rho_{h,90}$",
+    "rho_h_95": r"$\rho_{h,95}$",
     "crest_factor": r"$\rm CF$",
     "t50_over_T": r"$t_{50}/T$",
     "R_VTI": r"$R_{VTI}$",
@@ -108,7 +110,6 @@ LATEX_FORMULAS = {
     "R_Q_d": r"$R_{\mathrm{Q_{{d}}}}$",
     "v_end_over_v_mean": r"$R_{EM}$",
     "E_slope": r"$E_{\mathrm{slope}}$",
-    "E_curv": r"$E_{\mathrm{curv}}$",
     "phase_locking_residual": r"$E_{\phi}$",
     "W50_over_T": r"$W_{50}/T$",
     "N_H_over_T": r"$N_H/T$",
@@ -802,6 +803,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
         info_box([rf"$\gamma_t={gamma_t:.3f}$"])
         ax.set_xlabel("rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
+
     elif metric == "rho_h_90":
         cumsum = np.asarray(support.get("harmonic_energy_cumsum", []), dtype=float)
         cumsum_h = np.asarray(support.get("harmonic_energy_cumsum_h", []), dtype=float)
@@ -814,7 +816,8 @@ def plot_metric_illustration(ax, metric, support, path=None):
         )
 
         h90 = float(support.get("h_90", np.nan))
-        rho = float(support.get("rho_h_90", np.nan))
+        rho90 = float(support.get("rho_h_90", np.nan))
+
         mask_i = np.isfinite(cumsum_interp) & np.isfinite(cumsum_h_interp)
         mask_d = np.isfinite(cumsum) & np.isfinite(cumsum_h)
 
@@ -837,6 +840,46 @@ def plot_metric_illustration(ax, metric, support, path=None):
         if np.isfinite(h90):
             ax.axvline(h90, linestyle="--", color="black", linewidth=1)
             ax.plot(h90, 0.90, "o", color="black", markersize=5)
+
+        ax.set_xlabel("Harmonic index $h$ (a.u.)", fontsize=14)
+        ax.set_ylabel(r"$C(h)$", fontsize=14)
+    elif metric == "rho_h_95":
+        cumsum = np.asarray(support.get("harmonic_energy_cumsum", []), dtype=float)
+        cumsum_h = np.asarray(support.get("harmonic_energy_cumsum_h", []), dtype=float)
+
+        cumsum_interp = np.asarray(
+            support.get("harmonic_energy_cumsum_interp", []), dtype=float
+        )
+        cumsum_h_interp = np.asarray(
+            support.get("harmonic_energy_cumsum_h_interp", []), dtype=float
+        )
+
+        h95 = float(support.get("h_95", np.nan))
+        rho95 = float(support.get("rho_h_95", np.nan))
+
+        mask_i = np.isfinite(cumsum_interp) & np.isfinite(cumsum_h_interp)
+        mask_d = np.isfinite(cumsum) & np.isfinite(cumsum_h)
+
+        
+        ax.plot(
+            cumsum_h_interp[mask_i],
+            cumsum_interp[mask_i],
+            color="#EC5241",
+            linewidth=2,
+        )
+
+        ax.plot(
+            cumsum_h[mask_d],
+            cumsum[mask_d],
+            "o",
+            color="black",
+            markersize=4,
+        )
+
+        ax.axhline(0.95, linestyle="--", color="black", linewidth=1)
+        if np.isfinite(h95):
+            ax.axvline(h95, linestyle="--", color="black", linewidth=1)
+            ax.plot(h95, 0.95, "o", color="black", markersize=5)
 
         ax.set_xlabel("Harmonic index $h$ (a.u.)", fontsize=14)
         ax.set_ylabel(r"$C(h)$", fontsize=14)
@@ -999,42 +1042,32 @@ def plot_metric_illustration(ax, metric, support, path=None):
 
         ax.set_xlabel("Harmonic n (a.u.)", fontsize=14)
         ax.set_ylabel(r"$|V_n|^2 \: (a.u.)$", fontsize=14, labelpad=12)
+        
+    
+    #elif metric == "E_high_over_E_total":
+        #mags2 = harmonic_energies
+        #ax.set_yscale("log")
+        #e_high = float(support["E_high"])
+        #e_total = float(support["E_total"])
+        #ratio = float(support["E_high_over_E_total"])
+        #xh = np.arange(0, len(mags2))
 
-    elif metric == "E_high_over_E_total":
-        mags2 = harmonic_energies
-        ax.set_yscale("log")
-        e_high = float(support["E_high"])
-        e_total = float(support["E_total"])
-        ratio = float(support["E_high_over_E_total"])
-        xh = np.arange(0, len(mags2))
+        #ax.bar(xh[1:H_HIGH_MIN], mags2[1:H_HIGH_MIN], color="#cccccc")
+        #ax.bar(
+            #xh[H_HIGH_MIN : H_HIGH_MAX + 1],
+            #mags2[H_HIGH_MIN : H_HIGH_MAX + 1],
+            #color="#EC5241",)
 
-        ax.bar(xh[1:H_HIGH_MIN], mags2[1:H_HIGH_MIN], color="#cccccc")
-        ax.bar(
-            xh[H_HIGH_MIN : H_HIGH_MAX + 1],
-            mags2[H_HIGH_MIN : H_HIGH_MAX + 1],
-            color="#EC5241",
-        )
+        #lines = [
+            #f"E_high = {e_high:.3g}",
+            #f"E_total = {e_total:.3g}",
+            #rf"$E_{{high}}/E_{{total}} = {ratio:.3f}$",
+        #]
+        #text = "\n".join([str(x) for x in lines if x is not None and str(x) != ""])
 
-        lines = [
-            f"E_high = {e_high:.3g}",
-            f"E_total = {e_total:.3g}",
-            rf"$E_{{high}}/E_{{total}} = {ratio:.3f}$",
-        ]
-        text = "\n".join([str(x) for x in lines if x is not None and str(x) != ""])
-
-        ax.text(
-            0.5,
-            0.98,
-            text,
-            transform=ax.transAxes,
-            ha="left",
-            va="top",
-            fontsize=12,
-            bbox=dict(facecolor="white", edgecolor="none", pad=1.0),
-            clip_on=True,
-        )
-        ax.set_xlabel("Harmonic n (a.u.)", fontsize=14)
-        ax.set_ylabel(r"$|V_n|^2 \: (a.u.)$", fontsize=14, labelpad=12)
+        #ax.text(0.5,0.98,text,transform=ax.transAxes,ha="left",va="top",fontsize=12,bbox=dict(facecolor="white", edgecolor="none", pad=1.0),clip_on=True,)
+        #ax.set_xlabel("Harmonic n (a.u.)", fontsize=14)
+        #ax.set_ylabel(r"$|V_n|^2 \: (a.u.)$", fontsize=14, labelpad=12)
 
     elif metric == "E_recon_H_MAX":
         e_recon = float(support["E_recon_H_MAX"])
@@ -1239,24 +1272,17 @@ def plot_metric_illustration(ax, metric, support, path=None):
         ax.set_xlabel("rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
 
-    elif metric == "E_curv":
-        e_curv = float(support["E_curv"])
-        d2vdt2_norm = support["d2vdt2_norm"]
-        ax.plot(tau, sig, linewidth=3, color="#EC5241", label="signal")
-        ax2 = ax.twinx()
-        ax2.plot(
-            tau,
-            d2vdt2_norm,
-            linestyle="--",
-            linewidth=1.5,
-            color="black",
-            label=r"$\ddot v^2$",
-        )
-        ax2.set_yticks([])
-        ax2.set_ylabel(r"$\ddot v^2$", fontsize=12)
-        info_box([rf"$E_{{curv}}={e_curv:.4f}$"])
-        ax.set_xlabel("rectified time : t/T", fontsize=14)
-        ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
+    #elif metric == "E_curv":
+        #e_curv = float(support["E_curv"])
+        #d2vdt2_norm = support["d2vdt2_norm"]
+        #ax.plot(tau, sig, linewidth=3, color="#EC5241", label="signal")
+        #ax2 = ax.twinx()
+        #ax2.plot(tau,d2vdt2_norm,linestyle="--",linewidth=1.5,color="black",label=r"$\ddot v^2$",)
+        #ax2.set_yticks([])
+        #ax2.set_ylabel(r"$\ddot v^2$", fontsize=12)
+        #info_box([rf"$E_{{curv}}={e_curv:.4f}$"])
+        #ax.set_xlabel("rectified time : t/T", fontsize=14)
+        #ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
 
     elif metric == "W50_over_T":
         w50 = float(support["W50_over_T"])
