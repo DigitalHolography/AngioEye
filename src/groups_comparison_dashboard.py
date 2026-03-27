@@ -15,9 +15,17 @@ import plotly.graph_objects as go
 from matplotlib import gridspec
 from matplotlib.ticker import FormatStrFormatter
 
-GRAPHICS_SUPPORT_FOLDER = "/Pipelines/arterial_waveform_shape_metrics/artery/global/"
-METRIC_FOLDER = "/Pipelines/arterial_waveform_shape_metrics/artery/global/"
+PIPELINE_ROOT = "/Pipelines/arterial_waveform_shape_metrics"
 VALID_METRIC_FOLDERS = ["raw", "bandlimited"]
+VALID_VESSELS = ["artery", "vein"]
+
+
+def get_metrics_base_path(vessel: str) -> str:
+    return f"{PIPELINE_ROOT}/{vessel}/global"
+
+
+def get_mode_path(vessel: str, mode: str) -> str:
+    return f"{PIPELINE_ROOT}/{vessel}/global/{mode}"
 SELECTED_METRICS_PNG = {
     "mu_t_over_T",
     "RI",
@@ -56,7 +64,9 @@ SELECTED_METRICS_PNG = {
     "Q_d_width",
     "R_Q_d",
     "v_end_over_v_mean",
-    "E_slope",    
+    "E_slope",
+    "E_curv",
+    "t50_over_T"
 }
 METRIC_ALIASES = {
     "Hspec": "spectral_entropy",
@@ -106,13 +116,14 @@ LATEX_FORMULAS = {
 }
 
 
-def extract_graphics_support(h5_path, mode="bandlimited"):
-    base = f"{GRAPHICS_SUPPORT_FOLDER}{mode}"
+def extract_graphics_support(h5_path, vessel="artery", mode="bandlimited"):
+    base = get_mode_path(vessel, mode)
     out = {}
 
     with h5py.File(h5_path, "r") as f:
         if base not in f:
             return None
+
         grp = f[base]
         for key in grp.keys():
             arr = np.array(grp[key])
@@ -225,7 +236,7 @@ def circular_std(angles):
     return float(np.sqrt(-2.0 * np.log(R)))
 
 
-def compute_group_delta_phi_stats(zip_path, mode="bandlimited"):
+def compute_group_delta_phi_stats(zip_path, vessel="artery", mode="bandlimited"):
     group_values = defaultdict(lambda: defaultdict(list))
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -244,7 +255,7 @@ def compute_group_delta_phi_stats(zip_path, mode="bandlimited"):
             for file in h5_files:
                 h5_path = os.path.join(root, file)
                 try:
-                    support = extract_graphics_support(h5_path, mode=mode)
+                    support = extract_graphics_support(h5_path, vessel=vessel, mode=mode)
                     if not support:
                         continue
 
@@ -1330,147 +1341,167 @@ def export_selected_metric_pngs_bandlimited(all_results, zip_path, out_dir):
         with zipfile.ZipFile(zip_path, "r") as z:
             z.extractall(tmpdir)
 
-        # index des chemins .h5 par groupe / fichier
         h5_index = build_h5_path_index_from_extracted_tree(tmpdir)
-        group_delta_phi_stats = compute_group_delta_phi_stats(zip_path)
-        for metric in sorted(SELECTED_METRICS_PNG):
-            metric_key = METRIC_ALIASES.get(metric, metric)
-            if metric_key not in all_results["bandlimited"]:
+
+        for vessel in VALID_VESSELS:
+            group_delta_phi_stats = compute_group_delta_phi_stats(
+                zip_path, vessel=vessel, mode="bandlimited"
+            )
+
+            if "bandlimited" not in all_results:
+                continue
+            if vessel not in all_results["bandlimited"]:
                 continue
 
-            df = pd.DataFrame(all_results["bandlimited"][metric_key]).copy()
+            for metric in sorted(SELECTED_METRICS_PNG):
+                metric_key = METRIC_ALIASES.get(metric, metric)
 
-            # ordre des groupes (control en dernier)
-            groups = sorted(df["group"].dropna().unique().tolist())
-            control_name = find_control_group_name(groups)
-            if control_name in groups:
-                groups = [g for g in groups if g != control_name] + [control_name]
+                if metric_key not in all_results["bandlimited"][vessel]:
+                    continue
 
-            # positions x pour le scatter
-            x_pos = {g: i for i, g in enumerate(groups)}
+                df = pd.DataFrame(all_results["bandlimited"][vessel][metric_key]).copy()
+                if df.empty:
+                    continue
 
-            # stats par groupe (sur les patients)
-            grp = df.groupby("group")["mean"]
-            grp_mean = grp.mean()
-            grp_std = grp.std()
-            rep_file = select_representative_file_per_group(df, value_col="mean")
+                groups = sorted(df["group"].dropna().unique().tolist())
+                control_name = find_control_group_name(groups)
+                if control_name in groups:
+                    groups = [g for g in groups if g != control_name] + [control_name]
 
-            fig = plt.figure(figsize=(15, 6.2), dpi=200)
+                x_pos = {g: i for i, g in enumerate(groups)}
 
-            outer = gridspec.GridSpec(
-                1,
-                2,
-                width_ratios=[
-                    0.7,
-                    1.0,
-                ],  # un peu moins de place au scatter => + place à droite
-                wspace=0.15,  # rapproche fortement gauche/droite
-            )
+                grp = df.groupby("group")["mean"]
+                grp_mean = grp.mean()
+                grp_std = grp.std()
+                rep_file = select_representative_file_per_group(df, value_col="mean")
 
-            # marges globales (ENLÈVE les bandes blanches inutiles)
-            fig.subplots_adjust(left=0.04, right=0.995, bottom=0.08, top=0.86)
+                fig = plt.figure(figsize=(15, 6.2), dpi=200)
 
-            ax_header = fig.add_axes([0.04, 0.88, 0.955, 0.11])  # x, y, w, h
-            ax_header.axis("off")
-            # formula = LATEX_FORMULAS.get(metric, "")
-
-            # ===== Gauche: scatter =====
-            ax_top = fig.add_subplot(outer[0, 0])
-
-            if control_name in x_pos:
-                cx = x_pos[control_name]
-                ax_top.axvspan(cx - 0.5, cx + 0.5, color="#E0E0E0")
-
-            rng = np.random.default_rng(0)
-            shapes = ["D", "o", "s", "^"]
-            for i, g in enumerate(groups):
-                gdf = df[df["group"] == g]
-                x = np.full(len(gdf), x_pos[g], dtype=float) + rng.normal(
-                    0, 0.06, size=len(gdf)
+                outer = gridspec.GridSpec(
+                    1,
+                    2,
+                    width_ratios=[0.7, 1.0],
+                    wspace=0.15,
                 )
 
-                ax_top.scatter(
-                    x,
-                    gdf["mean"].values,
-                    color="black",
-                    s=20,
-                    edgecolors="none",
-                )
+                fig.subplots_adjust(left=0.04, right=0.995, bottom=0.08, top=0.86)
 
-                if g in grp_mean.index:
-                    ax_top.errorbar(
-                        [x_pos[g]],
-                        [grp_mean.loc[g]],
+                ax_header = fig.add_axes([0.04, 0.88, 0.955, 0.11])
+                ax_header.axis("off")
+
+                # ===== Gauche: scatter =====
+                ax_top = fig.add_subplot(outer[0, 0])
+
+                if control_name in x_pos:
+                    cx = x_pos[control_name]
+                    ax_top.axvspan(cx - 0.5, cx + 0.5, color="#E0E0E0")
+
+                rng = np.random.default_rng(0)
+                shapes = ["D", "o", "s", "^", "v", "P", "X"]
+
+                for i, g in enumerate(groups):
+                    gdf = df[df["group"] == g]
+                    x = np.full(len(gdf), x_pos[g], dtype=float) + rng.normal(
+                        0, 0.06, size=len(gdf)
+                    )
+
+                    ax_top.scatter(
+                        x,
+                        gdf["mean"].values,
                         color="black",
-                        yerr=[grp_std.loc[g] if pd.notna(grp_std.loc[g]) else 0],
-                        fmt=shapes[i],
-                        capsize=5,
-                        markersize=12,
-                        linewidth=1.2,
-                        markerfacecolor="none",
-                        markeredgecolor="black",
-                        markeredgewidth=3,
+                        s=20,
+                        edgecolors="none",
                     )
 
-            ax_top.set_title(
-                f"{LATEX_FORMULAS[metric]} (bandlimited waveform) ", fontsize=20, pad=20
-            )
-            ax_top.set_xticks([x_pos[g] for g in groups])
-            ax_top.set_xticklabels(groups, rotation=0)
-            ax_top.tick_params(axis="both", labelsize=16)
-            ax_top.yaxis.set_major_formatter(FormatStrFormatter("%.3g"))
-            ax_top.grid(True, axis="y")
+                    if g in grp_mean.index:
+                        ax_top.errorbar(
+                            [x_pos[g]],
+                            [grp_mean.loc[g]],
+                            color="black",
+                            yerr=[grp_std.loc[g] if pd.notna(grp_std.loc[g]) else 0],
+                            fmt=shapes[i % len(shapes)],
+                            capsize=5,
+                            markersize=12,
+                            linewidth=1.2,
+                            markerfacecolor="none",
+                            markeredgecolor="black",
+                            markeredgewidth=3,
+                        )
 
-            # ===== Droite: 2x2 illustrations =====
-            right = gridspec.GridSpecFromSubplotSpec(
-                2,
-                2,
-                subplot_spec=outer[0, 1],
-                hspace=0.5,  # <-- réduit l'écart vertical entre les 4
-                wspace=0.28,  # <-- réduit l'écart horizontal entre les 2 colonnes d'illustrations
-            )
+                ax_top.set_title(
+                    f"{LATEX_FORMULAS.get(metric, metric)} (bandlimited waveform, {vessel})",
+                    fontsize=20,
+                    pad=20,
+                )
+                ax_top.set_xticks([x_pos[g] for g in groups])
+                ax_top.set_xticklabels(groups, rotation=0)
+                ax_top.tick_params(axis="both", labelsize=16)
+                ax_top.yaxis.set_major_formatter(FormatStrFormatter("%.3g"))
+                ax_top.grid(True, axis="y")
 
-            for i, g in enumerate(groups[:4]):  # on affiche 4 max
-                r = i // 2
-                c = i % 2
-                ax = fig.add_subplot(right[r, c])
+                # ===== Droite: illustrations =====
+                right = gridspec.GridSpecFromSubplotSpec(
+                    2,
+                    2,
+                    subplot_spec=outer[0, 1],
+                    hspace=0.5,
+                    wspace=0.28,
+                )
 
-                chosen = rep_file.get(g, None)
-                path = h5_index.get(g, {}).get(chosen, None) if chosen else None
-                if metric == "phase_locking_residual":
-                    plot_group_delta_phi_stats(ax, group_delta_phi_stats, g)
-                    ax.set_title(f"{g}", fontsize=14)
-                elif path and os.path.exists(path):
-                    support = extract_graphics_support(path, mode="bandlimited")
+                for i, g in enumerate(groups[:4]):
+                    r = i // 2
+                    c = i % 2
+                    ax = fig.add_subplot(right[r, c])
 
-                    support_beat = select_support_beat(support, 0)
-                    plot_metric_illustration(ax, metric, support_beat, path)
+                    chosen = rep_file.get(g, None)
+                    path = h5_index.get(g, {}).get(chosen, None) if chosen else None
 
-                    ax.set_title(f" {g} ", fontsize=14)
+                    if metric == "phase_locking_residual":
+                        plot_group_delta_phi_stats(ax, group_delta_phi_stats, g)
+                        ax.set_title(f"{g}", fontsize=14)
 
-                    ymin, ymax = ax.get_ylim()
-                    ax.set_ylim(np.minimum(0, ymin), ymax * 1.4)
-                else:
-                    ax.text(
-                        0.5,
-                        0.5,
-                        f"No representative file for {g}",
-                        ha="center",
-                        va="center",
-                    )
-                    ax.axis("off")
+                    elif path and os.path.exists(path):
+                        support = extract_graphics_support(
+                            path,
+                            vessel=vessel,
+                            mode="bandlimited",
+                        )
 
-            # si <4 groupes, masque les cases vides
+                        if support:
+                            support_beat = select_support_beat(support, 0)
+                            plot_metric_illustration(ax, metric, support_beat, path)
+                            ax.set_title(f"{g}", fontsize=14)
 
-            for j in range(len(groups[:4]), 4):
-                r = j // 2
-                c = j % 2
-                ax_empty = fig.add_subplot(right[r, c])
-                ax_empty.axis("off")
+                            ymin, ymax = ax.get_ylim()
+                            ax.set_ylim(np.minimum(0, ymin), ymax * 1.4)
+                        else:
+                            ax.text(
+                                0.5,
+                                0.5,
+                                f"No support for {g} ({vessel})",
+                                ha="center",
+                                va="center",
+                            )
+                            ax.axis("off")
+                    else:
+                        ax.text(
+                            0.5,
+                            0.5,
+                            f"No representative file for {g}",
+                            ha="center",
+                            va="center",
+                        )
+                        ax.axis("off")
 
-            png_path = os.path.join(out_dir, f"{metric}_bandlimited.png")
-            fig.savefig(png_path)
-            plt.close(fig)
+                for j in range(len(groups[:4]), 4):
+                    r = j // 2
+                    c = j % 2
+                    ax_empty = fig.add_subplot(right[r, c])
+                    ax_empty.axis("off")
+
+                png_path = os.path.join(out_dir, f"{metric}_bandlimited_{vessel}.eps")
+                fig.savefig(png_path, bbox_inches="tight")
+                plt.close(fig)
 
 
 def replace_folder_in_zip(zip_path: str, folder_path: str, arc_folder: str):
@@ -1593,31 +1624,41 @@ def extract_sort_key(filename):
 
 
 def extract_metrics(h5_path):
-
-    results = {}
+    """
+    Retourne:
+    results[mode][vessel][metric_name] = {
+        "mean": ...,
+        "std": ...,
+        "latex_formula": ...
+    }
+    """
+    results = defaultdict(lambda: defaultdict(dict))
 
     with h5py.File(h5_path, "r") as f:
-        metrics_root = f[METRIC_FOLDER]
+        for vessel in VALID_VESSELS:
+            metrics_root_path = get_metrics_base_path(vessel)
 
-        for mode in metrics_root.keys():
-            if mode not in VALID_METRIC_FOLDERS:
+            if metrics_root_path not in f:
                 continue
 
-            results[mode] = {}
+            metrics_root = f[metrics_root_path]
 
-            group = metrics_root[mode]
+            for mode in metrics_root.keys():
+                if mode not in VALID_METRIC_FOLDERS:
+                    continue
 
-            for metric_name in group.keys():
-                dataset = group[metric_name]
+                group = metrics_root[mode]
 
-                data = np.array(dataset)
+                for metric_name in group.keys():
+                    dataset = group[metric_name]
+                    data = np.array(dataset)
 
-                latex_formula = dataset.attrs.get("latex_formula", "")
-                results[mode][metric_name] = {
-                    "mean": np.median(data),
-                    "std": np.std(data),
-                    "latex_formula": latex_formula,
-                }
+                    latex_formula = dataset.attrs.get("latex_formula", "")
+                    results[mode][vessel][metric_name] = {
+                        "mean": np.median(data),
+                        "std": np.std(data),
+                        "latex_formula": latex_formula,
+                    }
 
     return results
 
@@ -1659,8 +1700,7 @@ def build_h5_path_index_from_extracted_tree(tmpdir: str):
 
 
 def analyze_zip(zip_path):
-
-    all_results = defaultdict(lambda: defaultdict(list))
+    all_results = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
     detected_groups = set()
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -1673,7 +1713,6 @@ def analyze_zip(zip_path):
                 continue
 
             group_name = os.path.basename(root)
-
             if root == tmpdir:
                 group_name = "all"
 
@@ -1681,23 +1720,23 @@ def analyze_zip(zip_path):
 
             for file in h5_files:
                 filepath = os.path.join(root, file)
-
                 metrics = extract_metrics(filepath)
 
-                for mode, metric_dict in metrics.items():
-                    for metric_name, values in metric_dict.items():
-                        all_results[mode][metric_name].append(
-                            {
-                                "file": file,
-                                "group": group_name,
-                                "mean": values["mean"],
-                                "std": values["std"],
-                                "latex_formula": values.get("latex_formula", ""),
-                            }
-                        )
+                for mode, vessel_dict in metrics.items():
+                    for vessel, metric_dict in vessel_dict.items():
+                        for metric_name, values in metric_dict.items():
+                            all_results[mode][vessel][metric_name].append(
+                                {
+                                    "file": file,
+                                    "group": group_name,
+                                    "mean": values["mean"],
+                                    "std": values["std"],
+                                    "latex_formula": values.get("latex_formula", ""),
+                                    "vessel": vessel,
+                                }
+                            )
 
-    single_group = len(detected_groups) < 1
-
+    single_group = len(detected_groups) <= 1
     return dict(all_results), single_group
 
 
@@ -1805,8 +1844,8 @@ def build_metric_figure(df, metric, mode, ymin, ymax, single_group):
     return fig
 
 
-def extract_mean_support_per_file(h5_path, mode="bandlimited"):
-    support = extract_graphics_support(h5_path, mode)
+def extract_mean_support_per_file(h5_path, vessel="artery", mode="bandlimited"):
+    support = extract_graphics_support(h5_path, vessel=vessel, mode=mode)
     if not support:
         return None
 
@@ -1835,7 +1874,7 @@ def extract_mean_support_per_file(h5_path, mode="bandlimited"):
     return out
 
 
-def compute_group_mean_signals(zip_path, mode="bandlimited"):
+def compute_group_mean_signals(zip_path, vessel="artery", mode="bandlimited"):
     group_signals = defaultdict(list)
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -1854,7 +1893,9 @@ def compute_group_mean_signals(zip_path, mode="bandlimited"):
             for file in h5_files:
                 h5_path = os.path.join(root, file)
 
-                support_mean = extract_mean_support_per_file(h5_path, mode=mode)
+                support_mean = extract_mean_support_per_file(
+                    h5_path, vessel=vessel, mode=mode
+                )
                 if support_mean is None or "signal_mean" not in support_mean:
                     continue
 
@@ -1865,7 +1906,6 @@ def compute_group_mean_signals(zip_path, mode="bandlimited"):
                 group_signals[group_name].append(signal)
 
     group_curves = {}
-
     for group, signals in group_signals.items():
         min_len = min(len(s) for s in signals)
         aligned = np.array([s[:min_len] for s in signals], dtype=float)
@@ -1942,7 +1982,7 @@ def build_comparison_signal_figure(group_curves):
 def save_dashboard(all_results, original_zip, single_group):
     dashboard_file = "metric_dashboard.html"
 
-    with open(dashboard_file, "w") as f:
+    with open(dashboard_file, "w", encoding="utf-8") as f:
         f.write("""
 <html>
 <head>
@@ -2001,7 +2041,8 @@ body {
     flex-direction: row;
     gap: 5px;
     width: 100%;
-    align-items: flex-start eliminar;
+    align-items: flex-start;
+    flex-wrap: wrap;
 }
 
 .plotly-graph-div {
@@ -2009,15 +2050,15 @@ body {
 }
 
 .plot {
-    flex: 1 1 50%;
+    flex: 1 1 48%;
     width: 100%;
 }
 
 .mode-title {
-    font-size:10px;
-    font-weight:bold;
-    margin-bottom:5px;
-    letter-spacing:1px;
+    font-size: 10px;
+    font-weight: bold;
+    margin-bottom: 5px;
+    letter-spacing: 1px;
 }
 
 .signal-grid {
@@ -2031,187 +2072,227 @@ body {
 .signal-plot {
     width: 100%;
 }
+
+.section-title {
+    font-size: 18px;
+    font-weight: bold;
+    margin-top: 25px;
+    margin-bottom: 10px;
+}
 </style>
 </head>
 <body>
 """)
 
-    all_metrics = set()
-    for mode in all_results:
-        all_metrics.update(all_results[mode].keys())
-
+    # -----------------------------
+    # header + image M0
+    # -----------------------------
     img = load_first_m0_image(original_zip)
     if img is not None:
         heatmap_fig = build_heatmap(img)
         heatmap_html = heatmap_fig.to_html(full_html=False, include_plotlyjs="cdn")
-        with open(dashboard_file, "a") as f:
+        with open(dashboard_file, "a", encoding="utf-8") as f:
             f.write(f"""
-                    <div class = "header">
+                <div class="header">
                     {heatmap_html}
                     <h1>Metrics Analysis</h1>
-                    </div>""")
+                </div>
+            """)
 
-    group_curves = compute_group_mean_signals(original_zip, mode="raw")
-    group_curves_bl = compute_group_mean_signals(original_zip, mode="bandlimited")
-
-    group_comparison_curves = build_comparison_signal_figure(group_curves)
-    group_comparison_curves_bl = build_comparison_signal_figure(group_curves_bl)
-
+    # -----------------------------
+    # export PNGs
+    # -----------------------------
     png_dir = os.path.join(os.path.dirname(dashboard_file), "export_png")
     export_selected_metric_pngs_bandlimited(all_results, original_zip, png_dir)
-
     print("PNGs exportés dans :", png_dir)
     replace_folder_in_zip(original_zip, png_dir, arc_folder="export_png")
     if os.path.isdir(png_dir):
         shutil.rmtree(png_dir)
-    with open(dashboard_file, "a") as f:
+
+    # -----------------------------
+    # signaux moyens par vessel / mode
+    # -----------------------------
+    with open(dashboard_file, "a", encoding="utf-8") as f:
+        f.write('<div class="section-title">Mean signals</div>')
         f.write('<div class="signal-grid">')
-    for group, data in group_curves.items():
-        fig_signal = build_group_signal_figure(group, data)
 
-        fig_html = fig_signal.to_html(
-            full_html=False, include_plotlyjs=False, config={"responsive": True}
-        )
-
-        with open(dashboard_file, "a") as f:
-            f.write(f"""
-    <div class="signal-plot">
-        <div class="metric-title">Signal raw {group}</div>
-        {fig_html}
-    </div>
-    """)
-    for group, data in group_curves_bl.items():
-        fig_signal = build_group_signal_figure(group, data)
-
-        fig_html = fig_signal.to_html(
-            full_html=False, include_plotlyjs=False, config={"responsive": True}
-        )
-
-        with open(dashboard_file, "a") as f:
-            f.write(f"""
-    <div class="signal-plot">
-        <div class="metric-title">Signal bandlimited {group}</div>
-        {fig_html}
-    </div>
-    """)
-    fig_html = group_comparison_curves.to_html(
-        full_html=False, include_plotlyjs=False, config={"responsive": True}
-    )
-    with open(dashboard_file, "a") as f:
-        f.write(f"""<div class="signal-plot">
-        <div class="metric-title">Signal comparison</div>
-        {fig_html}
-    </div>
-    """)
-    fig_html_bl = group_comparison_curves_bl.to_html(
-        full_html=False, include_plotlyjs=False, config={"responsive": True}
-    )
-    with open(dashboard_file, "a") as f:
-        f.write(f"""<div class="signal-plot">
-        <div class="metric-title">Signal comparison bandlimited</div>
-        {fig_html_bl}
-    </div>""")
-
-    with open(dashboard_file, "a") as f:
-        f.write("</div>")
-    for metric in sorted(all_metrics):
-        definition = all_results["raw"][metric][0].get("latex_formula", "")
+    for vessel in VALID_VESSELS:
         for mode in ["raw", "bandlimited"]:
-            if mode in all_results and metric in all_results[mode]:
-                definition = all_results[mode][metric][0].get("latex_formula", "")
-                break
-        y_values = []
+            group_curves = compute_group_mean_signals(original_zip, vessel=vessel, mode=mode)
 
-        for mode in ["raw", "bandlimited"]:
-            if mode in all_results and metric in all_results[mode]:
-                df_tmp = pd.DataFrame(all_results[mode][metric])
-                y_values.extend(df_tmp["mean"].values)
-
-        ymin = min(y_values)
-        ymax = max(y_values)
-
-        margin = 0.05 * (ymax - ymin if ymax != ymin else 1)
-        ymax += margin
-
-        # ----- HTML metric header -----
-        with open(dashboard_file, "a") as f:
-            f.write('<div class="metric-block">')
-            f.write(f'<div class="metric-title">{metric + " = " + definition}</div>')
-            f.write('<div class="row">')
-
-        # ======================
-        # LOOP MODES
-        # ======================
-        for mode in ["raw", "bandlimited"]:
-            if mode not in all_results:
-                continue
-            if metric not in all_results[mode]:
+            if not group_curves:
                 continue
 
-            data = all_results[mode][metric]
+            # 1) courbes par groupe
+            for group, data in group_curves.items():
+                fig_signal = build_group_signal_figure(group, data)
+                fig_html = fig_signal.to_html(
+                    full_html=False, include_plotlyjs=False, config={"responsive": True}
+                )
 
-            df = pd.DataFrame(data)
+                with open(dashboard_file, "a", encoding="utf-8") as f:
+                    f.write(f"""
+                    <div class="signal-plot">
+                        <div class="metric-title">Signal {mode} {vessel} - {group}</div>
+                        {fig_html}
+                    </div>
+                    """)
 
-            df["group_order"] = df["group"].astype("category").cat.codes
-            df = df.sort_values(["group_order", "file"])
-            df["index"] = range(len(df))
-
-            fig = build_metric_figure(
-                df,
-                metric,
-                mode,
-                ymin,
-                ymax,
-                single_group,
+            # 2) comparaison inter-groupes
+            fig_comp = build_comparison_signal_figure(group_curves)
+            fig_comp_html = fig_comp.to_html(
+                full_html=False, include_plotlyjs=False, config={"responsive": True}
             )
 
-            fig_html = fig.to_html(
-                full_html=False, include_plotlyjs="cdn", config={"responsive": True}
-            )
-
-            with open(dashboard_file, "a") as f:
+            with open(dashboard_file, "a", encoding="utf-8") as f:
                 f.write(f"""
-                <div class="plot">
-                    <div class="mode-title">{mode.upper()}</div>
-                    {fig_html}
+                <div class="signal-plot">
+                    <div class="metric-title">Signal comparison {mode} {vessel}</div>
+                    {fig_comp_html}
                 </div>
                 """)
 
-        with open(dashboard_file, "a") as f:
+    with open(dashboard_file, "a", encoding="utf-8") as f:
+        f.write("</div>")
+
+    # -----------------------------
+    # liste complète des métriques disponibles
+    # -----------------------------
+    all_metrics = set()
+    for mode in all_results:
+        for vessel in all_results[mode]:
+            all_metrics.update(all_results[mode][vessel].keys())
+
+    # -----------------------------
+    # blocs métriques
+    # -----------------------------
+    for metric in sorted(all_metrics):
+        definition = ""
+
+        # récupérer une définition latex depuis n'importe quel mode/vessel dispo
+        for mode in ["raw", "bandlimited"]:
+            if mode not in all_results:
+                continue
+            for vessel in VALID_VESSELS:
+                if vessel not in all_results[mode]:
+                    continue
+                if metric not in all_results[mode][vessel]:
+                    continue
+                metric_entries = all_results[mode][vessel][metric]
+                if metric_entries:
+                    definition = metric_entries[0].get("latex_formula", "")
+                    break
+            if definition:
+                break
+
+        # bornes Y globales sur tous les vessels et modes dispos
+        y_values = []
+        for mode in ["raw", "bandlimited"]:
+            if mode not in all_results:
+                continue
+            for vessel in VALID_VESSELS:
+                if vessel not in all_results[mode]:
+                    continue
+                if metric not in all_results[mode][vessel]:
+                    continue
+                df_tmp = pd.DataFrame(all_results[mode][vessel][metric])
+                if not df_tmp.empty:
+                    y_values.extend(df_tmp["mean"].values)
+
+        if not y_values:
+            continue
+
+        ymin = min(y_values)
+        ymax = max(y_values)
+        margin = 0.05 * (ymax - ymin if ymax != ymin else 1.0)
+        ymin -= margin
+        ymax += margin
+
+        with open(dashboard_file, "a", encoding="utf-8") as f:
+            f.write('<div class="metric-block">')
+            f.write(f'<div class="metric-title">{metric + " = " + str(definition)}</div>')
+            f.write('<div class="row">')
+
+        for vessel in VALID_VESSELS:
+            for mode in ["raw", "bandlimited"]:
+                if mode not in all_results:
+                    continue
+                if vessel not in all_results[mode]:
+                    continue
+                if metric not in all_results[mode][vessel]:
+                    continue
+
+                data = all_results[mode][vessel][metric]
+                df = pd.DataFrame(data)
+
+                if df.empty:
+                    continue
+
+                df["group_order"] = df["group"].astype("category").cat.codes
+                df = df.sort_values(["group_order", "file"])
+                df["index"] = range(len(df))
+
+                fig = build_metric_figure(
+                    df,
+                    metric,
+                    mode,
+                    ymin,
+                    ymax,
+                    single_group,
+                )
+
+                fig_html = fig.to_html(
+                    full_html=False,
+                    include_plotlyjs=False,
+                    config={"responsive": True},
+                )
+
+                with open(dashboard_file, "a", encoding="utf-8") as f:
+                    f.write(f"""
+                    <div class="plot">
+                        <div class="mode-title">{mode.upper()} - {vessel.upper()}</div>
+                        {fig_html}
+                    </div>
+                    """)
+
+        with open(dashboard_file, "a", encoding="utf-8") as f:
             f.write("</div></div>")
-    with open(dashboard_file, "a") as f:
+
+    # -----------------------------
+    # resize plotly
+    # -----------------------------
+    with open(dashboard_file, "a", encoding="utf-8") as f:
         f.write("""
     <script>
     window.addEventListener("load", function() {
         setTimeout(function() {
-            document.querySelectorAll('.plotly-graph-div')
-            .forEach(function(el) {
+            document.querySelectorAll('.plotly-graph-div').forEach(function(el) {
                 Plotly.Plots.resize(el);
             });
         }, 300);
     });
     </script>
     """)
-    with open(dashboard_file, "a") as f:
+
+    with open(dashboard_file, "a", encoding="utf-8") as f:
         f.write("</body></html>")
 
-    replace_file_in_zip(
-        original_zip,
-        dashboard_file,
-    )
-
+    replace_file_in_zip(original_zip, dashboard_file)
     print("Dashboard ajouté à:", original_zip)
 
 
 if __name__ == "__main__":
     zip_path = choose_zip()
-    dataset_path_bl = "/Artery/VelocityPerBeat/VelocitySignalPerBeatBandLimited/value"
 
     results, single_group = analyze_zip(zip_path)
+
     dashboard_file = "metric_dashboard.html"
     png_dir = os.path.join(os.path.dirname(dashboard_file), "export_png")
+
     export_selected_metric_pngs_bandlimited(results, zip_path, png_dir)
     replace_folder_in_zip(zip_path, png_dir, arc_folder="export_png")
+
     if os.path.isdir(png_dir):
         shutil.rmtree(png_dir)
+
     # save_dashboard(results, zip_path, single_group)
