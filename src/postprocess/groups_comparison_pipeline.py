@@ -32,7 +32,7 @@ class GraphicsDashboardPostprocess(BatchPostprocess):
         if not output_dir.exists() or not output_dir.is_dir():
             raise FileNotFoundError(f"Output folder does not exist: {output_dir}")
 
-        import groups_comparison_dashboard
+        from .core import groups_comparison_dashboard
 
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_root = Path(temp_dir)
