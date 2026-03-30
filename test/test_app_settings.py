@@ -8,7 +8,7 @@ SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from app_settings import (
+from app_settings import (  # noqa: E402
     AppSettingsStore,
     default_settings_path,
     normalize_pipeline_visibility,
@@ -71,6 +71,20 @@ class AppSettingsTests(unittest.TestCase):
             store.save_postprocess_visibility(expected)
 
             self.assertEqual(store.load_postprocess_visibility(), expected)
+
+    def test_load_ui_mode_defaults_to_minimal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            store = AppSettingsStore(Path(tmp_dir) / "settings.json")
+
+            self.assertEqual(store.load_ui_mode(), "minimal")
+
+    def test_store_round_trips_ui_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            store = AppSettingsStore(Path(tmp_dir) / "settings.json")
+
+            store.save_ui_mode("advanced")
+
+            self.assertEqual(store.load_ui_mode(), "advanced")
 
 
 if __name__ == "__main__":
