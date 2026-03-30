@@ -19,6 +19,12 @@ from app_settings import (
 )
 
 try:
+    from tkinterdnd2 import DND_FILES, TkinterDnD
+except ImportError:  # optional dependency
+    DND_FILES = None
+    TkinterDnD = None
+
+try:
     import sv_ttk
 except ImportError:  #  optional dependency
     sv_ttk = None
@@ -31,6 +37,8 @@ from postprocess import (
     PostprocessDescriptor,
     load_postprocess_catalog,
 )
+
+_BaseAppTk = TkinterDnD.Tk if TkinterDnD is not None else tk.Tk
 
 
 class _Tooltip:
@@ -75,7 +83,7 @@ class _Tooltip:
             self.tipwindow = None
 
 
-class ProcessApp(tk.Tk):
+class ProcessApp(_BaseAppTk):
     def __init__(self) -> None:
         super().__init__()
         self.title("AngioEye")
@@ -107,11 +115,13 @@ class ProcessApp(tk.Tk):
         self._progress_total_units = 1.0
         self._progress_completed_units = 0.0
         self._window_icon_image: tk.PhotoImage | None = None
+        self._minimal_logo_image: tk.PhotoImage | None = None
 
         self._set_initial_window_size()
         self._apply_theme()
         self._set_window_icon()
         self._build_ui()
+        self._install_drop_targets()
         self.batch_input_var.trace_add("write", self._on_batch_paths_changed)
         self.batch_output_var.trace_add("write", self._on_batch_paths_changed)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -122,18 +132,11 @@ class ProcessApp(tk.Tk):
         self._apply_ui_mode(self.ui_mode, persist=False)
 
     def _set_initial_window_size(self) -> None:
+        width, height, min_width, min_height = self._window_size_for_mode(
+            self.ui_mode
+        )
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
-        if self.ui_mode == "advanced":
-            width = max(980, min(1320, screen_width - 80))
-            height = max(820, min(1020, screen_height - 80))
-            min_width = min(980, width)
-            min_height = min(760, height)
-        else:
-            width = max(620, min(820, screen_width - 180))
-            height = max(520, min(760, screen_height - 180))
-            min_width = min(520, width)
-            min_height = min(420, height)
         width = min(width, screen_width)
         height = min(height, screen_height)
         x = max((screen_width - width) // 2, 0)
@@ -224,15 +227,24 @@ class ProcessApp(tk.Tk):
 
         content = ttk.Frame(parent, padding=(24, 24))
         content.grid(row=0, column=0)
-        content.columnconfigure(0, weight=1)
+        content.columnconfigure(0, minsize=420)
+        self.minimal_content = content
+
+        self.minimal_title_label = ttk.Label(content, text="AngioEye")
+        self.minimal_title_label.grid(row=0, column=0, pady=(0, 10))
+
+        minimal_logo = self._load_scaled_logo_image(max_width=360, max_height=144)
+        if minimal_logo is not None:
+            self._minimal_logo_image = minimal_logo
+            self.minimal_logo_label = ttk.Label(content, image=self._minimal_logo_image)
+            self.minimal_logo_label.grid(row=1, column=0, pady=(0, 18))
 
         self.minimal_browse_button = ttk.Button(
             content,
             text="Browse .h5 or zip archive",
             command=self.choose_batch_file,
-            width=34,
         )
-        self.minimal_browse_button.grid(row=0, column=0, pady=(0, 10), sticky="ew")
+        self.minimal_browse_button.grid(row=2, column=0, pady=(0, 10))
         self.minimal_input_path_label = tk.Label(
             content,
             textvariable=self.minimal_input_path_var,
@@ -241,15 +253,14 @@ class ProcessApp(tk.Tk):
             justify="center",
             wraplength=420,
         )
-        self.minimal_input_path_label.grid(row=1, column=0, pady=(0, 18), sticky="ew")
+        self.minimal_input_path_label.grid(row=3, column=0, pady=(0, 18), sticky="ew")
 
         self.minimal_output_button = ttk.Button(
             content,
             text="Select output folder",
             command=self.choose_batch_output,
-            width=34,
         )
-        self.minimal_output_button.grid(row=2, column=0, pady=(0, 10), sticky="ew")
+        self.minimal_output_button.grid(row=4, column=0, pady=(0, 10))
         self.minimal_output_path_label = tk.Label(
             content,
             textvariable=self.minimal_output_path_var,
@@ -259,7 +270,7 @@ class ProcessApp(tk.Tk):
             wraplength=420,
         )
         self.minimal_output_path_label.grid(
-            row=3, column=0, pady=(0, 6), sticky="ew"
+            row=5, column=0, pady=(0, 6), sticky="ew"
         )
         self.minimal_output_name_label = tk.Label(
             content,
@@ -270,11 +281,11 @@ class ProcessApp(tk.Tk):
             wraplength=420,
         )
         self.minimal_output_name_label.grid(
-            row=4, column=0, pady=(0, 18), sticky="ew"
+            row=6, column=0, pady=(0, 18), sticky="ew"
         )
 
         self.minimal_run_button = ttk.Button(content, text="Run", command=self.run_batch)
-        self.minimal_run_button.grid(row=5, column=0, pady=(0, 18), sticky="ew")
+        self.minimal_run_button.grid(row=7, column=0, pady=(0, 18))
 
         self.minimal_progress = ttk.Progressbar(
             content,
@@ -284,7 +295,7 @@ class ProcessApp(tk.Tk):
             variable=self.batch_progress_var,
             length=340,
         )
-        self.minimal_progress.grid(row=6, column=0, sticky="ew")
+        self.minimal_progress.grid(row=8, column=0, sticky="ew")
 
     def _build_advanced_view(self, parent: ttk.Frame) -> None:
         parent.columnconfigure(0, weight=1)
@@ -306,6 +317,23 @@ class ProcessApp(tk.Tk):
         self._build_export_tab(self.export_tab)
         self._build_pipeline_library_tab(self.pipeline_library_tab)
         self._build_postprocess_library_tab(self.postprocess_library_tab)
+
+    def _install_drop_targets(self) -> None:
+        if DND_FILES is None:
+            return
+        self._register_drop_target_tree(self)
+
+    def _register_drop_target_tree(self, widget: tk.Misc) -> None:
+        if DND_FILES is None:
+            return
+        try:
+            widget.drop_target_register(DND_FILES)
+            widget.dnd_bind("<<Drop>>", self._on_input_drop)
+        except (AttributeError, tk.TclError):
+            pass
+
+        for child in widget.winfo_children():
+            self._register_drop_target_tree(child)
 
     def _build_batch_tab(self, parent: ttk.Frame) -> None:
         parent.columnconfigure(1, weight=1)
@@ -560,6 +588,23 @@ class ProcessApp(tk.Tk):
         except tk.TclError:
             return None
 
+    def _load_scaled_logo_image(
+        self,
+        *,
+        max_width: int,
+        max_height: int,
+    ) -> tk.PhotoImage | None:
+        image = self._load_logo_image()
+        if image is None:
+            return None
+
+        scale_x = max(1, (image.width() + max_width - 1) // max_width)
+        scale_y = max(1, (image.height() + max_height - 1) // max_height)
+        scale = max(scale_x, scale_y)
+        if scale > 1:
+            image = image.subsample(scale, scale)
+        return image
+
     def _set_window_icon(self) -> None:
         image = self._load_logo_image()
         if image is None:
@@ -585,28 +630,74 @@ class ProcessApp(tk.Tk):
                 f"Could not save UI mode preference:\n{exc}",
             )
 
-    def _ensure_window_size_for_mode(self, mode: str) -> None:
+    def _window_size_for_mode(self, mode: str) -> tuple[int, int, int, int]:
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
         if mode == "advanced":
-            min_width, min_height = 980, 760
+            width = max(980, min(1320, screen_width - 80))
+            height = max(820, min(1020, screen_height - 80))
+            min_width = min(980, width)
+            min_height = min(760, height)
         else:
-            min_width, min_height = 520, 420
-        self.minsize(min_width, min_height)
+            width = max(560, min(660, screen_width - 260))
+            height = max(420, min(520, screen_height - 260))
+            min_width = min(500, width)
+            min_height = min(360, height)
+        return width, height, min_width, min_height
 
-        current_width = max(self.winfo_width(), 1)
-        current_height = max(self.winfo_height(), 1)
-        if current_width >= min_width and current_height >= min_height:
-            return
+    def _ensure_window_size_for_mode(
+        self,
+        mode: str,
+        *,
+        force_target_size: bool = False,
+    ) -> None:
+        target_width, target_height, min_width, min_height = self._window_size_for_mode(
+            mode
+        )
+        self.minsize(min_width, min_height)
 
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
-        width = min(max(current_width, min_width), screen_width)
-        height = min(max(current_height, min_height), screen_height)
+        current_width = max(self.winfo_width(), 1)
+        current_height = max(self.winfo_height(), 1)
+        if (
+            not force_target_size
+            and current_width >= min_width
+            and current_height >= min_height
+        ):
+            return
+
+        if force_target_size:
+            if mode == "minimal":
+                try:
+                    if self.state() != "normal":
+                        self.state("normal")
+                except tk.TclError:
+                    pass
+                self.minimal_view.update_idletasks()
+                requested_width = self.minimal_view.winfo_reqwidth() + 24
+                requested_height = self.minimal_view.winfo_reqheight() + 24
+                width = min(
+                    max(requested_width, min_width),
+                    min(target_width, screen_width),
+                )
+                height = min(
+                    max(requested_height, min_height),
+                    min(target_height, screen_height),
+                )
+            else:
+                width = min(target_width, screen_width)
+                height = min(target_height, screen_height)
+        else:
+            width = min(max(current_width, min_width), screen_width)
+            height = min(max(current_height, min_height), screen_height)
         x = max(min(self.winfo_x(), screen_width - width), 0)
         y = max(min(self.winfo_y(), screen_height - height), 0)
         self.geometry(f"{width}x{height}+{x}+{y}")
 
     def _apply_ui_mode(self, mode: str, *, persist: bool = True) -> None:
         normalized_mode = "advanced" if mode == "advanced" else "minimal"
+        previous_mode = self.ui_mode
         self.ui_mode = normalized_mode
         self.ui_mode_var.set(normalized_mode)
 
@@ -617,7 +708,15 @@ class ProcessApp(tk.Tk):
         else:
             self.minimal_view.pack(fill="both", expand=True)
 
-        self._ensure_window_size_for_mode(normalized_mode)
+        self.update_idletasks()
+
+        self._ensure_window_size_for_mode(
+            normalized_mode,
+            force_target_size=(
+                normalized_mode == "minimal"
+                and (previous_mode == "advanced" or not persist)
+            ),
+        )
         if persist:
             self._persist_ui_mode()
 
@@ -627,6 +726,34 @@ class ProcessApp(tk.Tk):
 
     def _on_batch_paths_changed(self, *_args) -> None:
         self._update_minimal_path_labels()
+
+    def _handle_dropped_paths(self, dropped_paths: Sequence[Path]) -> bool:
+        for dropped_path in dropped_paths:
+            if (
+                dropped_path.is_file()
+                and dropped_path.suffix.lower() in {".h5", ".hdf5", ".zip"}
+            ):
+                self.batch_input_var.set(str(dropped_path))
+                self._apply_input_defaults(dropped_path)
+                self._log_batch(f"[INPUT] Drag and drop -> {dropped_path}")
+                return True
+        return False
+
+    def _on_input_drop(self, event) -> None:
+        raw_data = getattr(event, "data", "")
+        try:
+            dropped_values = self.tk.splitlist(raw_data)
+        except tk.TclError:
+            dropped_values = (raw_data,)
+
+        dropped_paths = [Path(value) for value in dropped_values if value]
+        if self._handle_dropped_paths(dropped_paths):
+            return
+
+        messagebox.showwarning(
+            "Unsupported drop",
+            "Drop a single .h5, .hdf5, or .zip file into the window.",
+        )
 
     def _default_output_stem(self, input_path: Path) -> str:
         if input_path.is_file():
@@ -863,6 +990,7 @@ class ProcessApp(tk.Tk):
         }
         self._populate_pipeline_checks(rows, selection_state)
         self._populate_pipeline_library(rows)
+        self._install_drop_targets()
 
     def _register_postprocesses(self) -> None:
         available, missing = load_postprocess_catalog()
@@ -878,6 +1006,7 @@ class ProcessApp(tk.Tk):
         }
         self._populate_postprocess_checks(rows, selection_state)
         self._populate_postprocess_library(rows)
+        self._install_drop_targets()
 
     def _descriptor_tooltip_text(self, descriptor) -> str:
         parts: list[str] = []

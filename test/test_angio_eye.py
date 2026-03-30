@@ -219,6 +219,26 @@ class BatchZipCleanupTests(unittest.TestCase):
 
             self.assertEqual("sample_angioeye.h5", output_name)
 
+    def test_handle_dropped_paths_accepts_supported_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            input_path = Path(tmp_dir) / "sample.zip"
+            input_path.write_text("dummy", encoding="utf-8")
+            applied_paths: list[Path] = []
+            logs: list[str] = []
+
+            app = SimpleNamespace(
+                batch_input_var=_Var(""),
+                _apply_input_defaults=lambda path: applied_paths.append(path),
+                _log_batch=logs.append,
+            )
+
+            accepted = ProcessApp._handle_dropped_paths(app, [input_path])
+
+            self.assertTrue(accepted)
+            self.assertEqual(str(input_path), app.batch_input_var.get())
+            self.assertEqual([input_path], applied_paths)
+            self.assertIn("Drag and drop", logs[0])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -7,9 +7,11 @@ hiddenimports = []
 datas += collect_data_files('pipelines')
 datas += collect_data_files('postprocess')
 datas += collect_data_files('sv_ttk')
+datas += collect_data_files('tkinterdnd2')
 datas += [('Angioeye_logo.png', '.')]
 hiddenimports += collect_submodules('pipelines')
 hiddenimports += collect_submodules('postprocess')
+hiddenimports += collect_submodules('tkinterdnd2')
 
 
 a = Analysis(
