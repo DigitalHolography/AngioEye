@@ -66,6 +66,7 @@ class ArterialSegExample(ProcessPipeline):
     H_PHASE_RESIDUAL = 10
 
     ratio_W50 = 0.50
+    ratio_W80 = 0.80
 
     @staticmethod
     def _rectify_keep_nan(x: np.ndarray) -> np.ndarray:
@@ -243,12 +244,6 @@ class ArterialSegExample(ProcessPipeline):
         """
         Compute complex harmonic coefficients Vn for n=0..H, with H=min(H_MAX, n_rfft-1),
         and synthesize band-limited waveform vb(t) using harmonics 0..H.
-
-        Returns:
-          - V (complex array length H+1)
-          - H (int)
-          - vb (float array length n)
-          - Vfull (full rfft/n coefficient array)
         """
         if (not np.isfinite(Tbeat)) or Tbeat <= 0:
             return {"V": None, "H": 0, "vb": None, "Vfull": None}
@@ -273,11 +268,7 @@ class ArterialSegExample(ProcessPipeline):
 
     def _rho_h_percent_from_harmonics(self, V: np.ndarray, q: float) -> float:
         """
-        Normalized harmonic-energy rolloff index at quantile q:
-          w_n = |V_n|^2 / sum_{k=1..H} |V_k|^2
-          C(h) = sum_{n=1..h} w_n,  C(0)=0
-          h_q obtained by linear interpolation of cumulative energy vs harmonic index
-          rho_h_q = h_q / H
+        Normalized harmonic-energy rolloff index at quantile q.
         """
         if V is None:
             return np.nan
@@ -356,9 +347,7 @@ class ArterialSegExample(ProcessPipeline):
 
     def _spectral_entropy_from_harmonics(self, V: np.ndarray) -> float:
         """
-        Spectral entropy of harmonic-energy distribution over n=1..H:
-          p_n = |V_n|^2 / sum_{k=1..H} |V_k|^2
-          Hspec = - sum p_n log(p_n)
+        Spectral entropy of harmonic-energy distribution over n=1..H.
         """
         if V is None:
             return np.nan
@@ -392,17 +381,30 @@ class ArterialSegExample(ProcessPipeline):
             return np.nan
         return float(np.nanmax(x) / rms)
 
-    def _harmonic_phases(self, V: np.ndarray) -> dict:
+    def _harmonic_phases(self, V: np.ndarray, Tbeat: float) -> dict:
         """
-        Return delta_phi2 only.
-        delta_phi2 = wrap(phi2 - 2*phi1)
+        Returns:
+          - delta_phi2
+          - t_delta_phi_over_T : median_n [Delta_phi_n / (2*pi*n)] over retained strong harmonics n>=2
+          - t_delta_phi_n : array of per-harmonic phase-delay equivalents in seconds for n=2..H_PHASE_RESIDUAL
+          - t_delta_phi_n_over_T : same normalized by T
         """
-        out = {"delta_phi2": np.nan}
-        if V is None:
+        out = {
+            "delta_phi2": np.nan,
+            "t_delta_phi_over_T": np.nan,
+            "t_delta_phi_n": np.full(
+                (max(self.H_PHASE_RESIDUAL - 1, 0),), np.nan, dtype=float
+            ),
+            "t_delta_phi_n_over_T": np.full(
+                (max(self.H_PHASE_RESIDUAL - 1, 0),), np.nan, dtype=float
+            ),
+        }
+        if V is None or (not np.isfinite(Tbeat)) or Tbeat <= 0:
             return out
 
         H = int(V.size - 1)
-        if H < 2:
+        Huse = int(min(H, self.H_PHASE_RESIDUAL))
+        if Huse < 2:
             return out
 
         def phase_if_strong(Vn: complex) -> float:
@@ -413,10 +415,31 @@ class ArterialSegExample(ProcessPipeline):
             return self._wrap_pi(float(np.angle(Vn)))
 
         phi1 = phase_if_strong(V[1])
-        phi2 = phase_if_strong(V[2])
+        if not np.isfinite(phi1):
+            return out
 
-        if np.isfinite(phi1) and np.isfinite(phi2):
-            out["delta_phi2"] = self._wrap_pi(phi2 - 2.0 * phi1)
+        vals_over_T = []
+        for n in range(2, Huse + 1):
+            phin = phase_if_strong(V[n])
+            if not np.isfinite(phin):
+                continue
+
+            dphi_n = self._wrap_pi(phin - n * phi1)
+
+            if n == 2:
+                out["delta_phi2"] = dphi_n
+
+            t_over_T = float(dphi_n / (2.0 * np.pi * n))
+            t_abs = float(Tbeat * t_over_T)
+
+            out["t_delta_phi_n_over_T"][n - 2] = t_over_T
+            out["t_delta_phi_n"][n - 2] = t_abs
+            vals_over_T.append(t_over_T)
+
+        if len(vals_over_T) > 0:
+            out["t_delta_phi_over_T"] = float(
+                np.nanmedian(np.asarray(vals_over_T, dtype=float))
+            )
 
         return out
 
@@ -580,54 +603,20 @@ class ArterialSegExample(ProcessPipeline):
 
     def _peak_to_trough_interval(self, idx_peak: int, idx_min: int, n: int) -> float:
         """
-        Delta_t_over_T = (t_min - t_max)/T, assuming min occurs after peak in the beat.
-        Returns NaN if ordering is inconsistent.
+        Circular forward peak-to-trough interval:
+          Delta_t_over_T = ((idx_min - idx_peak) mod n) / n
+
+        This works whether the trough occurs after the peak within the sampled window
+        or after wrap-around at the beat boundary.
         """
         if n <= 0 or idx_peak < 0 or idx_min < 0:
             return np.nan
-        if idx_min < idx_peak:
-            return np.nan
-        return float((idx_min - idx_peak) / n)
 
-    def _normalized_decay_slope(
-        self,
-        vmin: float,
-        vmax: float,
-        meanv: float,
-        delta_t_over_T: float,
-    ) -> float:
-        """
-        S_decay = ((v_max - v_min) T) / (Delta_t * v_mean)
-                = (v_max - v_min) / ( (Delta_t/T) * v_mean )
-                = PI / (Delta_t/T)
-        """
-        if not np.isfinite(vmin) or not np.isfinite(vmax):
-            return np.nan
-        if (not np.isfinite(meanv)) or meanv <= 0:
-            return np.nan
-        if (not np.isfinite(delta_t_over_T)) or delta_t_over_T <= 0:
+        delta_idx = int((idx_min - idx_peak) % n)
+        if delta_idx == 0:
             return np.nan
 
-        return float((vmax - vmin) / ((delta_t_over_T + self.eps) * (meanv + self.eps)))
-
-    def _r_sd(self, v: np.ndarray) -> float:
-        if v.size == 0 or not np.any(np.isfinite(v)):
-            return np.nan
-
-        vmax = float(np.nanmax(v))
-        if (not np.isfinite(vmax)) or vmax <= 0:
-            return np.nan
-
-        k0, k1 = self._late_window_indices(v.size)
-        if k1 <= k0:
-            return np.nan
-
-        tail = np.asarray(v[k0:k1], dtype=float)
-        vend = self._safe_nanmean(tail)
-        if (not np.isfinite(vend)) or vend < 0:
-            return np.nan
-
-        return float(vmax / (vend + self.eps))
+        return float(delta_idx / n)
 
     def _late_cycle_mean_fraction(self, v: np.ndarray) -> float:
         """
@@ -836,6 +825,12 @@ class ArterialSegExample(ProcessPipeline):
         delta_phi_all = np.full(
             (max(self.H_PHASE_RESIDUAL - 1, 0),), np.nan, dtype=float
         )
+        t_delta_phi_n_all = np.full(
+            (max(self.H_PHASE_RESIDUAL - 1, 0),), np.nan, dtype=float
+        )
+        t_delta_phi_n_over_T_all = np.full(
+            (max(self.H_PHASE_RESIDUAL - 1, 0),), np.nan, dtype=float
+        )
 
         E_total = np.nan
         E_low = np.nan
@@ -865,19 +860,19 @@ class ArterialSegExample(ProcessPipeline):
             if np.isfinite(mag_sum) and mag_sum > 0:
                 harmonic_weights[0:H] = mags_h / (mag_sum + self.eps)
 
-            if H >= 2 and np.abs(V[1]) > self.eps:
+            if H >= 2 and np.abs(V[1]) > self.eps and np.isfinite(Tbeat) and Tbeat > 0:
                 phi1 = float(np.angle(V[1]))
                 h_phase = min(H, self.H_PHASE_RESIDUAL)
                 for h in range(2, h_phase + 1):
                     if np.abs(V[h]) > self.eps:
-                        delta_phi_all[h - 2] = self._wrap_pi(
-                            float(np.angle(V[h])) - h * phi1
-                        )
+                        dphi_h = self._wrap_pi(float(np.angle(V[h])) - h * phi1)
+                        delta_phi_all[h - 2] = dphi_h
+                        t_over_T = float(dphi_h / (2.0 * np.pi * h))
+                        t_delta_phi_n_over_T_all[h - 2] = t_over_T
+                        t_delta_phi_n_all[h - 2] = float(Tbeat * t_over_T)
 
         metrics = self._compute_metrics_1d(vv, Tbeat)
         rho_support = self._rho_h_support_from_harmonics(V)
-        k0, k1 = self._late_window_indices(n)
-        vend = float(self._safe_nanmean(vv[k0:k1])) if k1 > k0 else np.nan
 
         vb_out = np.full((n,), np.nan, dtype=float)
         if vb is not None:
@@ -917,13 +912,12 @@ class ArterialSegExample(ProcessPipeline):
             "harmonic_energies_weights": harmonic_energy_weights,
             "harmonic_phases": harmonic_phases,
             "delta_phi_all": delta_phi_all,
-            "vend": np.asarray(vend, dtype=float),
+            "t_delta_phi_n": t_delta_phi_n_all,
+            "t_delta_phi_n_over_T": t_delta_phi_n_over_T_all,
             "vmax": np.asarray(vmax, dtype=float),
             "vmin": np.asarray(vmin, dtype=float),
             "vmean": np.asarray(vmean, dtype=float),
             "m0": np.asarray(m0, dtype=float),
-            "late_window_start_idx": np.asarray(k0, dtype=int),
-            "late_window_end_idx": np.asarray(k1, dtype=int),
             **{k: np.asarray(val, dtype=float) for k, val in metrics.items()},
         }
 
@@ -973,9 +967,8 @@ class ArterialSegExample(ProcessPipeline):
             "harmonic_energies": np.full((n_beats, h_mag + 1), np.nan, dtype=float),
             "harmonic_energies_weights": np.full((n_beats, h_mag), np.nan, dtype=float),
             "delta_phi_all": np.full((n_beats, h_phi), np.nan, dtype=float),
-            "vend": np.full((n_beats,), np.nan, dtype=float),
-            "late_window_start_idx": np.full((n_beats,), -1, dtype=int),
-            "late_window_end_idx": np.full((n_beats,), -1, dtype=int),
+            "t_delta_phi_n": np.full((n_beats, h_phi), np.nan, dtype=float),
+            "t_delta_phi_n_over_T": np.full((n_beats, h_phi), np.nan, dtype=float),
             "vmax": np.full((n_beats,), np.nan, dtype=float),
             "vmin": np.full((n_beats,), np.nan, dtype=float),
             "vmean": np.full((n_beats,), np.nan, dtype=float),
@@ -1018,6 +1011,8 @@ class ArterialSegExample(ProcessPipeline):
             out["harmonic_weights"][beat_idx, :] = s["harmonic_weights"]
             out["harmonic_phases"][beat_idx, :] = s["harmonic_phases"]
             out["delta_phi_all"][beat_idx, :] = s["delta_phi_all"]
+            out["t_delta_phi_n"][beat_idx, :] = s["t_delta_phi_n"]
+            out["t_delta_phi_n_over_T"][beat_idx, :] = s["t_delta_phi_n_over_T"]
             out["vmax"][beat_idx] = s["vmax"]
             out["vmin"][beat_idx] = s["vmin"]
             out["vmean"][beat_idx] = s["vmean"]
@@ -1025,9 +1020,6 @@ class ArterialSegExample(ProcessPipeline):
             out["harmonic_energies_weights"][beat_idx, :] = s[
                 "harmonic_energies_weights"
             ]
-            out["vend"][beat_idx] = s["vend"]
-            out["late_window_start_idx"][beat_idx] = s["late_window_start_idx"]
-            out["late_window_end_idx"][beat_idx] = s["late_window_end_idx"]
 
             for k in self._metric_keys():
                 out[k[0]][beat_idx] = s[k[0]]
@@ -1094,6 +1086,7 @@ class ArterialSegExample(ProcessPipeline):
         sigma_t_over_T = sigma_t / Tbeat
 
         W50_over_T = self._peak_width_over_T(vv, self.ratio_W50)
+        W80_over_T = self._peak_width_over_T(vv, self.ratio_W80)
 
         t10_over_T = self._quantile_time_over_T(vv, Tbeat, 0.10)
         t25_over_T = self._quantile_time_over_T(vv, Tbeat, 0.25)
@@ -1118,7 +1111,7 @@ class ArterialSegExample(ProcessPipeline):
         rho_h_95 = self._rho_h_percent_from_harmonics(V, 0.95)
         crest_factor = self._crest_factor(vv)
         spectral_entropy = self._spectral_entropy_from_harmonics(V)
-        ph = self._harmonic_phases(V)
+        ph = self._harmonic_phases(V, Tbeat)
 
         mu_h, sigma_h = self._spectral_centroid_spread(V)
         N_eff_over_T = self._n_eff_over_T(vv, Tbeat, m0)
@@ -1133,9 +1126,6 @@ class ArterialSegExample(ProcessPipeline):
         ) = self._normalized_slopes_and_times(vv, Tbeat)
 
         Delta_t_over_T = self._peak_to_trough_interval(idx_peak, idx_min, n)
-        S_decay = self._normalized_decay_slope(vmin, vmax, meanv, Delta_t_over_T)
-
-        R_SD = self._r_sd(vv)
         Delta_DTI = self._delta_dti(vv, Tbeat, m0, t)
         gamma_t = self._gamma_t(vv, Tbeat, mu_t, sigma_t, m0, t)
 
@@ -1176,6 +1166,7 @@ class ArterialSegExample(ProcessPipeline):
             "sigma_t_over_T": float(sigma_t_over_T),
             "sigma_t": float(sigma_t),
             "W50_over_T": float(W50_over_T) if np.isfinite(W50_over_T) else np.nan,
+            "W80_over_T": float(W80_over_T) if np.isfinite(W80_over_T) else np.nan,
             "t10_over_T": float(t10_over_T),
             "t25_over_T": float(t25_over_T),
             "t50_over_T": float(t50_over_T),
@@ -1206,11 +1197,6 @@ class ArterialSegExample(ProcessPipeline):
             "t_down_over_T": float(t_down_over_T)
             if np.isfinite(t_down_over_T)
             else np.nan,
-            "S_decay": float(S_decay) if np.isfinite(S_decay) else np.nan,
-            "crest_factor": float(crest_factor)
-            if np.isfinite(crest_factor)
-            else np.nan,
-            "R_SD": float(R_SD) if np.isfinite(R_SD) else np.nan,
             "Delta_DTI": float(Delta_DTI) if np.isfinite(Delta_DTI) else np.nan,
             "gamma_t": float(gamma_t) if np.isfinite(gamma_t) else np.nan,
             "spectral_entropy": float(spectral_entropy)
@@ -1218,6 +1204,9 @@ class ArterialSegExample(ProcessPipeline):
             else np.nan,
             "delta_phi2": float(ph["delta_phi2"])
             if np.isfinite(ph["delta_phi2"])
+            else np.nan,
+            "t_delta_phi_over_T": float(ph["t_delta_phi_over_T"])
+            if np.isfinite(ph["t_delta_phi_over_T"])
             else np.nan,
             "rho_h_90": float(rho_h_90) if np.isfinite(rho_h_90) else np.nan,
             "rho_h_95": float(rho_h_95) if np.isfinite(rho_h_95) else np.nan,
@@ -1257,6 +1246,7 @@ class ArterialSegExample(ProcessPipeline):
             ["sigma_t_over_T", "sigma/T", ""],
             ["sigma_t", "sqrt(tau_M2-tau_M1**2)", "seconds"],
             ["W50_over_T", "W_{50}/T", ""],
+            ["W80_over_T", "W_{80}/T", ""],
             ["t10_over_T", "t10/T", ""],
             ["t25_over_T", "t25/T", ""],
             ["t50_over_T", "t50/T", ""],
@@ -1270,22 +1260,17 @@ class ArterialSegExample(ProcessPipeline):
             ["E_low_over_E_total", "sum(|Vn|**2,n<=k)/sum(|Vn|**2)", ""],
             ["t_max_over_T", "t_max/T", ""],
             ["t_min_over_T", "t_min/T", ""],
-            ["Delta_t_over_T", "(t_min-t_max)/T", ""],
+            ["Delta_t_over_T", "((t_min-t_max) mod T)/T", ""],
             ["slope_rise_normalized", "T*max(dv/dt)/V_mean", ""],
             ["slope_fall_normalized", "T*|min(dv/dt)|/V_mean", ""],
             ["t_up_over_T", "t_up/T", ""],
             ["t_down_over_T", "t_down/T", ""],
-            ["S_decay", "((V_max-V_min)T)/(Delta_t*V_mean)", ""],
-            [
-                "R_SD",
-                "V_max/(mean(V(t in [ratio_vend_start*T,ratio_vend_end*T]))+eps)",
-                "",
-            ],
             ["Delta_DTI", "int_0^1(d*(tau)-tau)dtau", ""],
             ["gamma_t", "sum(w(t)*((t-mu)/sigma)^3)/sum(w(t))", ""],
             ["crest_factor", "V_max/V_RMS", ""],
             ["spectral_entropy", "-sum(pn*log(pn+eps))", ""],
             ["delta_phi2", "wrap(phi2-2*phi1)", "rad"],
+            ["t_delta_phi_over_T", "median_n(Delta_phi_n/(2*pi*n))", ""],
             ["rho_h_90", "h_90/H", ""],
             ["rho_h_95", "h_95/H", ""],
             ["mu_h", "sum_n n*|Vn|^2/sum_n |Vn|^2", ""],
@@ -1326,7 +1311,7 @@ class ArterialSegExample(ProcessPipeline):
                 f"Expected (n_t,n_beats,n_branches,n_radii), got {v_block.shape}"
             )
 
-        n_t, n_beats, n_branches, n_radii = v_block.shape
+        _, n_beats, n_branches, n_radii = v_block.shape
 
         seg = {
             k[0]: np.full((n_beats, n_branches, n_radii), np.nan, dtype=float)
@@ -1479,6 +1464,9 @@ class ArterialSegExample(ProcessPipeline):
         metrics[f"{vessel_prefix}/by_segment/params/ratio_W50"] = np.asarray(
             self.ratio_W50, dtype=float
         )
+        metrics[f"{vessel_prefix}/by_segment/params/ratio_W80"] = np.asarray(
+            self.ratio_W80, dtype=float
+        )
         metrics[f"{vessel_prefix}/by_segment/params/H_LOW_MAX"] = np.asarray(
             self.H_LOW_MAX, dtype=int
         )
@@ -1538,6 +1526,9 @@ class ArterialSegExample(ProcessPipeline):
         metrics[f"{vessel_prefix}/global/params/ratio_W50"] = np.asarray(
             self.ratio_W50, dtype=float
         )
+        metrics[f"{vessel_prefix}/global/params/ratio_W80"] = np.asarray(
+            self.ratio_W80, dtype=float
+        )
         metrics[f"{vessel_prefix}/global/params/H_LOW_MAX"] = np.asarray(
             self.H_LOW_MAX, dtype=int
         )
@@ -1568,6 +1559,7 @@ class ArterialSegExample(ProcessPipeline):
             "sigma_t": r"$\sigma_t=\sqrt{\frac{\sum_t v(t)(t-\mu_t)^2}{\sum_t v(t)}}$",
             "sigma_t_over_T": r"$\frac{\sigma_t}{T}$",
             "W50_over_T": r"$\frac{W_{50}}{T}=\frac{1}{T}\left|\{t\in[0,T]:v(t)\geq 0.5\,v_{\max}\}\right|$",
+            "W80_over_T": r"$\frac{W_{80}}{T}=\frac{1}{T}\left|\{t\in[0,T]:v(t)\geq 0.8\,v_{\max}\}\right|$",
             "t10_over_T": r"$\frac{t_{10}}{T}$",
             "t25_over_T": r"$\frac{t_{25}}{T}$",
             "t50_over_T": r"$\frac{t_{50}}{T}$",
@@ -1581,18 +1573,16 @@ class ArterialSegExample(ProcessPipeline):
             "E_low_over_E_total": r"$\frac{\sum_{n=1}^{k}|V_n|^2}{\sum_{n\geq 1}|V_n|^2}$",
             "t_max_over_T": r"$\frac{t_{\max}}{T}$",
             "t_min_over_T": r"$\frac{t_{\min}}{T}$",
-            "Delta_t_over_T": r"$\frac{t_{\min}-t_{\max}}{T}$",
+            "Delta_t_over_T": r"$\frac{(t_{\min}-t_{\max})\bmod T}{T}$",
             "slope_rise_normalized": r"$\frac{T}{\bar v}\max_t \frac{dv}{dt}$",
             "slope_fall_normalized": r"$\frac{T}{\bar v}\left|\min_t \frac{dv}{dt}\right|$",
             "t_up_over_T": r"$\frac{t_{\mathrm{up}}}{T}$",
             "t_down_over_T": r"$\frac{t_{\mathrm{down}}}{T}$",
-            "S_decay": r"$\frac{(v_{\max}-v_{\min})\,T}{\Delta t\,\bar v}=\mathrm{PI}\,\frac{T}{\Delta t}$",
-            "crest_factor": r"$\frac{v_{\max}}{v_{\mathrm{RMS}}}$",
-            "R_SD": r"$\frac{v_{\max}}{\mathrm{mean}_{t\in[\alpha T,\beta T]} v(t)+\epsilon}$",
             "Delta_DTI": r"$\int_0^1 \left[d^*(\tau)-\tau\right]d\tau$",
             "gamma_t": r"$\frac{1}{M_0}\sum_t v(t)\left(\frac{t-\mu_t}{\sigma_t}\right)^3$",
             "spectral_entropy": r"$-\sum_{n=1}^{N} p_n\log(p_n+\epsilon)$",
             "delta_phi2": r"$\mathrm{wrap}(\phi_2-2\phi_1)$",
+            "t_delta_phi_over_T": r"$\frac{t_{\Delta\phi}}{T}=\mathrm{median}_{n\geq 2}\left(\frac{\Delta\phi_n}{2\pi n}\right)$",
             "rho_h_90": r"$\rho_{h,90}=\frac{h_{90}}{H}$",
             "rho_h_95": r"$\rho_{h,95}=\frac{h_{95}}{H}$",
             "mu_h": r"$\mu_h=\sum_{n=1}^{N} n\,w_n,\quad w_n=\frac{|V_n|^2}{\sum_{k=1}^{N}|V_k|^2}$",
