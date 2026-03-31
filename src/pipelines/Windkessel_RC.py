@@ -539,6 +539,7 @@ class WindkesselRC(ProcessPipeline):
 
         freq_delay = np.full((n_beats,), np.nan, dtype=float)
         freq_tau = np.full((n_beats,), np.nan, dtype=float)
+        freq_tau_over_T = np.full((n_beats,), np.nan, dtype=float)
         freq_k = np.full((n_beats,), np.nan, dtype=float)
         freq_res = np.full((n_beats,), np.nan, dtype=float)
         freq_res_norm = np.full((n_beats,), np.nan, dtype=float)
@@ -552,6 +553,7 @@ class WindkesselRC(ProcessPipeline):
 
         td_delay = np.full((n_beats,), np.nan, dtype=float)
         td_tau = np.full((n_beats,), np.nan, dtype=float)
+        td_tau_over_T = np.full((n_beats,), np.nan, dtype=float)
         td_res = np.full((n_beats,), np.nan, dtype=float)
         td_res_norm = np.full((n_beats,), np.nan, dtype=float)
         td_rows_used = np.full((n_beats,), np.nan, dtype=float)
@@ -559,6 +561,7 @@ class WindkesselRC(ProcessPipeline):
 
         arx_delay = np.full((n_beats,), np.nan, dtype=float)
         arx_tau = np.full((n_beats,), np.nan, dtype=float)
+        arx_tau_over_T = np.full((n_beats,), np.nan, dtype=float)
         arx_a = np.full((n_beats,), np.nan, dtype=float)
         arx_b = np.full((n_beats,), np.nan, dtype=float)
         arx_res = np.full((n_beats,), np.nan, dtype=float)
@@ -584,6 +587,9 @@ class WindkesselRC(ProcessPipeline):
                 freq_ok[beat_idx] = 1
                 freq_delay[beat_idx] = fr["Deltat"]
                 freq_tau[beat_idx] = fr["tau"]
+                freq_tau_over_T[beat_idx] = (
+                    fr["tau"] / Tbeat if np.isfinite(fr["tau"]) and np.isfinite(Tbeat) and Tbeat > 0 else np.nan
+                )
                 freq_k[beat_idx] = fr["k"]
                 freq_res[beat_idx] = fr["residual"]
                 freq_res_norm[beat_idx] = fr["residual_norm"]
@@ -599,6 +605,9 @@ class WindkesselRC(ProcessPipeline):
                 td_ok[beat_idx] = 1
                 td_delay[beat_idx] = td["Deltat"]
                 td_tau[beat_idx] = td["tau"]
+                td_tau_over_T[beat_idx] = (
+                    td["tau"] / Tbeat if np.isfinite(td["tau"]) and np.isfinite(Tbeat) and Tbeat > 0 else np.nan
+                )
                 td_res[beat_idx] = td["residual"]
                 td_res_norm[beat_idx] = td["residual_norm"]
                 td_rows_used[beat_idx] = td["rows_used"]
@@ -608,6 +617,9 @@ class WindkesselRC(ProcessPipeline):
                 arx_ok[beat_idx] = 1
                 arx_delay[beat_idx] = arx["Deltat"]
                 arx_tau[beat_idx] = arx["tau"]
+                arx_tau_over_T[beat_idx] = (
+                    arx["tau"] / Tbeat if np.isfinite(arx["tau"]) and np.isfinite(Tbeat) and Tbeat > 0 else np.nan
+                )
                 arx_a[beat_idx] = arx["a"]
                 arx_b[beat_idx] = arx["b"]
                 arx_res[beat_idx] = arx["residual"]
@@ -646,6 +658,7 @@ class WindkesselRC(ProcessPipeline):
             "freq": {
                 "Deltat": freq_delay,
                 "tau": freq_tau,
+                "tau_over_T": freq_tau_over_T,
                 "k": freq_k,
                 "residual": freq_res,
                 "residual_norm": freq_res_norm,
@@ -660,6 +673,7 @@ class WindkesselRC(ProcessPipeline):
             "time_integral": {
                 "Deltat": td_delay,
                 "tau": td_tau,
+                "tau_over_T": td_tau_over_T,
                 "residual": td_res,
                 "residual_norm": td_res_norm,
                 "rows_used": td_rows_used,
@@ -668,6 +682,7 @@ class WindkesselRC(ProcessPipeline):
             "arx": {
                 "Deltat": arx_delay,
                 "tau": arx_tau,
+                "tau_over_T": arx_tau_over_T,
                 "a": arx_a,
                 "b": arx_b,
                 "residual": arx_res,
@@ -727,6 +742,7 @@ class WindkesselRC(ProcessPipeline):
         base = f"{representation}/{method_name}"
         metrics[f"{base}/Deltat"] = with_attrs(np.asarray(result["Deltat"], dtype=float), {"unit": ["seconds"]})
         metrics[f"{base}/tau"] = with_attrs(np.asarray(result["tau"], dtype=float), {"unit": ["seconds"]})
+        metrics[f"{base}/tau_over_T"] = with_attrs(np.asarray(result["tau_over_T"], dtype=float), {"unit": [""]})
         metrics[f"{base}/accepted"] = np.asarray(result["accepted"], dtype=int)
         for extra in (
             "residual",
@@ -748,6 +764,8 @@ class WindkesselRC(ProcessPipeline):
         for key, value in self._summary_scalars(result["Deltat"], f"{base}/summary/Deltat").items():
             metrics[key] = value
         for key, value in self._summary_scalars(result["tau"], f"{base}/summary/tau").items():
+            metrics[key] = value
+        for key, value in self._summary_scalars(result["tau_over_T"], f"{base}/summary/tau_over_T").items():
             metrics[key] = value
         if "residual_norm" in result:
             for key, value in self._summary_scalars(result["residual_norm"], f"{base}/summary/residual_norm").items():
