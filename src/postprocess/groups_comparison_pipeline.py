@@ -58,7 +58,7 @@ class GraphicsDashboardPostprocess(BatchPostprocess):
             )
             png_paths = self._extract_prefix(
                 zip_path=temp_zip,
-                member_prefix="export_png/",
+                member_prefix="export_graphics/",
                 output_dir=output_dir,
             )
 

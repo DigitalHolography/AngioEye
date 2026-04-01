@@ -365,6 +365,7 @@ class ArterialSegExample(ProcessPipeline):
         p = np.clip(p, self.eps, 1.0)
         return float(-np.nansum(p * np.log(p)))
 
+    '''
     def _crest_factor(self, v: np.ndarray) -> float:
         """
         Crest factor on the current waveform representation:
@@ -379,7 +380,7 @@ class ArterialSegExample(ProcessPipeline):
         rms = float(np.sqrt(self._safe_nanmean(x * x)))
         if rms <= 0:
             return np.nan
-        return float(np.nanmax(x) / rms)
+        return float(np.nanmax(x) / rms)'''
 
     def _harmonic_phases(self, V: np.ndarray, Tbeat: float) -> dict:
         """
@@ -874,6 +875,9 @@ class ArterialSegExample(ProcessPipeline):
         metrics = self._compute_metrics_1d(vv, Tbeat)
         rho_support = self._rho_h_support_from_harmonics(V)
 
+        k0, k1 = self._late_window_indices(n)
+        vend = float(self._safe_nanmean(vv[k0:k1])) if k1 > k0 else np.nan
+
         vb_out = np.full((n,), np.nan, dtype=float)
         if vb is not None:
             vb_out[: min(len(vb), n)] = np.asarray(vb[:n], dtype=float)
@@ -917,6 +921,9 @@ class ArterialSegExample(ProcessPipeline):
             "vmax": np.asarray(vmax, dtype=float),
             "vmin": np.asarray(vmin, dtype=float),
             "vmean": np.asarray(vmean, dtype=float),
+            "vend": np.asarray(vend, dtype=float),
+            "late_window_start_idx": np.asarray(k0, dtype=int),
+            "late_window_end_idx": np.asarray(k1, dtype=int),
             "m0": np.asarray(m0, dtype=float),
             **{k: np.asarray(val, dtype=float) for k, val in metrics.items()},
         }
@@ -972,6 +979,7 @@ class ArterialSegExample(ProcessPipeline):
             "vmax": np.full((n_beats,), np.nan, dtype=float),
             "vmin": np.full((n_beats,), np.nan, dtype=float),
             "vmean": np.full((n_beats,), np.nan, dtype=float),
+            "vend": np.full((n_beats,), np.nan, dtype=float),
         }
 
         for k in self._metric_keys():
@@ -1016,6 +1024,7 @@ class ArterialSegExample(ProcessPipeline):
             out["vmax"][beat_idx] = s["vmax"]
             out["vmin"][beat_idx] = s["vmin"]
             out["vmean"][beat_idx] = s["vmean"]
+            out["vend"][beat_idx] = s["vend"]
             out["harmonic_energies"][beat_idx, :] = s["harmonic_energies"]
             out["harmonic_energies_weights"][beat_idx, :] = s[
                 "harmonic_energies_weights"
@@ -1109,7 +1118,7 @@ class ArterialSegExample(ProcessPipeline):
 
         rho_h_90 = self._rho_h_percent_from_harmonics(V, 0.90)
         rho_h_95 = self._rho_h_percent_from_harmonics(V, 0.95)
-        crest_factor = self._crest_factor(vv)
+        #crest_factor = self._crest_factor(vv)
         spectral_entropy = self._spectral_entropy_from_harmonics(V)
         ph = self._harmonic_phases(V, Tbeat)
 
@@ -1267,7 +1276,7 @@ class ArterialSegExample(ProcessPipeline):
             ["t_down_over_T", "t_down/T", ""],
             ["Delta_DTI", "int_0^1(d*(tau)-tau)dtau", ""],
             ["gamma_t", "sum(w(t)*((t-mu)/sigma)^3)/sum(w(t))", ""],
-            ["crest_factor", "V_max/V_RMS", ""],
+            #["crest_factor", "V_max/V_RMS", ""],
             ["spectral_entropy", "-sum(pn*log(pn+eps))", ""],
             ["delta_phi2", "wrap(phi2-2*phi1)", "rad"],
             ["t_delta_phi_over_T", "median_n(Delta_phi_n/(2*pi*n))", ""],

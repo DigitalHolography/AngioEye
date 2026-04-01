@@ -36,6 +36,7 @@ SELECTED_METRICS_PNG = {
     "SF_VTI",
     "sigma_t_over_T",
     "W50_over_T",
+    "W80_over_T",
     "E_low_over_E_total",
     "t_max_over_T",
     "t_min_over_T",
@@ -45,7 +46,7 @@ SELECTED_METRICS_PNG = {
     "t_up_over_T",
     "t_down_over_T",
     "S_decay",
-    "crest_factor",
+    #"crest_factor",
     "R_SD",
     "Delta_DTI",
     "gamma_t",
@@ -68,7 +69,10 @@ SELECTED_METRICS_PNG = {
     "v_end_over_v_mean",
     "E_slope",
     "E_curv",
-    "t50_over_T"
+    "t50_over_T",
+    "t_delta_phi_n",
+    "t_delta_phi_n_over_T",
+    "t_delta_phi_over_T"
 }
 METRIC_ALIASES = {
     "Hspec": "spectral_entropy",
@@ -78,7 +82,7 @@ LATEX_FORMULAS = {
     "RI": r"$\rm RI$",
     "rho_h_90": r"$\rho_{h,90}$",
     "rho_h_95": r"$\rho_{h,95}$",
-    "crest_factor": r"$\rm CF$",
+    #"crest_factor": r"$\rm CF$",
     "t50_over_T": r"$t_{50}/T$",
     "R_VTI": r"$R_{VTI}$",
     "spectral_entropy": r"$H_{spec}$",
@@ -114,7 +118,11 @@ LATEX_FORMULAS = {
     "E_slope": r"$E_{\mathrm{slope}}$",
     "phase_locking_residual": r"$E_{\phi}$",
     "W50_over_T": r"$W_{50}/T$",
+    "W80_over_T": r"$W_{80}/T$",
     "N_H_over_T": r"$N_H/T$",
+    "t_Delta_phi_n" : r"$t_{\Delta_{\phi_n}}$",
+    "t_Delta_phi_n_over_T" : r"$t_{\Delta_{\phi_n}}/T$",
+    "t_Delta_phi_over_T" : r"$t_{\Delta_{\phi}}/T$"
 }
 
 
@@ -985,18 +993,18 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
             loc="lower left", bbox_to_anchor=(0.02, 0.02), frameon=False, fontsize=10
         )
 
-    elif metric == "crest_factor":
-        cf = float(support["crest_factor"])
-        vmax = float(np.nanmax(vb))
-        rms = float(np.sqrt(np.nanmean(vb**2)))
-        vb_tau = np.linspace(0.0, 1.0, len(vb), endpoint=False)
+    #elif metric == "crest_factor":
+        #cf = float(support["crest_factor"])
+        #vmax = float(np.nanmax(vb))
+        #rms = float(np.sqrt(np.nanmean(vb**2)))
+        #vb_tau = np.linspace(0.0, 1.0, len(vb), endpoint=False)
 
-        ax.plot(vb_tau, vb, linewidth=3, color=vessel_color)
-        hline_label(vmax, "Vmax", va="bottom")
-        hline_label(rms, "RMS", va="top")
-        info_box([f"H={len(harmonic_magnitudes)}", f"CF= {cf:.3f}"])
-        ax.set_xlabel("rectified time : t/T", fontsize=14)
-        ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
+        #ax.plot(vb_tau, vb, linewidth=3, color=vessel_color)
+        #hline_label(vmax, "Vmax", va="bottom")
+        #hline_label(rms, "RMS", va="top")
+        #info_box([f"H={len(harmonic_magnitudes)}", f"CF= {cf:.3f}"])
+        #ax.set_xlabel("rectified time : t/T", fontsize=14)
+        #ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
 
     elif metric in {"Hspec", "spectral_entropy"}:
         p = harmonic_energies_weights
@@ -1324,6 +1332,32 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
         )
         ax.set_xlabel("rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v_b \: (mm/s)$", fontsize=14, labelpad=12)
+    elif metric == "W80_over_T":
+        w80 = float(support["W80_over_T"])
+        vmax = float(support["vmax"])
+        thr = 0.8 * vmax
+
+        mask = np.isfinite(sig) & (sig >= thr)
+
+        ax.plot(tau, sig, linewidth=3, color=vessel_color)
+        ax.axhline(thr, linestyle="--", linewidth=1, color="black")
+        ax.fill_between(
+            tau,
+            0,
+            sig,
+            where=mask,
+            color=fill_color,
+            interpolate=True,
+        )
+
+        info_box(
+            [
+                rf"$W_{{80}}/T = {w80:.3f}$",
+                rf"$0.8\,V_{{max}} = {thr:.3f}$",
+            ]
+        )
+        ax.set_xlabel("rectified time : t/T", fontsize=14)
+        ax.set_ylabel(r"$v_b \: (mm/s)$", fontsize=14, labelpad=12)
     elif metric == "N_H_over_T":
         m0 = float(support["m0"])
         nh_over_t = float(support["N_H_over_T"])
@@ -1343,6 +1377,8 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
         info_box([rf"$N_H/T = {nh_over_t:.3f}$"])
         ax.set_xlabel("rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$p(\tau)\: (a.u.)$", fontsize=14, labelpad=10)
+
+    
 
     else:
         info_box(f"No illustration for {metric}")
@@ -1513,8 +1549,18 @@ def export_selected_metric_pngs_bandlimited(all_results, zip_path, out_dir):
                     ax_empty = fig.add_subplot(right[r, c])
                     ax_empty.axis("off")
 
-                png_path = os.path.join(out_dir, f"{metric}_bandlimited_{vessel}.png")
+                png_dir = os.path.join(out_dir, "png")
+                eps_dir = os.path.join(out_dir, "eps")
+
+                os.makedirs(png_dir,exist_ok=True)
+                os.makedirs(eps_dir,exist_ok=True)
+                                       
+                png_path = os.path.join(png_dir,f"{metric}_bandlimited_{vessel}.png")
+                eps_path = os.path.join(eps_dir,f"{metric}_bandlimited_{vessel}.eps")
+               
+                
                 fig.savefig(png_path, bbox_inches="tight")
+                fig.savefig(eps_path, bbox_inches="tight")
                 plt.close(fig)
 
 
@@ -2116,13 +2162,18 @@ body {
     # -----------------------------
     # export PNGs
     # -----------------------------
-    png_dir = os.path.join(os.path.dirname(dashboard_file), "export_png")
-    export_selected_metric_pngs_bandlimited(all_results, original_zip, png_dir)
-    print("PNGs exportés dans :", png_dir)
-    replace_folder_in_zip(original_zip, png_dir, arc_folder="export_png")
-    if os.path.isdir(png_dir):
-        shutil.rmtree(png_dir)
+    export_dir = os.path.join(os.path.dirname(dashboard_file), "export_graphics")
 
+    export_selected_metric_pngs_bandlimited(all_results, original_zip, export_dir)
+    print("PNGs exportés dans :", export_dir)
+
+    png_dir=os.path.join(export_dir,"png")
+    eps_dir=os.path.join(export_dir,"eps")
+
+    replace_folder_in_zip(original_zip, png_dir, arc_folder="export_graphics/png")
+    replace_folder_in_zip(original_zip, eps_dir, arc_folder="export_graphics/eps")
+    if os.path.isdir(export_dir):
+        shutil.rmtree(export_dir)
     # -----------------------------
     # signaux moyens par vessel / mode
     # -----------------------------
@@ -2301,12 +2352,14 @@ if __name__ == "__main__":
     results, single_group = analyze_zip(zip_path)
 
     dashboard_file = "metric_dashboard.html"
-    png_dir = os.path.join(os.path.dirname(dashboard_file), "export_png")
+    export_dir = os.path.join(os.path.dirname(dashboard_file), "export_graphics")
 
-    export_selected_metric_pngs_bandlimited(results, zip_path, png_dir)
-    replace_folder_in_zip(zip_path, png_dir, arc_folder="export_png")
+    export_selected_metric_pngs_bandlimited(results, zip_path, export_dir)
 
-    if os.path.isdir(png_dir):
-        shutil.rmtree(png_dir)
+    png_dir=os.path.join(export_dir,"png")
+    eps_dir=os.path.join(export_dir,"eps")
 
-    # save_dashboard(results, zip_path, single_group)
+    replace_folder_in_zip(zip_path, png_dir, arc_folder="export_graphics/png")
+    replace_folder_in_zip(zip_path, eps_dir, arc_folder="export_graphics/eps")
+    if os.path.isdir(export_dir):
+        shutil.rmtree(export_dir)
