@@ -15,9 +15,70 @@ import plotly.graph_objects as go
 from matplotlib import gridspec
 from matplotlib.ticker import FormatStrFormatter
 
-PIPELINE_ROOT = "/Pipelines/arterial_waveform_shape_metrics"
+PIPELINE_ROOT = "/Pipelines/waveform_shape_metrics"
 VALID_METRIC_FOLDERS = ["raw", "bandlimited"]
 VALID_VESSELS = ["artery", "vein"]
+PIPELINE_BASE_CANDIDATES_WINDKESSEL = [
+    "/Pipelines/windkessel_rc/bandlimited",
+    "/Pipelines/Windkessel_RC/bandlimited",
+]
+
+METHODS_WINDKESSEL = ["arx", "freq", "time_integral"]
+METRICS_WINDKESSEL = ["tau", "Deltat"]
+
+METHOD_MARKERS_WINDKESSEL = {
+    "arx": "D",
+    "freq": "o",
+    "time_integral": "^",
+}
+
+
+def extract_group_name(root: str, tmpdir: str) -> str:
+    return "all" if root == tmpdir else os.path.basename(root)
+
+
+def iter_h5_files_in_zip(zip_path):
+    """
+    Itère sur tous les fichiers .h5 d'un zip.
+    Yield: (tmpdir, root, group_name, filename, fullpath)
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with zipfile.ZipFile(zip_path, "r") as z:
+            z.extractall(tmpdir)
+
+        for root, _, files in os.walk(tmpdir):
+            h5_files = sorted(f for f in files if f.endswith(".h5"))
+            if not h5_files:
+                continue
+
+            group_name = extract_group_name(root, tmpdir)
+
+            for file in h5_files:
+                yield tmpdir, root, group_name, file, os.path.join(root, file)
+
+
+def build_group_order(groups):
+    groups = sorted(groups)
+    control_name = find_control_group_name(groups)
+    if control_name in groups:
+        groups = [g for g in groups if g != control_name] + [control_name]
+    return groups
+
+
+def find_existing_base_path(h5file, candidates):
+    for base in candidates:
+        if base in h5file:
+            return base
+    return None
+
+
+def read_dataset_safe(h5file, path):
+    if path not in h5file:
+        return None
+    arr = np.asarray(h5file[path], dtype=float)
+    if arr.shape == ():
+        return np.array([float(arr)], dtype=float)
+    return np.ravel(arr).astype(float)
 
 
 def get_metrics_base_path(vessel: str) -> str:
@@ -26,6 +87,37 @@ def get_metrics_base_path(vessel: str) -> str:
 
 def get_mode_path(vessel: str, mode: str) -> str:
     return f"{PIPELINE_ROOT}/{vessel}/global/{mode}"
+
+
+def extract_windkessel_rows_from_h5(h5_path, group_name):
+    rows = []
+
+    with h5py.File(h5_path, "r") as f:
+        base = find_existing_base_path(f, PIPELINE_BASE_CANDIDATES_WINDKESSEL)
+        if base is None:
+            return rows
+
+        for method in METHODS_WINDKESSEL:
+            for metric in METRICS_WINDKESSEL:
+                dataset_path = f"{base}/{method}/{metric}"
+                values = read_dataset_safe(f, dataset_path)
+                if values is None:
+                    continue
+
+                values = values[np.isfinite(values)]
+
+                for v in values:
+                    rows.append(
+                        {
+                            "file": os.path.basename(h5_path),
+                            "group": group_name,
+                            "method": method,
+                            "metric": metric,
+                            "value": float(v),
+                        }
+                    )
+
+    return rows
 
 
 SELECTED_METRICS_PNG = {
@@ -68,6 +160,8 @@ SELECTED_METRICS_PNG = {
     "E_slope",
     "E_curv",
     "t50_over_T",
+    "t_delta_phi_over_T",
+    "t_delta_phi_n_over_T",
 }
 METRIC_ALIASES = {
     "Hspec": "spectral_entropy",
@@ -115,6 +209,8 @@ LATEX_FORMULAS = {
     "W50_over_T": r"$W_{50}/T$",
     "W80_over_T": r"$W_{80}/T$",
     "N_H_over_T": r"$N_H/T$",
+    "t_delta_phi_n_over_T": r"$t_{\Delta\phi_n}/T$",
+    "t_delta_phi_over_T": r"$t_{\Delta\phi}/T$",
 }
 
 
@@ -132,6 +228,120 @@ def extract_graphics_support(h5_path, vessel="artery", mode="bandlimited"):
             out[key] = arr.item() if arr.shape == () else arr
 
     return out
+
+
+def analyze_zip_windkessel(zip_path):
+    rows = []
+
+    for _, _, group_name, _, h5_path in iter_h5_files_in_zip(zip_path):
+        try:
+            rows.extend(extract_windkessel_rows_from_h5(h5_path, group_name))
+        except Exception as e:
+            print(f"Erreur avec {h5_path}: {e}")
+
+    return pd.DataFrame(rows)
+
+
+def plot_windkessel_metric_for_method(df, metric, method, out_path):
+    sub = df[(df["metric"] == metric) & (df["method"] == method)].copy()
+
+    if sub.empty:
+        print(f"Aucune donnée pour metric={metric}, method={method}")
+        return
+
+    groups = build_group_order(sub["group"].dropna().unique().tolist())
+    x_pos = {g: i for i, g in enumerate(groups)}
+
+    fig, ax = plt.subplots(figsize=(10, 7), dpi=200)
+    ax.set_facecolor("#f2f2f2")
+
+    control_name = find_control_group_name(groups)
+    if control_name in x_pos:
+        cx = x_pos[control_name]
+        ax.axvspan(cx - 0.5, cx + 0.5, color="#d9d9d9", zorder=0)
+
+    rng = np.random.default_rng(0)
+
+    for group in groups:
+        gdf = sub[sub["group"] == group]
+        if gdf.empty:
+            continue
+
+        x = np.full(len(gdf), x_pos[group], dtype=float) + rng.normal(
+            0, 0.05, size=len(gdf)
+        )
+
+        ax.scatter(
+            x,
+            gdf["value"].values,
+            s=22,
+            color="black",
+            zorder=2,
+        )
+
+    stats = sub.groupby("group")["value"].agg(["mean", "std"]).reset_index()
+
+    for _, row in stats.iterrows():
+        group = row["group"]
+        mean_val = row["mean"]
+        std_val = row["std"] if np.isfinite(row["std"]) else 0.0
+
+        ax.errorbar(
+            x_pos[group],
+            mean_val,
+            yerr=std_val,
+            fmt=METHOD_MARKERS_WINDKESSEL[method],
+            color="black",
+            ecolor="black",
+            elinewidth=1.8,
+            capsize=6,
+            markersize=13,
+            markerfacecolor="none",
+            markeredgecolor="black",
+            markeredgewidth=2.2,
+            zorder=3,
+        )
+
+    ax.set_xticks([x_pos[g] for g in groups])
+    ax.set_xticklabels(groups, fontsize=17)
+
+    ylabel = "tau (s)" if metric == "tau" else "Deltat (s)"
+    ax.set_ylabel(ylabel, fontsize=16)
+    ax.set_title(f"Windkessel bandlimited - {metric} - {method}", fontsize=18, pad=15)
+
+    ax.grid(True, axis="y", color="gray", linewidth=0.8)
+    ax.tick_params(axis="y", labelsize=14)
+
+    plt.tight_layout()
+    fig.savefig(out_path, bbox_inches="tight")
+    plt.close(fig)
+
+
+def export_windkessel_figures(zip_path, out_dir, format="png"):
+    os.makedirs(out_dir, exist_ok=True)
+
+    df = analyze_zip_windkessel(zip_path)
+
+    if df.empty:
+        print("Aucune donnée Windkessel trouvée dans le zip.")
+        return
+
+    for metric in METRICS_WINDKESSEL:
+        for method in METHODS_WINDKESSEL:
+            filename = f"windkessel_{metric}_{method}.{format}"
+            out_path = os.path.join(out_dir, filename)
+
+            plot_windkessel_metric_for_method(
+                df,
+                metric,
+                method,
+                out_path,
+            )
+
+    # CSV uniquement une fois (png par exemple)
+    if format == "png":
+        csv_path = os.path.join(out_dir, "windkessel_values.csv")
+        df.to_csv(csv_path, index=False)
 
 
 def select_support_beat(support, beat_idx):
@@ -301,7 +511,7 @@ def compute_group_delta_phi_stats(zip_path, vessel="artery", mode="bandlimited")
     return group_stats
 
 
-def plot_group_delta_phi_stats(ax, group_stats, group_name):
+def plot_group_delta_phi_stats(ax, group_stats, group_name, vessel="artery"):
     if group_name not in group_stats:
         ax.text(0.5, 0.5, f"No data for {group_name}", ha="center", va="center")
         ax.axis("off")
@@ -315,7 +525,7 @@ def plot_group_delta_phi_stats(ax, group_stats, group_name):
         hs,
         mu,
         width=0.7,
-        color="#EC5241",
+        color="#EC5241" if vessel == "artery" else "#414CEC",
         edgecolor="black",
     )
     ax.axhline(0, color="black", linewidth=1.0)
@@ -397,7 +607,10 @@ def find_control_group_name(groups):
     return None
 
 
-def plot_metric_illustration(ax, metric, support, path=None):
+def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
+    main_color = "#EC5241" if vessel == "artery" else "#414CEC"
+    fill_color1 = "#f9c2ca" if vessel == "artery" else "#A2A7F4"
+    fill_color2 = "#F2CCC7" if vessel == "artery" else "#CCB6EB"
     if not support:
         ax.text(0.5, 0.5, "No graphics support", ha="center", va="center")
         ax.axis("off")
@@ -500,7 +713,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
         vmin = float(support["vmin"])
         ri = float(support["RI"])
 
-        ax.plot(tau, sig, linewidth=3, color="#EC5241")
+        ax.plot(tau, sig, linewidth=3, color=main_color)
         hline_label(vmax, "Vmax", va="bottom")
         hline_label(vmin, "Vmin", va="top")
         info_box([f"RI = {ri:.3f}"])
@@ -514,7 +727,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
             info_box("Missing Delta_DTI support")
             return
         x_lin = np.linspace(0, 1, n)
-        ax.plot(x_lin, a, color="#EC5241")
+        ax.plot(x_lin, a, color=main_color)
         ax.fill_between(
             x_lin,
             0,
@@ -522,7 +735,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
             where=np.isfinite(a),
             hatch="//",
             facecolor="none",
-            edgecolor="#f9c2ca",
+            edgecolor=fill_color1,
         )
         info_box([rf"$\Delta_{{DTI}} = {delta_dti:.3f}$"])
 
@@ -535,7 +748,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
         vmean = float(support["vmean"])
         pi = float(support["PI"])
 
-        ax.plot(tau, sig, linewidth=3, color="#EC5241")
+        ax.plot(tau, sig, linewidth=3, color=main_color)
         hline_label(vmax, "Vmax", va="bottom")
         hline_label(vmin, "Vmin", va="top")
         hline_label(vmean, r"$\overline{{v}}$", va="bottom")
@@ -546,7 +759,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
     elif metric == "mu_t_over_T":
         mu_over_T = float(support["mu_t_over_T"])
 
-        ax.plot(tau, sig, linewidth=3, color="#EC5241")
+        ax.plot(tau, sig, linewidth=3, color=main_color)
         vline_to_curve(
             mu_over_T, tau, sig, y0=0.0, color="black", linestyles="--", linewidth=1
         )
@@ -558,7 +771,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
         mu = float(support["mu_t_over_T"])
         sigma = float(support["sigma_t_over_T"])
 
-        ax.plot(tau, sig, linewidth=3, color="#EC5241")
+        ax.plot(tau, sig, linewidth=3, color=main_color)
         vline_to_curve(
             mu, tau, sig, y0=0, color="#000000", linestyles="--", linewidth=1.5
         )
@@ -566,7 +779,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
         left = max(0.0, mu - sigma)
         right = min(1.0, mu + sigma)
         mask = (tau >= left) & (tau <= right)
-        ax.fill_between(tau, 0, sig, where=mask & np.isfinite(sig), color="#F2CCC7")
+        ax.fill_between(tau, 0, sig, where=mask & np.isfinite(sig), color=fill_color2)
 
         vline_to_curve(
             mu - sigma, tau, sig, y0=0, color="#000000", linestyles="--", linewidth=1
@@ -584,7 +797,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
         t50 = float(support["t50_over_T"])
         t90 = float(support["t90_over_T"])
 
-        ax.plot(tau, C, linewidth=3, color="#EC5241")
+        ax.plot(tau, C, linewidth=3, color=main_color)
         for tq in [t10, t50, t90]:
             yq = _y_at(tq, tau, C)
             if np.isfinite(yq):
@@ -598,20 +811,20 @@ def plot_metric_illustration(ax, metric, support, path=None):
     elif metric == "R_VTI":
         ratio = float(support["R_VTI"])
 
-        ax.plot(tau, sig, linewidth=3, color="#EC5241")
+        ax.plot(tau, sig, linewidth=3, color=main_color)
         ax.fill_between(
             tau[tau < 0.5],
             0,
             sig[tau < 0.5],
             where=np.isfinite(sig[tau < 0.5]),
-            color="#f9c2ca",
+            color=fill_color1,
         )
         ax.fill_between(
             tau[tau >= 0.5],
             0,
             sig[tau >= 0.5],
             where=np.isfinite(sig[tau >= 0.5]),
-            color="#F2CCC7",
+            color=fill_color2,
         )
         vline_to_curve(
             0.5, tau, sig, y0=0.0, color="#000000", linestyles="--", linewidth=1
@@ -627,7 +840,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
         sf = float(support["SF_VTI"])
         tau_k = 1.0 / 3.0
 
-        ax.plot(tau, sig, linewidth=3, color="#EC5241")
+        ax.plot(tau, sig, linewidth=3, color=main_color)
         ax.fill_between(
             tau[tau < tau_k],
             0,
@@ -657,7 +870,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
     elif metric == "t_max_over_T":
         t_max_over_T = float(support["t_max_over_T"])
 
-        ax.plot(tau, sig, linewidth=3, color="#EC5241")
+        ax.plot(tau, sig, linewidth=3, color=main_color)
         vline_to_curve(
             t_max_over_T, tau, sig, y0=0.0, color="black", linestyles="--", linewidth=1
         )
@@ -668,7 +881,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
     elif metric == "t_min_over_T":
         t_min_over_T = float(support["t_min_over_T"])
 
-        ax.plot(tau, sig, linewidth=3, color="#EC5241")
+        ax.plot(tau, sig, linewidth=3, color=main_color)
         vline_to_curve(
             t_min_over_T, tau, sig, y0=0.0, color="black", linestyles="--", linewidth=1
         )
@@ -681,7 +894,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
         t_min_over_T = float(support["t_min_over_T"])
         delta_t = float(support["Delta_t_over_T"])
 
-        ax.plot(tau, sig, linewidth=3, color="#EC5241")
+        ax.plot(tau, sig, linewidth=3, color=main_color)
         vline_to_curve(
             t_max_over_T, tau, sig, y0=0.0, color="black", linestyles="--", linewidth=1
         )
@@ -695,7 +908,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
     elif metric == "t_up_over_T":
         t_up = float(support["t_up_over_T"])
 
-        ax.plot(tau, sig, linewidth=3, color="#EC5241")
+        ax.plot(tau, sig, linewidth=3, color=main_color)
         vline_to_curve(
             t_up, tau, sig, y0=0.0, color="black", linestyles="--", linewidth=1
         )
@@ -706,7 +919,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
     elif metric == "t_down_over_T":
         t_down = float(support["t_down_over_T"])
 
-        ax.plot(tau, sig, linewidth=3, color="#EC5241")
+        ax.plot(tau, sig, linewidth=3, color=main_color)
         vline_to_curve(
             t_down, tau, sig, y0=0.0, color="black", linestyles="--", linewidth=1
         )
@@ -722,7 +935,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
         t_min = float(support["t_min_over_T"])
         s_decay = float(support["S_decay"])
 
-        ax.plot(tau, sig, linewidth=3, color="#EC5241")
+        ax.plot(tau, sig, linewidth=3, color=main_color)
         a = (vmin - vmax) / ((t_min - t_max) + EPS)
         b = vmax - a * t_max
         x_line = np.linspace(0, 1, sig.size)
@@ -742,7 +955,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
         s_rise = float(support["slope_rise_normalized"])
         idx = int(np.nanargmax(dvdt))
 
-        ax.plot(tau, sig, linewidth=3, color="#EC5241")
+        ax.plot(tau, sig, linewidth=3, color=main_color)
         vline_to_curve(
             tau[idx], tau, sig, y0=0.0, color="black", linestyles="--", linewidth=1.0
         )
@@ -754,7 +967,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
         s_fall = float(support["slope_fall_normalized"])
         idx = int(np.nanargmin(dvdt))
 
-        ax.plot(tau, sig, linewidth=3, color="#EC5241")
+        ax.plot(tau, sig, linewidth=3, color=main_color)
         vline_to_curve(
             tau[idx], tau, sig, y0=0.0, color="black", linestyles="--", linewidth=1.0
         )
@@ -769,9 +982,9 @@ def plot_metric_illustration(ax, metric, support, path=None):
         i0 = int(support.get("late_window_start_idx", int(np.floor(0.75 * n))))
         i1 = int(support.get("late_window_end_idx", int(np.ceil(0.90 * n))))
 
-        ax.plot(tau, sig, linewidth=3, color="#EC5241")
+        ax.plot(tau, sig, linewidth=3, color=main_color)
         ax.fill_between(
-            tau[i0:i1], 0, sig[i0:i1], where=np.isfinite(sig[i0:i1]), color="#F2CCC7"
+            tau[i0:i1], 0, sig[i0:i1], where=np.isfinite(sig[i0:i1]), color=fill_color2
         )
         hline_label(vmax, "Vmax", va="bottom")
         ax.axhline(vend, linestyle="--", linewidth=1, color="black")
@@ -794,7 +1007,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
         mu = float(support["mu_t_over_T"])
         sigma = float(support["sigma_t_over_T"])
 
-        ax.plot(tau, sig, linewidth=3, color="#EC5241")
+        ax.plot(tau, sig, linewidth=3, color=main_color)
         vline_to_curve(
             mu, tau, sig, y0=0, color="#000000", linestyles="--", linewidth=1.5
         )
@@ -828,7 +1041,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
         ax.plot(
             cumsum_h_interp[mask_i],
             cumsum_interp[mask_i],
-            color="#EC5241",
+            color=main_color,
             linewidth=2,
         )
 
@@ -867,7 +1080,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
         ax.plot(
             cumsum_h_interp[mask_i],
             cumsum_interp[mask_i],
-            color="#EC5241",
+            color=main_color,
             linewidth=2,
         )
 
@@ -891,7 +1104,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
         mu_h = float(support["mu_h"])
         xh = np.arange(1, len(w_h) + 1)
         ax.set_yscale("log")
-        ax.bar(xh, w_h, width=0.8, color="#EC5241")
+        ax.bar(xh, w_h, width=0.8, color=main_color)
         ax.axvline(mu_h, linestyle="--", linewidth=1.2, color="black")
         info_box([rf"$\mu_h={mu_h:.3f}$", f"H={len(w_h)}"])
         ax.set_xlabel("Harmonic n (a.u.)", fontsize=14)
@@ -903,7 +1116,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
         sigma_h = float(support["sigma_h"])
         xh = np.arange(1, len(w_h) + 1)
         ax.set_yscale("log")
-        ax.bar(xh, w_h, width=0.8, color="#EC5241")
+        ax.bar(xh, w_h, width=0.8, color=main_color)
         ax.axvline(mu_h, linestyle="--", linewidth=1.2, color="black")
         ax.axvline(mu_h - sigma_h, linestyle=":", linewidth=1.0, color="black")
         ax.axvline(mu_h + sigma_h, linestyle=":", linewidth=1.0, color="black")
@@ -917,8 +1130,8 @@ def plot_metric_illustration(ax, metric, support, path=None):
         n_eff_over_t = float(support["N_eff_over_T"])
         n_eff = n_eff_over_t
 
-        ax.plot(tau, p, linewidth=3, color="#EC5241")
-        ax.fill_between(tau, 0, p, where=np.isfinite(p), color="#F2CCC7")
+        ax.plot(tau, p, linewidth=3, color=main_color)
+        ax.fill_between(tau, 0, p, where=np.isfinite(p), color=fill_color2)
 
         if metric == "N_eff":
             info_box([rf"$N_{{eff}} \approx {n_eff:.3f}$"])
@@ -950,7 +1163,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
             tau_dense,
             h1,
             linewidth=3,
-            color="#EC5241",
+            color=main_color,
             label=r"$A_1\cos(2\pi\tau+\phi_1)$",
         )
         ax.plot(
@@ -980,7 +1193,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
         rms = float(np.sqrt(np.nanmean(vb**2)))
         vb_tau = np.linspace(0.0, 1.0, len(vb), endpoint=False)
 
-        ax.plot(vb_tau, vb, linewidth=3, color="#EC5241")
+        ax.plot(vb_tau, vb, linewidth=3, color=main_color)
         hline_label(vmax, "Vmax", va="bottom")
         hline_label(rms, "RMS", va="top")
         info_box([f"H={len(harmonic_magnitudes)}", f"CF= {cf:.3f}"])
@@ -993,7 +1206,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
         ent = float(support["spectral_entropy"])
         xh = np.arange(1, hn + 1)
 
-        ax.bar(xh, p, width=0.8, color="#EC5241")
+        ax.bar(xh, p, width=0.8, color=main_color)
         ymax = float(np.nanmax(p)) if np.any(np.isfinite(p)) else 1.0
         ax.set_ylim(0, ymax * 1.35)
         uniform = 1.0 / hn if hn > 0 else np.nan
@@ -1022,7 +1235,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
         xh = np.arange(0, len(mags2))
 
         ax.set_yscale("log")
-        ax.bar(xh[: H_LOW_MAX + 1], mags2[: H_LOW_MAX + 1], color="#EC5241")
+        ax.bar(xh[: H_LOW_MAX + 1], mags2[: H_LOW_MAX + 1], color=main_color)
         ax.bar(xh[H_LOW_MAX:], mags2[H_LOW_MAX:], color="#cccccc")
         lines = [
             f"E_low = {e_low:.3g}",
@@ -1058,7 +1271,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
     # ax.bar(
     # xh[H_HIGH_MIN : H_HIGH_MAX + 1],
     # mags2[H_HIGH_MIN : H_HIGH_MAX + 1],
-    # color="#EC5241",)
+    # color=main_color,)
 
     # lines = [
     # f"E_high = {e_high:.3g}",
@@ -1074,7 +1287,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
     elif metric == "E_recon_H_MAX":
         e_recon = float(support["E_recon_H_MAX"])
 
-        ax.plot(tau, sig, linewidth=3, color="#EC5241", label="signal")
+        ax.plot(tau, sig, linewidth=3, color=main_color, label="signal")
         ax.plot(
             np.linspace(0.0, 1.0, len(vb), endpoint=False),
             vb,
@@ -1096,7 +1309,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
         t90 = float(support["t90_over_T"])
         q_t_skew = float(support["Q_t_skew"])
 
-        ax.plot(tau, C, linewidth=3, color="#EC5241")
+        ax.plot(tau, C, linewidth=3, color=main_color)
         for tq in [t10, t50, t90]:
             yq = _y_at(tq, tau, C)
             ax.vlines(tq, 0, yq, linestyle="--", linewidth=1, color="black")
@@ -1116,14 +1329,14 @@ def plot_metric_illustration(ax, metric, support, path=None):
         t75 = float(support["t75_over_T"])
         q_t_width = float(support["Q_t_width"])
 
-        ax.plot(tau, C, linewidth=3, color="#EC5241")
+        ax.plot(tau, C, linewidth=3, color=main_color)
         y25 = _y_at(t25, tau, C)
         y75 = _y_at(t75, tau, C)
         ax.vlines(t25, 0, y25, linestyle="--", linewidth=1, color="black")
         ax.vlines(t75, 0, y75, linestyle="--", linewidth=1, color="black")
         ax.hlines(y25, 0, t25, linestyle="--", linewidth=1, color="black")
         ax.hlines(y75, 0, t75, linestyle="--", linewidth=1, color="black")
-        ax.fill_between(tau, 0, C, where=(tau >= t25) & (tau <= t75), color="#F2CCC7")
+        ax.fill_between(tau, 0, C, where=(tau >= t25) & (tau <= t75), color=fill_color2)
 
         info_box(
             [rf"$Q_{{t_{{width}}}}={q_t_width:.3f}$", f"t25={t25:.3f}, t75={t75:.3f}"]
@@ -1141,12 +1354,12 @@ def plot_metric_illustration(ax, metric, support, path=None):
         q_t_skew = float(support["Q_t_skew"])
         r_q_t = float(support["R_Q_t"])
 
-        ax.plot(tau, C, linewidth=3, color="#EC5241")
+        ax.plot(tau, C, linewidth=3, color=main_color)
         for tq in [t10, t25, t50, t75, t90]:
             yq = _y_at(tq, tau, C)
             ax.vlines(tq, 0, yq, linestyle="--", linewidth=1, color="black")
             ax.hlines(yq, 0, tq, linestyle="--", linewidth=1, color="black")
-        ax.fill_between(tau, 0, C, where=(tau >= t25) & (tau <= t75), color="#F2CCC7")
+        ax.fill_between(tau, 0, C, where=(tau >= t25) & (tau <= t75), color=fill_color2)
 
         info_box(
             [
@@ -1164,7 +1377,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
         d90 = float(support["d90"])
         q_d_skew = float(support["Q_d_skew"])
 
-        ax.plot(tau, C, linewidth=3, color="#EC5241")
+        ax.plot(tau, C, linewidth=3, color=main_color)
         for tq, dq in [(0.1, d10), (0.5, d50), (0.9, d90)]:
             ax.vlines(tq, 0, dq, linestyle="--", linewidth=1, color="black")
             ax.hlines(dq, 0, tq, linestyle="--", linewidth=1, color="black")
@@ -1183,7 +1396,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
         d75 = float(support["d75"])
         q_d_width = float(support["Q_d_width"])
 
-        ax.plot(tau, C, linewidth=3, color="#EC5241")
+        ax.plot(tau, C, linewidth=3, color=main_color)
         ax.vlines(0.25, 0, d25, linestyle="--", linewidth=1, color="black")
         ax.vlines(0.75, 0, d75, linestyle="--", linewidth=1, color="black")
         ax.hlines(d25, 0, 0.25, linestyle="--", linewidth=1, color="black")
@@ -1191,7 +1404,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
 
         y_fill = np.linspace(d25, d75, 300)
         x_curve = np.interp(y_fill, C, tau)
-        ax.fill_betweenx(y_fill, 0, x_curve, color="#F2CCC7")
+        ax.fill_betweenx(y_fill, 0, x_curve, color=fill_color2)
 
         info_box(
             [rf"$Q_{{d_{{width}}}}={q_d_width:.3f}$", f"d25={d25:.3f}, d75={d75:.3f}"]
@@ -1209,14 +1422,14 @@ def plot_metric_illustration(ax, metric, support, path=None):
         q_d_skew = float(support["Q_d_skew"])
         r_q_d = float(support["R_Q_d"])
 
-        ax.plot(tau, C, linewidth=3, color="#EC5241")
+        ax.plot(tau, C, linewidth=3, color=main_color)
         for tq, dq in [(0.10, d10), (0.25, d25), (0.50, d50), (0.75, d75), (0.90, d90)]:
             ax.vlines(tq, 0, dq, linestyle="--", linewidth=1, color="black")
             ax.hlines(dq, 0, tq, linestyle="--", linewidth=1, color="black")
 
         y_fill = np.linspace(d25, d75, 300)
         x_curve = np.interp(y_fill, C, tau)
-        ax.fill_betweenx(y_fill, 0, x_curve, color="#F2CCC7")
+        ax.fill_betweenx(y_fill, 0, x_curve, color=fill_color2)
 
         info_box(
             [
@@ -1235,9 +1448,9 @@ def plot_metric_illustration(ax, metric, support, path=None):
         i0 = int(support.get("late_window_start_idx", int(np.floor(0.75 * n))))
         i1 = int(support.get("late_window_end_idx", int(np.ceil(0.90 * n))))
 
-        ax.plot(tau, sig, linewidth=3, color="#EC5241")
+        ax.plot(tau, sig, linewidth=3, color=main_color)
         ax.fill_between(
-            tau[i0:i1], 0, sig[i0:i1], where=np.isfinite(sig[i0:i1]), color="#F2CCC7"
+            tau[i0:i1], 0, sig[i0:i1], where=np.isfinite(sig[i0:i1]), color=fill_color2
         )
         hline_label(vmean, r"$\overline{{v}}$", va="bottom")
         ax.axhline(vend, linestyle="--", linewidth=1, color="black")
@@ -1258,7 +1471,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
     elif metric == "E_slope":
         e_slope = float(support["E_slope"])
         dvdt_norm = support["dvdt_norm"]
-        ax.plot(tau, sig, linewidth=3, color="#EC5241", label="signal")
+        ax.plot(tau, sig, linewidth=3, color=main_color, label="signal")
         ax2 = ax.twinx()
         ax2.plot(
             tau,
@@ -1277,7 +1490,7 @@ def plot_metric_illustration(ax, metric, support, path=None):
     # elif metric == "E_curv":
     # e_curv = float(support["E_curv"])
     # d2vdt2_norm = support["d2vdt2_norm"]
-    # ax.plot(tau, sig, linewidth=3, color="#EC5241", label="signal")
+    # ax.plot(tau, sig, linewidth=3, color=main_color, label="signal")
     # ax2 = ax.twinx()
     # ax2.plot(tau,d2vdt2_norm,linestyle="--",linewidth=1.5,color="black",label=r"$\ddot v^2$",)
     # ax2.set_yticks([])
@@ -1293,14 +1506,14 @@ def plot_metric_illustration(ax, metric, support, path=None):
 
         mask = np.isfinite(sig) & (sig >= thr)
 
-        ax.plot(tau, sig, linewidth=3, color="#EC5241")
+        ax.plot(tau, sig, linewidth=3, color=main_color)
         ax.axhline(thr, linestyle="--", linewidth=1, color="black")
         ax.fill_between(
             tau,
             0,
             sig,
             where=mask,
-            color="#F2CCC7",
+            color=fill_color2,
             interpolate=True,
         )
 
@@ -1319,14 +1532,14 @@ def plot_metric_illustration(ax, metric, support, path=None):
 
         mask = np.isfinite(sig) & (sig >= thr)
 
-        ax.plot(tau, sig, linewidth=3, color="#EC5241")
+        ax.plot(tau, sig, linewidth=3, color=main_color)
         ax.axhline(thr, linestyle="--", linewidth=1, color="black")
         ax.fill_between(
             tau,
             0,
             sig,
             where=mask,
-            color="#F2CCC7",
+            color=fill_color2,
             interpolate=True,
         )
 
@@ -1344,13 +1557,13 @@ def plot_metric_illustration(ax, metric, support, path=None):
 
         p = sig / (m0 + EPS)
 
-        ax.plot(tau, p, linewidth=3, color="#EC5241")
+        ax.plot(tau, p, linewidth=3, color=main_color)
         ax.fill_between(
             tau,
             0,
             p,
             where=np.isfinite(p),
-            color="#F2CCC7",
+            color=fill_color2,
             interpolate=True,
         )
 
@@ -1362,7 +1575,9 @@ def plot_metric_illustration(ax, metric, support, path=None):
         info_box(f"No illustration for {metric}")
 
 
-def export_selected_metric_pngs_bandlimited(all_results, zip_path, out_dir):
+def export_selected_metric_pngs_bandlimited(
+    all_results, zip_path, out_dir, format="png"
+):
     os.makedirs(out_dir, exist_ok=True)
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -1485,7 +1700,7 @@ def export_selected_metric_pngs_bandlimited(all_results, zip_path, out_dir):
                     path = h5_index.get(g, {}).get(chosen, None) if chosen else None
 
                     if metric == "phase_locking_residual":
-                        plot_group_delta_phi_stats(ax, group_delta_phi_stats, g)
+                        plot_group_delta_phi_stats(ax, group_delta_phi_stats, g, vessel)
                         ax.set_title(f"{g}", fontsize=14)
 
                     elif path and os.path.exists(path):
@@ -1497,7 +1712,10 @@ def export_selected_metric_pngs_bandlimited(all_results, zip_path, out_dir):
 
                         if support:
                             support_beat = select_support_beat(support, 0)
-                            plot_metric_illustration(ax, metric, support_beat, path)
+
+                            plot_metric_illustration(
+                                ax, metric, support_beat, path, vessel
+                            )
                             ax.set_title(f"{g}", fontsize=14)
 
                             ymin, ymax = ax.get_ylim()
@@ -1526,9 +1744,17 @@ def export_selected_metric_pngs_bandlimited(all_results, zip_path, out_dir):
                     c = j % 2
                     ax_empty = fig.add_subplot(right[r, c])
                     ax_empty.axis("off")
+                if format == "png":
+                    png_path = os.path.join(
+                        out_dir, f"{metric}_bandlimited_{vessel}.png"
+                    )
+                    fig.savefig(png_path, bbox_inches="tight")
+                if format == "eps":
+                    eps_path = os.path.join(
+                        out_dir, f"{metric}_bandlimited_{vessel}.eps"
+                    )
+                    fig.savefig(eps_path, bbox_inches="tight")
 
-                png_path = os.path.join(out_dir, f"{metric}_bandlimited_{vessel}.eps")
-                fig.savefig(png_path, bbox_inches="tight")
                 plt.close(fig)
 
 
@@ -1888,6 +2114,7 @@ def extract_mean_support_per_file(h5_path, vessel="artery", mode="bandlimited"):
                 "harmonic_weights",
                 "harmonic_phases",
                 "delta_phi_all",
+                "t_delta_phi_n_over_T",
             }:
                 out[k] = np.nanmean(arr, axis=0)
             else:
@@ -2130,12 +2357,23 @@ body {
     # -----------------------------
     # export PNGs
     # -----------------------------
+    wk_png_dir = os.path.join(os.path.dirname(dashboard_file), "export_png")
+    wk_eps_dir = os.path.join(os.path.dirname(dashboard_file), "export_eps")
+
+    export_windkessel_figures(original_zip, wk_png_dir, format="png")
+    export_windkessel_figures(original_zip, wk_eps_dir, format="eps")
     png_dir = os.path.join(os.path.dirname(dashboard_file), "export_png")
-    export_selected_metric_pngs_bandlimited(all_results, original_zip, png_dir)
-    print("PNGs exportés dans :", png_dir)
+    export_selected_metric_pngs_bandlimited(all_results, original_zip, png_dir, "png")
+
     replace_folder_in_zip(original_zip, png_dir, arc_folder="export_png")
+
     if os.path.isdir(png_dir):
         shutil.rmtree(png_dir)
+    eps_dir = os.path.join(os.path.dirname(dashboard_file), "export_eps")
+    export_selected_metric_pngs_bandlimited(all_results, original_zip, eps_dir, "eps")
+    replace_folder_in_zip(original_zip, eps_dir, arc_folder="export_eps")
+    if os.path.isdir(eps_dir):
+        shutil.rmtree(eps_dir)
 
     # -----------------------------
     # signaux moyens par vessel / mode
@@ -2315,16 +2553,26 @@ body {
 
 if __name__ == "__main__":
     zip_path = choose_zip()
-
-    results, single_group = analyze_zip(zip_path)
-
     dashboard_file = "metric_dashboard.html"
+    results, single_group = analyze_zip(zip_path)
+    wk_png_dir = os.path.join(os.path.dirname(dashboard_file), "export_png")
+    wk_eps_dir = os.path.join(os.path.dirname(dashboard_file), "export_eps")
+
+    export_windkessel_figures(zip_path, wk_png_dir, format="png")
+    export_windkessel_figures(zip_path, wk_eps_dir, format="eps")
+
     png_dir = os.path.join(os.path.dirname(dashboard_file), "export_png")
 
-    export_selected_metric_pngs_bandlimited(results, zip_path, png_dir)
+    export_selected_metric_pngs_bandlimited(results, zip_path, png_dir, "png")
     replace_folder_in_zip(zip_path, png_dir, arc_folder="export_png")
 
     if os.path.isdir(png_dir):
         shutil.rmtree(png_dir)
+    eps_dir = os.path.join(os.path.dirname(dashboard_file), "export_eps")
 
+    export_selected_metric_pngs_bandlimited(results, zip_path, eps_dir, "eps")
+    replace_folder_in_zip(zip_path, eps_dir, arc_folder="export_eps")
+
+    if os.path.isdir(eps_dir):
+        shutil.rmtree(eps_dir)
     # save_dashboard(results, zip_path, single_group)

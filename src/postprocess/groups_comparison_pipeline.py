@@ -21,12 +21,14 @@ from .core.base import (
         "waveform shape metrics."
     ),
     required_deps=["matplotlib>=3.8", "pandas>=2.1", "plotly>=5.18"],
-    required_pipelines=["arterial_waveform_shape_metrics"],
+    required_pipelines=["waveform_shape_metrics"],
 )
 class GraphicsDashboardPostprocess(BatchPostprocess):
     def run(self, context: PostprocessContext) -> PostprocessResult:
         if not context.processed_files:
-            raise ValueError("No processed HDF5 outputs are available for postprocessing.")
+            raise ValueError(
+                "No processed HDF5 outputs are available for postprocessing."
+            )
 
         output_dir = context.output_dir.expanduser().resolve()
         if not output_dir.exists() or not output_dir.is_dir():
@@ -42,12 +44,16 @@ class GraphicsDashboardPostprocess(BatchPostprocess):
             cwd = Path.cwd()
             try:
                 os.chdir(temp_root)
-                all_results, single_group = groups_comparison_dashboard.analyze_zip(str(temp_zip))
+                all_results, single_group = groups_comparison_dashboard.analyze_zip(
+                    str(temp_zip)
+                )
                 if not all_results:
                     raise ValueError(
                         "No compatible pipeline metrics were found for the dashboard."
                     )
-                groups_comparison_dashboard.save_dashboard(all_results, str(temp_zip), single_group)
+                groups_comparison_dashboard.save_dashboard(
+                    all_results, str(temp_zip), single_group
+                )
             finally:
                 os.chdir(cwd)
 
@@ -61,7 +67,13 @@ class GraphicsDashboardPostprocess(BatchPostprocess):
                 member_prefix="export_png/",
                 output_dir=output_dir,
             )
-
+            png_paths.append(
+                self._extract_prefix(
+                    zip_path=temp_zip,
+                    member_prefix="export_eps/",
+                    output_dir=output_dir,
+                )
+            )
         created_paths = [str(dashboard_path), *[str(path) for path in png_paths]]
         summary = f"Generated dashboard and {len(png_paths)} PNG illustration(s)."
         return PostprocessResult(summary=summary, generated_paths=created_paths)
