@@ -752,9 +752,7 @@ class ArterialSegExample(ProcessPipeline):
             np.nansum(np.where(np.isfinite(v), v, 0.0) * (z**3)) / (m0 + self.eps)
         )
 
-    def _derivative_energy_slope(
-        self, v: np.ndarray, Tbeat: float, m0: float
-    ) -> float:
+    def _derivative_energy_slope(self, v: np.ndarray, Tbeat: float, m0: float) -> float:
         """
         E_slope = T^3 / M0^2 * int (dv/dt)^2 dt
         """
@@ -784,7 +782,12 @@ class ArterialSegExample(ProcessPipeline):
 
         if n <= 1 or (not np.isfinite(Tbeat)) or Tbeat <= 0:
             return {}
+        k0, k1 = self._late_window_indices(v.size)
+        if k1 <= k0:
+            return np.nan
 
+        tail = np.asarray(v[k0:k1], dtype=float)
+        vend = self._safe_nanmean(tail)
         vv = np.where(np.isfinite(v), v, np.nan)
         m0_sum = float(np.nansum(vv))
         if m0_sum <= 0:
@@ -894,6 +897,7 @@ class ArterialSegExample(ProcessPipeline):
             "H_MAX": np.asarray(self.H_MAX, dtype=int),
             "H_LOW_MAX": np.asarray(self.H_LOW_MAX, dtype=int),
             "E_total": np.asarray(E_total, dtype=float),
+            "vend": np.asarray(vend, dtype=float),
             "E_low": np.asarray(E_low, dtype=float),
             "signal_mean": np.asarray(vv, dtype=float),
             "tau": np.asarray(tau, dtype=float),
@@ -956,6 +960,7 @@ class ArterialSegExample(ProcessPipeline):
             "vb": np.full((n_t, n_beats), np.nan, dtype=float),
             "m0": np.full((n_beats,), np.nan),
             "E_total": np.full((n_beats,), np.nan, dtype=float),
+            "vend": np.full((n_beats,), np.nan, dtype=float),
             "E_low": np.full((n_beats,), np.nan, dtype=float),
             "dvdt": np.full((n_t, n_beats), np.nan, dtype=float),
             "dvdt_norm": np.full((n_t, n_beats), np.nan, dtype=float),
@@ -1016,6 +1021,7 @@ class ArterialSegExample(ProcessPipeline):
             out["vmax"][beat_idx] = s["vmax"]
             out["vmin"][beat_idx] = s["vmin"]
             out["vmean"][beat_idx] = s["vmean"]
+            out["vend"][beat_idx] = s["vend"]
             out["harmonic_energies"][beat_idx, :] = s["harmonic_energies"]
             out["harmonic_energies_weights"][beat_idx, :] = s[
                 "harmonic_energies_weights"
@@ -1109,7 +1115,7 @@ class ArterialSegExample(ProcessPipeline):
 
         rho_h_90 = self._rho_h_percent_from_harmonics(V, 0.90)
         rho_h_95 = self._rho_h_percent_from_harmonics(V, 0.95)
-        crest_factor = self._crest_factor(vv)
+        # crest_factor = self._crest_factor(vv)
         spectral_entropy = self._spectral_entropy_from_harmonics(V)
         ph = self._harmonic_phases(V, Tbeat)
 
@@ -1267,7 +1273,7 @@ class ArterialSegExample(ProcessPipeline):
             ["t_down_over_T", "t_down/T", ""],
             ["Delta_DTI", "int_0^1(d*(tau)-tau)dtau", ""],
             ["gamma_t", "sum(w(t)*((t-mu)/sigma)^3)/sum(w(t))", ""],
-            ["crest_factor", "V_max/V_RMS", ""],
+            # ["crest_factor", "V_max/V_RMS", ""],
             ["spectral_entropy", "-sum(pn*log(pn+eps))", ""],
             ["delta_phi2", "wrap(phi2-2*phi1)", "rad"],
             ["t_delta_phi_over_T", "median_n(Delta_phi_n/(2*pi*n))", ""],
@@ -1407,9 +1413,7 @@ class ArterialSegExample(ProcessPipeline):
             "by_segment/bandlimited_segment",
             seg_b,
             {
-                "definition": [
-                    "per-segment metrics stored as (beat, branch, radius)"
-                ],
+                "definition": ["per-segment metrics stored as (beat, branch, radius)"],
                 "segment_indexing": [seg_note],
             },
         )
@@ -1417,9 +1421,7 @@ class ArterialSegExample(ProcessPipeline):
             "by_segment/raw_segment",
             seg_r,
             {
-                "definition": [
-                    "per-segment metrics stored as (beat, branch, radius)"
-                ],
+                "definition": ["per-segment metrics stored as (beat, branch, radius)"],
                 "segment_indexing": [seg_note],
             },
         )
