@@ -26,6 +26,8 @@ def get_metrics_base_path(vessel: str) -> str:
 
 def get_mode_path(vessel: str, mode: str) -> str:
     return f"{PIPELINE_ROOT}/{vessel}/global/{mode}"
+
+
 SELECTED_METRICS_PNG = {
     "mu_t_over_T",
     "RI",
@@ -34,6 +36,7 @@ SELECTED_METRICS_PNG = {
     "SF_VTI",
     "sigma_t_over_T",
     "W50_over_T",
+    "W80_over_T",
     "E_low_over_E_total",
     "t_max_over_T",
     "t_min_over_T",
@@ -42,9 +45,7 @@ SELECTED_METRICS_PNG = {
     "slope_fall_normalized",
     "t_up_over_T",
     "t_down_over_T",
-    "S_decay",
     "crest_factor",
-    "R_SD",
     "Delta_DTI",
     "gamma_t",
     "spectral_entropy",
@@ -66,7 +67,7 @@ SELECTED_METRICS_PNG = {
     "v_end_over_v_mean",
     "E_slope",
     "E_curv",
-    "t50_over_T"
+    "t50_over_T",
 }
 METRIC_ALIASES = {
     "Hspec": "spectral_entropy",
@@ -112,6 +113,7 @@ LATEX_FORMULAS = {
     "E_slope": r"$E_{\mathrm{slope}}$",
     "phase_locking_residual": r"$E_{\phi}$",
     "W50_over_T": r"$W_{50}/T$",
+    "W80_over_T": r"$W_{80}/T$",
     "N_H_over_T": r"$N_H/T$",
 }
 
@@ -255,7 +257,9 @@ def compute_group_delta_phi_stats(zip_path, vessel="artery", mode="bandlimited")
             for file in h5_files:
                 h5_path = os.path.join(root, file)
                 try:
-                    support = extract_graphics_support(h5_path, vessel=vessel, mode=mode)
+                    support = extract_graphics_support(
+                        h5_path, vessel=vessel, mode=mode
+                    )
                     if not support:
                         continue
 
@@ -860,7 +864,6 @@ def plot_metric_illustration(ax, metric, support, path=None):
         mask_i = np.isfinite(cumsum_interp) & np.isfinite(cumsum_h_interp)
         mask_d = np.isfinite(cumsum) & np.isfinite(cumsum_h)
 
-        
         ax.plot(
             cumsum_h_interp[mask_i],
             cumsum_interp[mask_i],
@@ -1042,32 +1045,31 @@ def plot_metric_illustration(ax, metric, support, path=None):
 
         ax.set_xlabel("Harmonic n (a.u.)", fontsize=14)
         ax.set_ylabel(r"$|V_n|^2 \: (a.u.)$", fontsize=14, labelpad=12)
-        
-    
-    #elif metric == "E_high_over_E_total":
-        #mags2 = harmonic_energies
-        #ax.set_yscale("log")
-        #e_high = float(support["E_high"])
-        #e_total = float(support["E_total"])
-        #ratio = float(support["E_high_over_E_total"])
-        #xh = np.arange(0, len(mags2))
 
-        #ax.bar(xh[1:H_HIGH_MIN], mags2[1:H_HIGH_MIN], color="#cccccc")
-        #ax.bar(
-            #xh[H_HIGH_MIN : H_HIGH_MAX + 1],
-            #mags2[H_HIGH_MIN : H_HIGH_MAX + 1],
-            #color="#EC5241",)
+    # elif metric == "E_high_over_E_total":
+    # mags2 = harmonic_energies
+    # ax.set_yscale("log")
+    # e_high = float(support["E_high"])
+    # e_total = float(support["E_total"])
+    # ratio = float(support["E_high_over_E_total"])
+    # xh = np.arange(0, len(mags2))
 
-        #lines = [
-            #f"E_high = {e_high:.3g}",
-            #f"E_total = {e_total:.3g}",
-            #rf"$E_{{high}}/E_{{total}} = {ratio:.3f}$",
-        #]
-        #text = "\n".join([str(x) for x in lines if x is not None and str(x) != ""])
+    # ax.bar(xh[1:H_HIGH_MIN], mags2[1:H_HIGH_MIN], color="#cccccc")
+    # ax.bar(
+    # xh[H_HIGH_MIN : H_HIGH_MAX + 1],
+    # mags2[H_HIGH_MIN : H_HIGH_MAX + 1],
+    # color="#EC5241",)
 
-        #ax.text(0.5,0.98,text,transform=ax.transAxes,ha="left",va="top",fontsize=12,bbox=dict(facecolor="white", edgecolor="none", pad=1.0),clip_on=True,)
-        #ax.set_xlabel("Harmonic n (a.u.)", fontsize=14)
-        #ax.set_ylabel(r"$|V_n|^2 \: (a.u.)$", fontsize=14, labelpad=12)
+    # lines = [
+    # f"E_high = {e_high:.3g}",
+    # f"E_total = {e_total:.3g}",
+    # rf"$E_{{high}}/E_{{total}} = {ratio:.3f}$",
+    # ]
+    # text = "\n".join([str(x) for x in lines if x is not None and str(x) != ""])
+
+    # ax.text(0.5,0.98,text,transform=ax.transAxes,ha="left",va="top",fontsize=12,bbox=dict(facecolor="white", edgecolor="none", pad=1.0),clip_on=True,)
+    # ax.set_xlabel("Harmonic n (a.u.)", fontsize=14)
+    # ax.set_ylabel(r"$|V_n|^2 \: (a.u.)$", fontsize=14, labelpad=12)
 
     elif metric == "E_recon_H_MAX":
         e_recon = float(support["E_recon_H_MAX"])
@@ -1272,17 +1274,17 @@ def plot_metric_illustration(ax, metric, support, path=None):
         ax.set_xlabel("rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
 
-    #elif metric == "E_curv":
-        #e_curv = float(support["E_curv"])
-        #d2vdt2_norm = support["d2vdt2_norm"]
-        #ax.plot(tau, sig, linewidth=3, color="#EC5241", label="signal")
-        #ax2 = ax.twinx()
-        #ax2.plot(tau,d2vdt2_norm,linestyle="--",linewidth=1.5,color="black",label=r"$\ddot v^2$",)
-        #ax2.set_yticks([])
-        #ax2.set_ylabel(r"$\ddot v^2$", fontsize=12)
-        #info_box([rf"$E_{{curv}}={e_curv:.4f}$"])
-        #ax.set_xlabel("rectified time : t/T", fontsize=14)
-        #ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
+    # elif metric == "E_curv":
+    # e_curv = float(support["E_curv"])
+    # d2vdt2_norm = support["d2vdt2_norm"]
+    # ax.plot(tau, sig, linewidth=3, color="#EC5241", label="signal")
+    # ax2 = ax.twinx()
+    # ax2.plot(tau,d2vdt2_norm,linestyle="--",linewidth=1.5,color="black",label=r"$\ddot v^2$",)
+    # ax2.set_yticks([])
+    # ax2.set_ylabel(r"$\ddot v^2$", fontsize=12)
+    # info_box([rf"$E_{{curv}}={e_curv:.4f}$"])
+    # ax.set_xlabel("rectified time : t/T", fontsize=14)
+    # ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
 
     elif metric == "W50_over_T":
         w50 = float(support["W50_over_T"])
@@ -1305,6 +1307,32 @@ def plot_metric_illustration(ax, metric, support, path=None):
         info_box(
             [
                 rf"$W_{{50}}/T = {w50:.3f}$",
+                rf"$0.5\,V_{{max}} = {thr:.3f}$",
+            ]
+        )
+        ax.set_xlabel("rectified time : t/T", fontsize=14)
+        ax.set_ylabel(r"$v_b \: (mm/s)$", fontsize=14, labelpad=12)
+    elif metric == "W80_over_T":
+        w80 = float(support["W80_over_T"])
+        vmax = float(support["vmax"])
+        thr = 0.8 * vmax
+
+        mask = np.isfinite(sig) & (sig >= thr)
+
+        ax.plot(tau, sig, linewidth=3, color="#EC5241")
+        ax.axhline(thr, linestyle="--", linewidth=1, color="black")
+        ax.fill_between(
+            tau,
+            0,
+            sig,
+            where=mask,
+            color="#F2CCC7",
+            interpolate=True,
+        )
+
+        info_box(
+            [
+                rf"$W_{{50}}/T = {w80:.3f}$",
                 rf"$0.5\,V_{{max}} = {thr:.3f}$",
             ]
         )
@@ -2118,7 +2146,9 @@ body {
 
     for vessel in VALID_VESSELS:
         for mode in ["raw", "bandlimited"]:
-            group_curves = compute_group_mean_signals(original_zip, vessel=vessel, mode=mode)
+            group_curves = compute_group_mean_signals(
+                original_zip, vessel=vessel, mode=mode
+            )
 
             if not group_curves:
                 continue
@@ -2210,7 +2240,9 @@ body {
 
         with open(dashboard_file, "a", encoding="utf-8") as f:
             f.write('<div class="metric-block">')
-            f.write(f'<div class="metric-title">{metric + " = " + str(definition)}</div>')
+            f.write(
+                f'<div class="metric-title">{metric + " = " + str(definition)}</div>'
+            )
             f.write('<div class="row">')
 
         for vessel in VALID_VESSELS:
