@@ -3,7 +3,7 @@ import numpy as np
 from .core.base import ProcessPipeline, ProcessResult, registerPipeline, with_attrs
 
 
-@registerPipeline(name="arterial_waveform_shape_metrics")
+@registerPipeline(name="waveform_shape_metrics")
 class ArterialSegExample(ProcessPipeline):
     """
     Waveform-shape metrics on per-beat, per-branch, per-radius velocity waveforms.

@@ -21,7 +21,7 @@ from .core.base import (
         "metrics computed from by-segment arterial waveform shape metrics."
     ),
     required_deps=["pandas>=2.1"],
-    required_pipelines=["arterial_waveform_shape_metrics"],
+    required_pipelines=["waveform_shape_metrics"],
 )
 class GraphicsDashboardPostprocess(BatchPostprocess):
     def run(self, context: PostprocessContext) -> PostprocessResult:
