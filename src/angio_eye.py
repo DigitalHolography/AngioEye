@@ -1,9 +1,11 @@
 import os
 import shutil
+import sys
 import tempfile
 import threading
 import time
 import tkinter as tk
+import tkinter.font as tkfont
 import zipfile
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -18,6 +20,12 @@ from app_settings import (
 )
 
 try:
+    from tkinterdnd2 import DND_FILES, TkinterDnD
+except ImportError:  # optional dependency
+    DND_FILES = None
+    TkinterDnD = None
+
+try:
     import sv_ttk
 except ImportError:  #  optional dependency
     sv_ttk = None
@@ -30,6 +38,8 @@ from postprocess import (
     PostprocessDescriptor,
     load_postprocess_catalog,
 )
+
+_BaseAppTk = TkinterDnD.Tk if TkinterDnD is not None else tk.Tk
 
 
 class _Tooltip:
@@ -74,11 +84,12 @@ class _Tooltip:
             self.tipwindow = None
 
 
-class ProcessApp(tk.Tk):
+class ProcessApp(_BaseAppTk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("HDF5 Process")
+        self.title("AngioEye")
         self.settings_store = AppSettingsStore()
+        self.ui_mode = self.settings_store.load_ui_mode()
         self.pipeline_registry: dict[str, PipelineDescriptor] = {}
         self.pipeline_catalog: dict[str, PipelineDescriptor] = {}
         self.pipeline_rows: list[PipelineDescriptor] = []
@@ -95,28 +106,45 @@ class ProcessApp(tk.Tk):
         self.batch_output_var = tk.StringVar(value=str(Path.cwd()))
         self.batch_zip_var = tk.BooleanVar(value=False)
         self.batch_zip_name_var = tk.StringVar(value="outputs.zip")
+        self.batch_progress_var = tk.DoubleVar(value=0.0)
         self.pipeline_library_summary_var = tk.StringVar(value="")
         self.postprocess_library_summary_var = tk.StringVar(value="")
+        self.minimal_input_path_var = tk.StringVar(value="No input selected")
+        self.minimal_output_path_var = tk.StringVar(value=str(Path.cwd()))
+        self.minimal_output_name_var = tk.StringVar(value="Output name: -")
         self._settings_warning_shown = False
+        self._progress_total_units = 1.0
+        self._progress_completed_units = 0.0
+        self._window_icon_image: tk.PhotoImage | None = None
+        self._minimal_logo_image: tk.PhotoImage | None = None
+        self._minimal_title_font: tkfont.Font | None = None
 
         self._set_initial_window_size()
         self._apply_theme()
+        self._set_window_icon()
         self._build_ui()
+        self._install_drop_targets()
+        self.batch_input_var.trace_add("write", self._on_batch_paths_changed)
+        self.batch_output_var.trace_add("write", self._on_batch_paths_changed)
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._register_pipelines()
         self._register_postprocesses()
         self._reset_batch_output()
+        self._update_minimal_path_labels()
+        self._apply_ui_mode(self.ui_mode, persist=False)
 
     def _set_initial_window_size(self) -> None:
+        width, height, min_width, min_height = self._window_size_for_mode(
+            self.ui_mode
+        )
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
-        width = max(980, min(1320, screen_width - 80))
-        height = max(820, min(1020, screen_height - 80))
         width = min(width, screen_width)
         height = min(height, screen_height)
         x = max((screen_width - width) // 2, 0)
         y = max((screen_height - height) // 2, 0)
         self.geometry(f"{width}x{height}+{x}+{y}")
-        self.minsize(min(980, width), min(760, height))
+        self.minsize(min_width, min_height)
 
     def _apply_theme(self) -> None:
         """
@@ -163,30 +191,169 @@ class ProcessApp(tk.Tk):
         self._accent_color = accent
 
     def _build_ui(self) -> None:
+        self._build_menu()
+
         container = ttk.Frame(self, padding=10)
         container.pack(fill="both", expand=True)
-        container.columnconfigure(0, weight=1)
-        container.rowconfigure(0, weight=1)
+        self.main_container = container
 
-        self.notebook = ttk.Notebook(container)
+        self.minimal_view = ttk.Frame(container, padding=10)
+        self.advanced_view = ttk.Frame(container, padding=10)
+
+        self._build_minimal_view(self.minimal_view)
+        self._build_advanced_view(self.advanced_view)
+
+    def _build_menu(self) -> None:
+        self.ui_mode_var = tk.StringVar(value=self.ui_mode)
+        menu_bar = tk.Menu(self)
+        view_menu = tk.Menu(menu_bar, tearoff=False)
+        view_menu.add_radiobutton(
+            label="Minimal UI",
+            value="minimal",
+            variable=self.ui_mode_var,
+            command=lambda: self._apply_ui_mode(self.ui_mode_var.get()),
+        )
+        view_menu.add_radiobutton(
+            label="Advanced UI",
+            value="advanced",
+            variable=self.ui_mode_var,
+            command=lambda: self._apply_ui_mode(self.ui_mode_var.get()),
+        )
+        menu_bar.add_cascade(label="View", menu=view_menu)
+        self.configure(menu=menu_bar)
+
+    def _build_minimal_view(self, parent: ttk.Frame) -> None:
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(0, weight=1)
+        parent.grid_anchor("center")
+
+        content = ttk.Frame(parent, padding=(24, 24))
+        content.grid(row=0, column=0)
+        content.columnconfigure(0, minsize=420)
+        self.minimal_content = content
+
+        self.minimal_title_label = ttk.Label(
+            content,
+            text="AngioEye",
+            font=self._get_minimal_title_font(),
+        )
+        self.minimal_title_label.grid(row=0, column=0, pady=(0, 10))
+
+        minimal_logo = self._load_scaled_logo_image(max_width=360, max_height=144)
+        if minimal_logo is not None:
+            self._minimal_logo_image = minimal_logo
+            self.minimal_logo_label = ttk.Label(content, image=self._minimal_logo_image)
+            self.minimal_logo_label.grid(row=1, column=0, pady=(0, 18))
+
+        self.minimal_browse_button = ttk.Button(
+            content,
+            text="Browse .h5 or zip archive",
+            command=self.choose_batch_file,
+        )
+        self.minimal_browse_button.grid(row=2, column=0, pady=(0, 10))
+        self.minimal_input_path_label = tk.Label(
+            content,
+            textvariable=self.minimal_input_path_var,
+            bg=self._bg_color,
+            fg=self._muted_fg,
+            justify="center",
+            wraplength=420,
+        )
+        self.minimal_input_path_label.grid(row=3, column=0, pady=(0, 18), sticky="ew")
+
+        self.minimal_output_button = ttk.Button(
+            content,
+            text="Select output folder",
+            command=self.choose_batch_output,
+        )
+        self.minimal_output_button.grid(row=4, column=0, pady=(0, 10))
+        self.minimal_output_path_label = tk.Label(
+            content,
+            textvariable=self.minimal_output_path_var,
+            bg=self._bg_color,
+            fg=self._muted_fg,
+            justify="center",
+            wraplength=420,
+        )
+        self.minimal_output_path_label.grid(
+            row=5, column=0, pady=(0, 6), sticky="ew"
+        )
+        self.minimal_output_name_label = tk.Label(
+            content,
+            textvariable=self.minimal_output_name_var,
+            bg=self._bg_color,
+            fg=self._text_fg,
+            justify="center",
+            wraplength=420,
+        )
+        self.minimal_output_name_label.grid(
+            row=6, column=0, pady=(0, 18), sticky="ew"
+        )
+
+        self.minimal_run_button = ttk.Button(content, text="Run", command=self.run_batch)
+        self.minimal_run_button.grid(row=7, column=0, pady=(0, 18))
+
+        self.minimal_progress = ttk.Progressbar(
+            content,
+            orient="horizontal",
+            mode="determinate",
+            maximum=100,
+            variable=self.batch_progress_var,
+            length=340,
+        )
+        self.minimal_progress.grid(row=8, column=0, sticky="ew")
+
+    def _get_minimal_title_font(self) -> tkfont.Font:
+        if self._minimal_title_font is None:
+            title_font = tkfont.nametofont("TkDefaultFont").copy()
+            base_size = int(title_font.cget("size")) or 10
+            title_font.configure(size=base_size * 2)
+            self._minimal_title_font = title_font
+        return self._minimal_title_font
+
+    def _build_advanced_view(self, parent: ttk.Frame) -> None:
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(0, weight=1)
+
+        self.notebook = ttk.Notebook(parent)
         self.notebook.grid(row=0, column=0, sticky="nsew")
 
         self.batch_tab = ttk.Frame(self.notebook, padding=10)
+        self.export_tab = ttk.Frame(self.notebook, padding=10)
         self.pipeline_library_tab = ttk.Frame(self.notebook, padding=10)
         self.postprocess_library_tab = ttk.Frame(self.notebook, padding=10)
-        self.notebook.add(self.batch_tab, text="Batch")
+        self.notebook.add(self.batch_tab, text="Run")
+        self.notebook.add(self.export_tab, text="Export")
         self.notebook.add(self.pipeline_library_tab, text="Pipeline Library")
         self.notebook.add(self.postprocess_library_tab, text="Postprocess Library")
 
         self._build_batch_tab(self.batch_tab)
+        self._build_export_tab(self.export_tab)
         self._build_pipeline_library_tab(self.pipeline_library_tab)
         self._build_postprocess_library_tab(self.postprocess_library_tab)
+
+    def _install_drop_targets(self) -> None:
+        if DND_FILES is None:
+            return
+        self._register_drop_target_tree(self)
+
+    def _register_drop_target_tree(self, widget: tk.Misc) -> None:
+        if DND_FILES is None:
+            return
+        try:
+            widget.drop_target_register(DND_FILES)
+            widget.dnd_bind("<<Drop>>", self._on_input_drop)
+        except (AttributeError, tk.TclError):
+            pass
+
+        for child in widget.winfo_children():
+            self._register_drop_target_tree(child)
 
     def _build_batch_tab(self, parent: ttk.Frame) -> None:
         parent.columnconfigure(1, weight=1)
         parent.columnconfigure(2, weight=0)
         parent.columnconfigure(3, weight=0)
-        parent.rowconfigure(6, weight=1)
+        parent.rowconfigure(4, weight=1)
 
         ttk.Label(parent, text="Input (folder / .h5 / .hdf5 / .zip)").grid(
             row=0, column=0, sticky="w"
@@ -325,40 +492,32 @@ class ProcessApp(tk.Tk):
             ),
         )
 
-        ttk.Label(parent, text="Output folder").grid(
-            row=3, column=0, sticky="w", pady=(8, 0)
-        )
-        batch_output_entry = ttk.Entry(parent, textvariable=self.batch_output_var)
-        batch_output_entry.grid(row=3, column=1, sticky="ew", padx=(0, 4), pady=(8, 0))
-        ttk.Button(parent, text="Browse", command=self.choose_batch_output).grid(
-            row=3, column=2, sticky="w", pady=(8, 0)
-        )
+        controls = ttk.Frame(parent)
+        controls.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(10, 4))
+        controls.columnconfigure(3, weight=1)
 
-        run_btn = ttk.Button(parent, text="Run batch", command=self.run_batch)
-        run_btn.grid(row=4, column=0, sticky="w", pady=(10, 4))
-        ttk.Checkbutton(
-            parent,
-            text="Zip outputs after run",
-            variable=self.batch_zip_var,
-            command=self._toggle_zip_name_visibility,
-        ).grid(row=4, column=1, sticky="w", pady=(10, 4))
-
-        # Archive name placed on its own row to avoid resizing the log/list area.
-        self.batch_zip_label = ttk.Label(parent, text="Archive name")
-        self.batch_zip_label.grid(row=5, column=0, sticky="w", pady=(2, 8), padx=(0, 4))
-        self.batch_zip_entry = ttk.Entry(
-            parent, textvariable=self.batch_zip_name_var, width=28
+        run_btn = ttk.Button(controls, text="Run batch", command=self.run_batch)
+        run_btn.grid(row=0, column=0, sticky="w")
+        ttk.Button(
+            controls,
+            text="Open export tab",
+            command=self.open_export_tab,
+        ).grid(row=0, column=1, sticky="w", padx=(8, 0))
+        self.advanced_progress = ttk.Progressbar(
+            controls,
+            orient="horizontal",
+            mode="determinate",
+            maximum=100,
+            variable=self.batch_progress_var,
+            length=320,
         )
-        self.batch_zip_entry.grid(
-            row=5, column=1, columnspan=3, sticky="w", pady=(2, 8)
-        )
-        self._toggle_zip_name_visibility()
+        self.advanced_progress.grid(row=0, column=3, sticky="e")
 
         ttk.Label(parent, text="Batch log").grid(
-            row=6, column=0, sticky="nw", pady=(8, 2)
+            row=4, column=0, sticky="nw", pady=(8, 2)
         )
         batch_output_frame = ttk.Frame(parent)
-        batch_output_frame.grid(row=6, column=1, columnspan=3, sticky="nsew")
+        batch_output_frame.grid(row=4, column=1, columnspan=3, sticky="nsew")
         batch_output_frame.columnconfigure(0, weight=1)
         batch_output_frame.rowconfigure(0, weight=1)
         self.batch_output = tk.Text(
@@ -375,6 +534,325 @@ class ProcessApp(tk.Tk):
         self.batch_output.configure(yscrollcommand=batch_output_scroll.set)
         self.batch_output.grid(row=0, column=0, sticky="nsew")
         batch_output_scroll.grid(row=0, column=1, sticky="ns")
+
+    def _build_export_tab(self, parent: ttk.Frame) -> None:
+        parent.columnconfigure(1, weight=1)
+
+        ttk.Label(
+            parent,
+            text=(
+                "Export settings stay hidden from the minimal UI. "
+                "For a loaded .zip, the default archive is recreated next to the input."
+            ),
+            wraplength=760,
+        ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 12))
+
+        ttk.Label(parent, text="Output folder").grid(row=1, column=0, sticky="w")
+        batch_output_entry = ttk.Entry(parent, textvariable=self.batch_output_var)
+        batch_output_entry.grid(row=1, column=1, sticky="ew", padx=(0, 4))
+        ttk.Button(parent, text="Browse", command=self.choose_batch_output).grid(
+            row=1, column=2, sticky="w"
+        )
+
+        ttk.Checkbutton(
+            parent,
+            text="Zip outputs after run",
+            variable=self.batch_zip_var,
+            command=self._toggle_zip_name_visibility,
+        ).grid(row=2, column=0, columnspan=3, sticky="w", pady=(12, 4))
+
+        self.batch_zip_label = ttk.Label(parent, text="Archive name")
+        self.batch_zip_label.grid(row=3, column=0, sticky="w", pady=(2, 0))
+        self.batch_zip_entry = ttk.Entry(
+            parent, textvariable=self.batch_zip_name_var, width=28
+        )
+        self.batch_zip_entry.grid(
+            row=3, column=1, columnspan=2, sticky="w", pady=(2, 0)
+        )
+
+        ttk.Button(
+            parent,
+            text="Export batch log",
+            command=self._export_batch_log,
+        ).grid(row=4, column=0, sticky="w", pady=(16, 0))
+        self._toggle_zip_name_visibility()
+
+    def _resource_roots(self) -> list[Path]:
+        roots: list[Path] = []
+        frozen_root = getattr(sys, "_MEIPASS", None)
+        if frozen_root:
+            roots.append(Path(frozen_root))
+        roots.append(Path(__file__).resolve().parents[1])
+        roots.append(Path.cwd())
+        return roots
+
+    def _resolve_logo_path(self) -> Path | None:
+        for root in self._resource_roots():
+            candidate = root / "Angioeye_logo.png"
+            if candidate.is_file():
+                return candidate
+        return None
+
+    def _load_logo_image(self) -> tk.PhotoImage | None:
+        logo_path = self._resolve_logo_path()
+        if logo_path is None:
+            return None
+        try:
+            return tk.PhotoImage(file=str(logo_path))
+        except tk.TclError:
+            return None
+
+    def _load_scaled_logo_image(
+        self,
+        *,
+        max_width: int,
+        max_height: int,
+    ) -> tk.PhotoImage | None:
+        image = self._load_logo_image()
+        if image is None:
+            return None
+
+        scale_x = max(1, (image.width() + max_width - 1) // max_width)
+        scale_y = max(1, (image.height() + max_height - 1) // max_height)
+        scale = max(scale_x, scale_y)
+        if scale > 1:
+            image = image.subsample(scale, scale)
+        return image
+
+    def _set_window_icon(self) -> None:
+        image = self._load_logo_image()
+        if image is None:
+            return
+        self._window_icon_image = image
+        try:
+            self.iconphoto(True, self._window_icon_image)
+        except tk.TclError:
+            pass
+
+    def _show_settings_warning(self, title: str, details: str) -> None:
+        if self._settings_warning_shown:
+            return
+        self._settings_warning_shown = True
+        messagebox.showwarning(title, details)
+
+    def _persist_ui_mode(self) -> None:
+        try:
+            self.settings_store.save_ui_mode(self.ui_mode)
+        except OSError as exc:
+            self._show_settings_warning(
+                "Settings not saved",
+                f"Could not save UI mode preference:\n{exc}",
+            )
+
+    def _window_size_for_mode(self, mode: str) -> tuple[int, int, int, int]:
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        if mode == "advanced":
+            width = max(980, min(1320, screen_width - 80))
+            height = max(820, min(1020, screen_height - 80))
+            min_width = min(980, width)
+            min_height = min(760, height)
+        else:
+            width = max(560, min(660, screen_width - 260))
+            height = max(420, min(520, screen_height - 260))
+            min_width = min(500, width)
+            min_height = min(360, height)
+        return width, height, min_width, min_height
+
+    def _ensure_window_size_for_mode(
+        self,
+        mode: str,
+        *,
+        force_target_size: bool = False,
+    ) -> None:
+        target_width, target_height, min_width, min_height = self._window_size_for_mode(
+            mode
+        )
+        self.minsize(min_width, min_height)
+
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        current_width = max(self.winfo_width(), 1)
+        current_height = max(self.winfo_height(), 1)
+        if (
+            not force_target_size
+            and current_width >= min_width
+            and current_height >= min_height
+        ):
+            return
+
+        if force_target_size:
+            if mode == "minimal":
+                try:
+                    if self.state() != "normal":
+                        self.state("normal")
+                except tk.TclError:
+                    pass
+                self.minimal_view.update_idletasks()
+                requested_width = self.minimal_view.winfo_reqwidth() + 24
+                requested_height = self.minimal_view.winfo_reqheight() + 24
+                width = min(
+                    max(requested_width, min_width),
+                    min(target_width, screen_width),
+                )
+                height = min(
+                    max(requested_height, min_height),
+                    min(target_height, screen_height),
+                )
+            else:
+                width = min(target_width, screen_width)
+                height = min(target_height, screen_height)
+        else:
+            width = min(max(current_width, min_width), screen_width)
+            height = min(max(current_height, min_height), screen_height)
+        x = max(min(self.winfo_x(), screen_width - width), 0)
+        y = max(min(self.winfo_y(), screen_height - height), 0)
+        self.geometry(f"{width}x{height}+{x}+{y}")
+
+    def _apply_ui_mode(self, mode: str, *, persist: bool = True) -> None:
+        normalized_mode = "advanced" if mode == "advanced" else "minimal"
+        previous_mode = self.ui_mode
+        self.ui_mode = normalized_mode
+        self.ui_mode_var.set(normalized_mode)
+
+        self.minimal_view.pack_forget()
+        self.advanced_view.pack_forget()
+        if normalized_mode == "advanced":
+            self.advanced_view.pack(fill="both", expand=True)
+        else:
+            self.minimal_view.pack(fill="both", expand=True)
+
+        self.update_idletasks()
+
+        self._ensure_window_size_for_mode(
+            normalized_mode,
+            force_target_size=(
+                normalized_mode == "minimal"
+                and (previous_mode == "advanced" or not persist)
+            ),
+        )
+        if persist:
+            self._persist_ui_mode()
+
+    def _on_close(self) -> None:
+        self._persist_ui_mode()
+        self.destroy()
+
+    def _on_batch_paths_changed(self, *_args) -> None:
+        self._update_minimal_path_labels()
+
+    def _handle_dropped_paths(self, dropped_paths: Sequence[Path]) -> bool:
+        for dropped_path in dropped_paths:
+            if (
+                dropped_path.is_file()
+                and dropped_path.suffix.lower() in {".h5", ".hdf5", ".zip"}
+            ):
+                self.batch_input_var.set(str(dropped_path))
+                self._apply_input_defaults(dropped_path)
+                self._log_batch(f"[INPUT] Drag and drop -> {dropped_path}")
+                return True
+        return False
+
+    def _on_input_drop(self, event) -> None:
+        raw_data = getattr(event, "data", "")
+        try:
+            dropped_values = self.tk.splitlist(raw_data)
+        except tk.TclError:
+            dropped_values = (raw_data,)
+
+        dropped_paths = [Path(value) for value in dropped_values if value]
+        if self._handle_dropped_paths(dropped_paths):
+            return
+
+        messagebox.showwarning(
+            "Unsupported drop",
+            "Drop a single .h5, .hdf5, or .zip file into the window.",
+        )
+
+    def _default_output_stem(self, input_path: Path) -> str:
+        if input_path.is_file():
+            base_name = input_path.stem
+        else:
+            base_name = input_path.name
+        base_name = base_name or "output"
+        return f"{base_name}_angioeye"
+
+    def _default_archive_name(self, input_path: Path) -> str:
+        return f"{self._default_output_stem(input_path)}.zip"
+
+    def _default_output_artifact_name(self, input_path: Path) -> str:
+        if input_path.is_file() and input_path.suffix.lower() == ".zip":
+            return self._default_archive_name(input_path)
+        return f"{self._default_output_stem(input_path)}.h5"
+
+    def _update_minimal_path_labels(self) -> None:
+        raw_value = (self.batch_input_var.get() or "").strip()
+        if not raw_value:
+            self.minimal_input_path_var.set("No input selected")
+            self.minimal_output_name_var.set("Output name: -")
+        else:
+            input_path = Path(raw_value)
+            self.minimal_input_path_var.set(str(input_path))
+            self.minimal_output_name_var.set(
+                f"Output name: {self._default_output_artifact_name(input_path)}"
+            )
+
+        output_value = (self.batch_output_var.get() or "").strip()
+        self.minimal_output_path_var.set(output_value or "No output folder selected")
+
+    def _reset_progress(self) -> None:
+        self._progress_total_units = 1.0
+        self._progress_completed_units = 0.0
+        self.batch_progress_var.set(0.0)
+        self.update_idletasks()
+
+    def _start_progress(self, total_units: float) -> None:
+        self._progress_total_units = max(float(total_units), 1.0)
+        self._progress_completed_units = 0.0
+        self.batch_progress_var.set(0.0)
+        self.update_idletasks()
+
+    def _set_progress_units(self, completed_units: float) -> None:
+        clamped_units = min(
+            max(float(completed_units), 0.0),
+            max(self._progress_total_units, 1.0),
+        )
+        self._progress_completed_units = clamped_units
+        self.batch_progress_var.set(
+            (clamped_units / max(self._progress_total_units, 1.0)) * 100.0
+        )
+        self.update_idletasks()
+
+    def _advance_progress(self, units: float = 1.0) -> None:
+        self._set_progress_units(self._progress_completed_units + units)
+
+    def _apply_input_defaults(self, input_path: Path) -> None:
+        output_dir = input_path if input_path.is_dir() else input_path.parent
+
+        self.batch_output_var.set(str(output_dir))
+        self.batch_zip_name_var.set(self._default_archive_name(input_path))
+        self.batch_zip_var.set(
+            input_path.is_file() and input_path.suffix.lower() == ".zip"
+        )
+        self._toggle_zip_name_visibility()
+        self._reset_progress()
+
+    def _minimal_output_filename_for_run(
+        self,
+        data_path: Path,
+        inputs: Sequence[Path],
+    ) -> str | None:
+        if self.ui_mode != "minimal":
+            return None
+        if self.batch_zip_var.get():
+            return None
+        if len(inputs) != 1:
+            return None
+        if not data_path.is_file():
+            return None
+        if data_path.suffix.lower() not in {".h5", ".hdf5"}:
+            return None
+        return self._default_output_artifact_name(data_path)
 
     def _build_pipeline_library_tab(self, parent: ttk.Frame) -> None:
         parent.columnconfigure(0, weight=1)
@@ -526,6 +1004,7 @@ class ProcessApp(tk.Tk):
         }
         self._populate_pipeline_checks(rows, selection_state)
         self._populate_pipeline_library(rows)
+        self._install_drop_targets()
 
     def _register_postprocesses(self) -> None:
         available, missing = load_postprocess_catalog()
@@ -541,6 +1020,7 @@ class ProcessApp(tk.Tk):
         }
         self._populate_postprocess_checks(rows, selection_state)
         self._populate_postprocess_library(rows)
+        self._install_drop_targets()
 
     def _descriptor_tooltip_text(self, descriptor) -> str:
         parts: list[str] = []
@@ -778,10 +1258,7 @@ class ProcessApp(tk.Tk):
         try:
             self.settings_store.save_pipeline_visibility(self.pipeline_visibility)
         except OSError as exc:
-            if self._settings_warning_shown:
-                return
-            self._settings_warning_shown = True
-            messagebox.showwarning(
+            self._show_settings_warning(
                 "Settings not saved",
                 f"Could not save pipeline visibility preferences:\n{exc}",
             )
@@ -790,10 +1267,7 @@ class ProcessApp(tk.Tk):
         try:
             self.settings_store.save_postprocess_visibility(self.postprocess_visibility)
         except OSError as exc:
-            if self._settings_warning_shown:
-                return
-            self._settings_warning_shown = True
-            messagebox.showwarning(
+            self._show_settings_warning(
                 "Settings not saved",
                 f"Could not save postprocess visibility preferences:\n{exc}",
             )
@@ -880,6 +1354,9 @@ class ProcessApp(tk.Tk):
 
     def open_batch_tab(self) -> None:
         self.notebook.select(self.batch_tab)
+
+    def open_export_tab(self) -> None:
+        self.notebook.select(self.export_tab)
 
     def show_all_pipelines_in_main_ui(self) -> None:
         self._set_all_pipeline_visibility(True)
@@ -980,6 +1457,7 @@ class ProcessApp(tk.Tk):
         )
         if path:
             self.batch_input_var.set(path)
+            self._apply_input_defaults(Path(path))
 
     def choose_batch_file(self) -> None:
         path = filedialog.askopenfilename(
@@ -989,6 +1467,7 @@ class ProcessApp(tk.Tk):
         )
         if path:
             self.batch_input_var.set(path)
+            self._apply_input_defaults(Path(path))
 
     def choose_batch_output(self) -> None:
         path = filedialog.askdirectory(
@@ -999,6 +1478,7 @@ class ProcessApp(tk.Tk):
             self.batch_output_var.set(path)
 
     def run_batch(self) -> None:
+        self._reset_progress()
         data_value = (self.batch_input_var.get() or "").strip()
         if not data_value:
             messagebox.showwarning(
@@ -1082,6 +1562,17 @@ class ProcessApp(tk.Tk):
                 tempdir.cleanup()
             return
 
+        total_progress_units = (
+            (len(inputs) * len(pipelines))
+            + len(postprocesses)
+            + (1 if self.batch_zip_var.get() else 0)
+        )
+        self._start_progress(total_progress_units)
+        minimal_output_filename = self._minimal_output_filename_for_run(
+            data_path,
+            inputs,
+        )
+
         work_output_dir: Path | None = None
         clean_work_output = False
         try:
@@ -1100,6 +1591,7 @@ class ProcessApp(tk.Tk):
                         pipelines,
                         output_dir,
                         output_relative_parent=relative_parent,
+                        output_filename=minimal_output_filename,
                     )
                     processed_outputs.append(combined_output)
                 except Exception as exc:  # noqa: BLE001
@@ -1129,9 +1621,12 @@ class ProcessApp(tk.Tk):
                         zip_name += ".zip"
                     self._log_batch("[ZIP] Preparing archive...")
                     last_progress_log = 0.0
+                    zip_progress_base = self._progress_completed_units
 
                     def _zip_progress(done: int, total: int, _rel_path: Path) -> None:
                         nonlocal last_progress_log
+                        fraction = 1.0 if total == 0 else done / total
+                        self._set_progress_units(zip_progress_base + fraction)
                         now = time.monotonic()
                         if done == total or (now - last_progress_log) >= 0.5:
                             pct = 100 if total == 0 else int((done * 100) / total)
@@ -1152,14 +1647,19 @@ class ProcessApp(tk.Tk):
                     summary_msg = f"ZIP archive: {zip_path}"
                     clean_work_output = True
                 except Exception as exc:  # noqa: BLE001
+                    self._set_progress_units(zip_progress_base + 1.0)
                     self._log_batch(f"[ZIP FAIL] {exc}")
                     messagebox.showerror(
                         "Zip failed", f"Could not create ZIP archive: {exc}"
                     )
                     summary_msg = f"Outputs stored under: {output_dir}"
             else:
-                summary_msg = f"Outputs stored under: {output_dir}"
+                if len(processed_outputs) == 1:
+                    summary_msg = f"Output file: {processed_outputs[0]}"
+                else:
+                    summary_msg = f"Outputs stored under: {output_dir}"
 
+            self._set_progress_units(self._progress_total_units)
             self._log_batch(f"Completed. {summary_msg}")
 
             if failures:
@@ -1223,6 +1723,7 @@ class ProcessApp(tk.Tk):
                 )
                 failures.append(error_message)
                 self._log_batch(f"[POST FAIL] {error_message}")
+                self._advance_progress()
                 continue
 
             summary = (result.summary or "").strip()
@@ -1230,6 +1731,7 @@ class ProcessApp(tk.Tk):
                 self._log_batch(f"[POST OK] {descriptor.name}: {summary}")
             else:
                 self._log_batch(f"[POST OK] {descriptor.name}")
+            self._advance_progress()
 
     def _toggle_zip_name_visibility(self) -> None:
         if self.batch_zip_var.get():
@@ -1273,15 +1775,26 @@ class ProcessApp(tk.Tk):
         pipelines: Sequence[PipelineDescriptor],
         output_root: Path,
         output_relative_parent: Path = Path("."),
+        output_filename: str | None = None,
     ) -> Path:
         target_dir = output_root / output_relative_parent
         target_dir.mkdir(parents=True, exist_ok=True)
-        combined_h5_out = target_dir / f"{h5_path.stem}_pipelines_result.h5"
+        if output_filename:
+            base_output_path = target_dir / output_filename
+            combined_h5_out = base_output_path
+        else:
+            combined_h5_out = target_dir / f"{h5_path.stem}_pipelines_result.h5"
         suffix = 1
         while combined_h5_out.exists():
-            combined_h5_out = (
-                target_dir / f"{h5_path.stem}_{suffix}_pipelines_result.h5"
-            )
+            if output_filename:
+                combined_h5_out = (
+                    target_dir
+                    / f"{base_output_path.stem}_{suffix}{base_output_path.suffix}"
+                )
+            else:
+                combined_h5_out = (
+                    target_dir / f"{h5_path.stem}_{suffix}_pipelines_result.h5"
+                )
             suffix += 1
 
         pipeline_results: list[tuple[str, ProcessResult]] = []
@@ -1296,6 +1809,7 @@ class ProcessApp(tk.Tk):
                     ) from exc
                 pipeline_results.append((pipeline.name, result))
                 self._log_batch(f"[OK] {h5_path.name} -> {pipeline.name}")
+                self._advance_progress()
         self._log_batch(f"[SAVE] Writing output file -> {combined_h5_out.name}")
         self._write_combined_results_with_ui_pump(
             pipeline_results=pipeline_results,
