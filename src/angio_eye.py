@@ -5,6 +5,7 @@ import tempfile
 import threading
 import time
 import tkinter as tk
+import tkinter.font as tkfont
 import zipfile
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -116,6 +117,7 @@ class ProcessApp(_BaseAppTk):
         self._progress_completed_units = 0.0
         self._window_icon_image: tk.PhotoImage | None = None
         self._minimal_logo_image: tk.PhotoImage | None = None
+        self._minimal_title_font: tkfont.Font | None = None
 
         self._set_initial_window_size()
         self._apply_theme()
@@ -230,7 +232,11 @@ class ProcessApp(_BaseAppTk):
         content.columnconfigure(0, minsize=420)
         self.minimal_content = content
 
-        self.minimal_title_label = ttk.Label(content, text="AngioEye")
+        self.minimal_title_label = ttk.Label(
+            content,
+            text="AngioEye",
+            font=self._get_minimal_title_font(),
+        )
         self.minimal_title_label.grid(row=0, column=0, pady=(0, 10))
 
         minimal_logo = self._load_scaled_logo_image(max_width=360, max_height=144)
@@ -296,6 +302,14 @@ class ProcessApp(_BaseAppTk):
             length=340,
         )
         self.minimal_progress.grid(row=8, column=0, sticky="ew")
+
+    def _get_minimal_title_font(self) -> tkfont.Font:
+        if self._minimal_title_font is None:
+            title_font = tkfont.nametofont("TkDefaultFont").copy()
+            base_size = int(title_font.cget("size")) or 10
+            title_font.configure(size=base_size * 2)
+            self._minimal_title_font = title_font
+        return self._minimal_title_font
 
     def _build_advanced_view(self, parent: ttk.Frame) -> None:
         parent.columnconfigure(0, weight=1)
