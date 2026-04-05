@@ -48,7 +48,7 @@ class WaveformHarmonicOrganization(ProcessPipeline):
     # ----------------------------
     eps = 1e-12
     H_MAX = 10
-    fundamental_abs_threshold = 1e-12
+    higher_harmonic_rel_threshold = 5e-2
 
     # ----------------------------
     # Helpers
@@ -157,6 +157,10 @@ class WaveformHarmonicOrganization(ProcessPipeline):
         out[valid] = N_eff[valid]
         return out
 
+    @staticmethod
+    def _count_true(mask: np.ndarray, axis=None) -> np.ndarray:
+        return np.sum(np.asarray(mask, dtype=np.uint8), axis=axis, dtype=np.int32)
+
     # ----------------------------
     # Harmonics
     # ----------------------------
@@ -169,8 +173,8 @@ class WaveformHarmonicOrganization(ProcessPipeline):
         Returns
         -------
         dict with:
-        - V: complex array (H+1, B, K, R), harmonics 0..H
-        - valid_waveform_mask: bool array (B, K, R)
+        - V_hbkr: complex array (H+1, B, K, R), harmonics 0..H
+        - valid_waveform_bkr_mask: bool array (B, K, R)
         - H: int
         """
         if v_block.ndim != 4:
@@ -187,8 +191,8 @@ class WaveformHarmonicOrganization(ProcessPipeline):
         if H < 1:
             raise ValueError(f"Need at least one harmonic, got H={H} for n_t={n_t}")
 
-        V = self._complex_nan((H + 1, n_beats, n_branches, n_radii))
-        valid_waveform_mask = np.zeros((n_beats, n_branches, n_radii), dtype=bool)
+        V_hbkr = self._complex_nan((H + 1, n_beats, n_branches, n_radii))
+        valid_waveform_bkr_mask = np.zeros((n_beats, n_branches, n_radii), dtype=bool)
 
         for b in range(n_beats):
             Tbeat = float(T_vec[b])
@@ -205,36 +209,58 @@ class WaveformHarmonicOrganization(ProcessPipeline):
                     if Vf.size < H + 1:
                         continue
 
-                    V[:, b, k, r] = Vf[: H + 1]
-                    valid_waveform_mask[b, k, r] = True
+                    V_hbkr[:, b, k, r] = Vf[: H + 1]
+                    valid_waveform_bkr_mask[b, k, r] = True
 
-        return {"V_hbkr": V, "H": H, "valid_waveform_mask_bkr": valid_waveform_mask}
+        return {
+            "V_hbkr": V_hbkr,
+            "H": H,
+            "valid_waveform_bkr_mask": valid_waveform_bkr_mask,
+        }
 
     def _normalized_harmonics(self, V_hbkr: np.ndarray) -> dict:
         """
-        Compute c_hbkr = V_hbkr / V_1bkr for h=2..H, whenever |V1| is sufficiently large.
+        Compute c_hbkr = V_hbkr / V_1bkr for h=2..H.
+
+        Validity rule:
+          |V_h| / |V_1| > higher_harmonic_rel_threshold
+
+        For numerical safety only, the denominator is guarded by eps.
         """
         H = int(V_hbkr.shape[0] - 1)
         n_beats, n_branches, n_radii = V_hbkr.shape[1:]
 
         if H < 2:
-            c = self._complex_nan((0, n_beats, n_branches, n_radii))
-            stable = np.zeros((0, n_beats, n_branches, n_radii), dtype=bool)
+            c_hbkr = self._complex_nan((0, n_beats, n_branches, n_radii))
+            valid_c_hbkr_mask = np.zeros((0, n_beats, n_branches, n_radii), dtype=bool)
             harmonics = np.asarray([], dtype=int)
-            return {"c_hbkr": c, "stable_mask_hbkr": stable, "harmonics": harmonics}
+            rel_amp_hbkr = np.full((0, n_beats, n_branches, n_radii), np.nan, dtype=float)
+            return {
+                "c_hbkr": c_hbkr,
+                "valid_c_hbkr_mask": valid_c_hbkr_mask,
+                "harmonics": harmonics,
+                "rel_amp_hbkr": rel_amp_hbkr,
+            }
 
         V1_bkr = V_hbkr[1]
-        stable_fundamental_bkr = self._isfinite_complex(V1_bkr) & (
-            np.abs(V1_bkr) > float(self.fundamental_abs_threshold)
-        )
+        valid_den_bkr = self._isfinite_complex(V1_bkr) & (np.abs(V1_bkr) > self.eps)
 
         c_hbkr = self._complex_nan((H - 1, n_beats, n_branches, n_radii))
-        stable_mask_hbkr = np.zeros((H - 1, n_beats, n_branches, n_radii), dtype=bool)
+        valid_c_hbkr_mask = np.zeros((H - 1, n_beats, n_branches, n_radii), dtype=bool)
+        rel_amp_hbkr = np.full((H - 1, n_beats, n_branches, n_radii), np.nan, dtype=float)
 
         for hi, h in enumerate(range(2, H + 1)):
             Vh_bkr = V_hbkr[h]
-            ok = stable_fundamental_bkr & self._isfinite_complex(Vh_bkr)
-            stable_mask_hbkr[hi] = ok
+            finite_h_bkr = self._isfinite_complex(Vh_bkr) & self._isfinite_complex(V1_bkr)
+
+            rel = np.full((n_beats, n_branches, n_radii), np.nan, dtype=float)
+            rel[finite_h_bkr] = (
+                np.abs(Vh_bkr[finite_h_bkr]) / (np.abs(V1_bkr[finite_h_bkr]) + self.eps)
+            )
+            rel_amp_hbkr[hi] = rel
+
+            ok = finite_h_bkr & valid_den_bkr & (rel > float(self.higher_harmonic_rel_threshold))
+            valid_c_hbkr_mask[hi] = ok
 
             c_h = self._complex_nan((n_beats, n_branches, n_radii))
             c_h[ok] = Vh_bkr[ok] / V1_bkr[ok]
@@ -243,22 +269,29 @@ class WaveformHarmonicOrganization(ProcessPipeline):
         harmonics = np.arange(2, H + 1, dtype=int)
         return {
             "c_hbkr": c_hbkr,
-            "stable_mask_hbkr": stable_mask_hbkr,
+            "valid_c_hbkr_mask": valid_c_hbkr_mask,
             "harmonics": harmonics,
+            "rel_amp_hbkr": rel_amp_hbkr,
         }
 
     # ----------------------------
     # Direct metrics
     # ----------------------------
-    def _beat_and_location_means(self, c_hbkr: np.ndarray) -> dict:
+    def _beat_and_location_means(self, c_hbkr: np.ndarray, valid_c_hbkr_mask: np.ndarray) -> dict:
         """
         c_hbkr shape: (H-1, B, K, R)
         """
         cbar_b_over_hkr = self._complex_mean(c_hbkr, axis=1)      # (H-1, K, R)
         cbar_kr_over_hb = self._complex_mean(c_hbkr, axis=(2, 3)) # (H-1, B)
+
+        valid_b_count_over_hkr = self._count_true(valid_c_hbkr_mask, axis=1)
+        valid_kr_count_over_hb = self._count_true(valid_c_hbkr_mask, axis=(2, 3))
+
         return {
             "cbar_b_over_hkr": cbar_b_over_hkr,
             "cbar_kr_over_hb": cbar_kr_over_hb,
+            "valid_b_count_over_hkr": valid_b_count_over_hkr,
+            "valid_kr_count_over_hb": valid_kr_count_over_hb,
         }
 
     def _coherence_metrics(self, c_hbkr: np.ndarray) -> dict:
@@ -269,17 +302,13 @@ class WaveformHarmonicOrganization(ProcessPipeline):
         den_b_over_hkr = np.sum(abs_c, axis=1)
         Gamma_b_over_hkr = np.full(den_b_over_hkr.shape, np.nan, dtype=float)
         ok_b = den_b_over_hkr > 0
-        Gamma_b_over_hkr[ok_b] = (
-            np.abs(sum_b_over_hkr[ok_b]) / den_b_over_hkr[ok_b]
-        )
+        Gamma_b_over_hkr[ok_b] = np.abs(sum_b_over_hkr[ok_b]) / den_b_over_hkr[ok_b]
 
         sum_kr_over_hb = np.sum(np.where(valid, c_hbkr, 0.0 + 0.0j), axis=(2, 3))
         den_kr_over_hb = np.sum(abs_c, axis=(2, 3))
         Gamma_kr_over_hb = np.full(den_kr_over_hb.shape, np.nan, dtype=float)
         ok_kr = den_kr_over_hb > 0
-        Gamma_kr_over_hb[ok_kr] = (
-            np.abs(sum_kr_over_hb[ok_kr]) / den_kr_over_hb[ok_kr]
-        )
+        Gamma_kr_over_hb[ok_kr] = np.abs(sum_kr_over_hb[ok_kr]) / den_kr_over_hb[ok_kr]
 
         return {
             "Gamma_b_over_hkr": Gamma_b_over_hkr,
@@ -287,7 +316,7 @@ class WaveformHarmonicOrganization(ProcessPipeline):
         }
 
     def _low_order_phase_metrics(
-        self, c_hbkr: np.ndarray, harmonics: np.ndarray
+        self, c_hbkr: np.ndarray, valid_c_hbkr_mask: np.ndarray, harmonics: np.ndarray
     ) -> dict:
         keep_mask = np.isin(harmonics, np.asarray([2, 3], dtype=int))
         low_harmonics = harmonics[keep_mask]
@@ -296,26 +325,26 @@ class WaveformHarmonicOrganization(ProcessPipeline):
         if n_low == 0:
             return {
                 "low_harmonics": low_harmonics,
-                "delta_phi_low_hbkr": np.full(
-                    (0,) + c_hbkr.shape[1:], np.nan, dtype=float
-                ),
+                "delta_phi_low_hbkr": np.full((0,) + c_hbkr.shape[1:], np.nan, dtype=float),
                 "Z_b_over_hkr": self._complex_nan((0, c_hbkr.shape[2], c_hbkr.shape[3])),
-                "PLV_b_over_hkr": np.full(
-                    (0, c_hbkr.shape[2], c_hbkr.shape[3]), np.nan, dtype=float
-                ),
+                "PLV_b_over_hkr": np.full((0, c_hbkr.shape[2], c_hbkr.shape[3]), np.nan, dtype=float),
                 "Z_kr_over_hb": self._complex_nan((0, c_hbkr.shape[1])),
                 "PLV_kr_over_hb": np.full((0, c_hbkr.shape[1]), np.nan, dtype=float),
+                "valid_b_count_over_hkr": np.zeros((0, c_hbkr.shape[2], c_hbkr.shape[3]), dtype=np.int32),
+                "valid_kr_count_over_hb": np.zeros((0, c_hbkr.shape[1]), dtype=np.int32),
             }
 
         c_low_hbkr = c_hbkr[keep_mask]
+        valid_low_hbkr_mask = valid_c_hbkr_mask[keep_mask]
         delta_phi_low_hbkr = np.angle(c_low_hbkr)
 
         Z_b_over_hkr = self._complex_nan((n_low, c_hbkr.shape[2], c_hbkr.shape[3]))
-        PLV_b_over_hkr = np.full(
-            (n_low, c_hbkr.shape[2], c_hbkr.shape[3]), np.nan, dtype=float
-        )
+        PLV_b_over_hkr = np.full((n_low, c_hbkr.shape[2], c_hbkr.shape[3]), np.nan, dtype=float)
         Z_kr_over_hb = self._complex_nan((n_low, c_hbkr.shape[1]))
         PLV_kr_over_hb = np.full((n_low, c_hbkr.shape[1]), np.nan, dtype=float)
+
+        valid_b_count_over_hkr = self._count_true(valid_low_hbkr_mask, axis=1)
+        valid_kr_count_over_hb = self._count_true(valid_low_hbkr_mask, axis=(2, 3))
 
         for i in range(n_low):
             Zb_over_kr = self._complex_resultant(delta_phi_low_hbkr[i], axis=0)
@@ -338,6 +367,8 @@ class WaveformHarmonicOrganization(ProcessPipeline):
             "PLV_b_over_hkr": PLV_b_over_hkr,
             "Z_kr_over_hb": Z_kr_over_hb,
             "PLV_kr_over_hb": PLV_kr_over_hb,
+            "valid_b_count_over_hkr": valid_b_count_over_hkr,
+            "valid_kr_count_over_hb": valid_kr_count_over_hb,
         }
 
     def _spread_metrics(self, c_hbkr: np.ndarray, means: dict) -> dict:
@@ -377,34 +408,44 @@ class WaveformHarmonicOrganization(ProcessPipeline):
         abs_c_hbkr = np.where(self._isfinite_complex(c_hbkr), np.abs(c_hbkr), np.nan)
 
         A_b_over_hkr = self._safe_nanmedian(abs_c_hbkr, axis=1)  # (H-1,K,R)
+        valid_A_b_over_hkr_mask = np.isfinite(A_b_over_hkr)
         Hm1, n_branches, n_radii = A_b_over_hkr.shape
         A_b_over_hkr_flat = A_b_over_hkr.reshape(Hm1, n_branches * n_radii)
 
         N_kr_over_h = self._entropy_effective_number(A_b_over_hkr_flat, axis=1)
+        valid_kr_count_over_h = self._count_true(
+            valid_A_b_over_hkr_mask.reshape(Hm1, -1), axis=1
+        )
         N_kr_over_h_norm = np.full_like(N_kr_over_h, np.nan, dtype=float)
-        n_kr = n_branches * n_radii
-        if n_kr > 0:
-            valid = np.isfinite(N_kr_over_h)
-            N_kr_over_h_norm[valid] = N_kr_over_h[valid] / float(n_kr)
+        ok_kr = valid_kr_count_over_h > 0
+        N_kr_over_h_norm[ok_kr] = (
+            N_kr_over_h[ok_kr] / valid_kr_count_over_h[ok_kr].astype(float)
+        )
 
         A_kr_over_hb = self._safe_nanmedian(
             abs_c_hbkr.reshape(abs_c_hbkr.shape[0], abs_c_hbkr.shape[1], -1), axis=2
         )  # (H-1,B)
+        valid_A_kr_over_hb_mask = np.isfinite(A_kr_over_hb)
 
         N_b_over_h = self._entropy_effective_number(A_kr_over_hb, axis=1)
+        valid_b_count_over_h = self._count_true(valid_A_kr_over_hb_mask, axis=1)
         N_b_over_h_norm = np.full_like(N_b_over_h, np.nan, dtype=float)
-        n_beats = c_hbkr.shape[1]
-        if n_beats > 0:
-            valid = np.isfinite(N_b_over_h)
-            N_b_over_h_norm[valid] = N_b_over_h[valid] / float(n_beats)
+        ok_b = valid_b_count_over_h > 0
+        N_b_over_h_norm[ok_b] = (
+            N_b_over_h[ok_b] / valid_b_count_over_h[ok_b].astype(float)
+        )
 
         return {
             "A_b_over_hkr": A_b_over_hkr,
             "A_kr_over_hb": A_kr_over_hb,
+            "valid_A_b_over_hkr_mask": valid_A_b_over_hkr_mask,
+            "valid_A_kr_over_hb_mask": valid_A_kr_over_hb_mask,
             "N_kr_over_h": N_kr_over_h,
             "N_kr_over_h_norm": N_kr_over_h_norm,
             "N_b_over_h": N_b_over_h,
             "N_b_over_h_norm": N_b_over_h_norm,
+            "valid_kr_count_over_h": valid_kr_count_over_h,
+            "valid_b_count_over_h": valid_b_count_over_h,
         }
 
     # ----------------------------
@@ -413,25 +454,46 @@ class WaveformHarmonicOrganization(ProcessPipeline):
     def _summary_over_locations(self, x: np.ndarray) -> dict:
         """
         Summarize a descriptor indexed by (h, k, r) over (k, r), returning (h,).
+        Also report the valid location count used for the median/std reduction.
         """
         x = np.asarray(x)
         flat = x.reshape(x.shape[0], -1)
-        vals = np.abs(flat) if np.iscomplexobj(flat) else flat.astype(float)
+
+        if np.iscomplexobj(flat):
+            valid = self._isfinite_complex(flat)
+            vals = np.abs(flat)
+        else:
+            vals = flat.astype(float)
+            valid = np.isfinite(vals)
+
+        vals = np.where(valid, vals, np.nan)
 
         return {
             "median": self._safe_nanmedian(vals, axis=1),
             "std": self._safe_nanstd(vals, axis=1),
+            "valid_kr_count_over_h": self._count_true(valid, axis=1),
         }
 
     def _summary_over_beats(self, x: np.ndarray) -> dict:
         """
         Summarize a descriptor indexed by (h, b) over b, returning (h,).
+        Also report the valid beat count used for the median/std reduction.
         """
         x = np.asarray(x)
-        vals = np.abs(x) if np.iscomplexobj(x) else x.astype(float)
+
+        if np.iscomplexobj(x):
+            valid = self._isfinite_complex(x)
+            vals = np.abs(x)
+        else:
+            vals = x.astype(float)
+            valid = np.isfinite(vals)
+
+        vals = np.where(valid, vals, np.nan)
+
         return {
             "median": self._safe_nanmedian(vals, axis=1),
             "std": self._safe_nanstd(vals, axis=1),
+            "valid_b_count_over_h": self._count_true(valid, axis=1),
         }
 
     # ----------------------------
@@ -443,16 +505,17 @@ class WaveformHarmonicOrganization(ProcessPipeline):
         harm = self._harmonic_coefficients_block(v_block, T_vec)
         V_hbkr = harm["V_hbkr"]
         H = harm["H"]
-        valid_waveform_mask_bkr = harm["valid_waveform_mask_bkr"]
+        valid_waveform_bkr_mask = harm["valid_waveform_bkr_mask"]
 
         norm = self._normalized_harmonics(V_hbkr)
         c_hbkr = norm["c_hbkr"]
-        stable_mask_hbkr = norm["stable_mask_hbkr"]
+        valid_c_hbkr_mask = norm["valid_c_hbkr_mask"]
         harmonics = norm["harmonics"]
+        rel_amp_hbkr = norm["rel_amp_hbkr"]
 
-        means = self._beat_and_location_means(c_hbkr)
+        means = self._beat_and_location_means(c_hbkr, valid_c_hbkr_mask)
         coherence = self._coherence_metrics(c_hbkr)
-        phase = self._low_order_phase_metrics(c_hbkr, harmonics)
+        phase = self._low_order_phase_metrics(c_hbkr, valid_c_hbkr_mask, harmonics)
         spread = self._spread_metrics(c_hbkr, means)
         occupancy = self._occupancy_metrics(c_hbkr)
 
@@ -485,12 +548,15 @@ class WaveformHarmonicOrganization(ProcessPipeline):
             "H": int(H),
             "harmonics": harmonics,
             "low_harmonics": phase["low_harmonics"],
-            "valid_waveform_mask_bkr": valid_waveform_mask_bkr.astype(np.uint8),
-            "stable_mask_hbkr": stable_mask_hbkr.astype(np.uint8),
+            "valid_waveform_bkr_mask": valid_waveform_bkr_mask.astype(np.uint8),
+            "valid_c_hbkr_mask": valid_c_hbkr_mask.astype(np.uint8),
             "V_hbkr": V_hbkr,
             "c_hbkr": c_hbkr,
+            "rel_amp_hbkr": rel_amp_hbkr,
             "cbar_b_over_hkr": means["cbar_b_over_hkr"],
             "cbar_kr_over_hb": means["cbar_kr_over_hb"],
+            "valid_b_count_over_hkr": means["valid_b_count_over_hkr"],
+            "valid_kr_count_over_hb": means["valid_kr_count_over_hb"],
             "Gamma_b_over_hkr": coherence["Gamma_b_over_hkr"],
             "Gamma_kr_over_hb": coherence["Gamma_kr_over_hb"],
             "delta_phi_low_hbkr": phase["delta_phi_low_hbkr"],
@@ -498,14 +564,20 @@ class WaveformHarmonicOrganization(ProcessPipeline):
             "PLV_b_over_hkr": phase["PLV_b_over_hkr"],
             "Z_kr_over_hb": phase["Z_kr_over_hb"],
             "PLV_kr_over_hb": phase["PLV_kr_over_hb"],
+            "phase_valid_b_count_over_hkr": phase["valid_b_count_over_hkr"],
+            "phase_valid_kr_count_over_hb": phase["valid_kr_count_over_hb"],
             "S_b_over_hkr": spread["S_b_over_hkr"],
             "S_kr_over_hb": spread["S_kr_over_hb"],
             "A_b_over_hkr": occupancy["A_b_over_hkr"],
             "A_kr_over_hb": occupancy["A_kr_over_hb"],
+            "valid_A_b_over_hkr_mask": occupancy["valid_A_b_over_hkr_mask"].astype(np.uint8),
+            "valid_A_kr_over_hb_mask": occupancy["valid_A_kr_over_hb_mask"].astype(np.uint8),
             "N_kr_over_h": occupancy["N_kr_over_h"],
             "N_kr_over_h_norm": occupancy["N_kr_over_h_norm"],
             "N_b_over_h": occupancy["N_b_over_h"],
             "N_b_over_h_norm": occupancy["N_b_over_h_norm"],
+            "valid_kr_count_over_h": occupancy["valid_kr_count_over_h"],
+            "valid_b_count_over_h": occupancy["valid_b_count_over_h"],
             "summary": summary,
         }
 
@@ -537,8 +609,8 @@ class WaveformHarmonicOrganization(ProcessPipeline):
 
         metrics[f"{base}/params/H_MAX"] = np.asarray(self.H_MAX, dtype=np.int32)
         metrics[f"{base}/params/eps"] = np.asarray(self.eps, dtype=np.float32)
-        metrics[f"{base}/params/fundamental_abs_threshold"] = np.asarray(
-            self.fundamental_abs_threshold, dtype=np.float32
+        metrics[f"{base}/params/higher_harmonic_rel_threshold"] = np.asarray(
+            self.higher_harmonic_rel_threshold, dtype=np.float32
         )
 
         metrics[f"{base}/axes/harmonics"] = with_attrs(
@@ -556,19 +628,35 @@ class WaveformHarmonicOrganization(ProcessPipeline):
             },
         )
 
-        metrics[f"{base}/masks/valid_waveform_mask_bkr"] = with_attrs(
-            np.asarray(out["valid_waveform_mask_bkr"], dtype=np.uint8),
+        metrics[f"{base}/masks/valid_waveform_bkr_mask"] = with_attrs(
+            np.asarray(out["valid_waveform_bkr_mask"], dtype=np.uint8),
             {
                 "definition": [
                     "1 where the input beat/segment waveform was finite and FFT was computed."
                 ]
             },
         )
-        metrics[f"{base}/masks/stable_mask_hbkr"] = with_attrs(
-            np.asarray(out["stable_mask_hbkr"], dtype=np.uint8),
+        metrics[f"{base}/masks/valid_c_hbkr_mask"] = with_attrs(
+            np.asarray(out["valid_c_hbkr_mask"], dtype=np.uint8),
             {
                 "definition": [
-                    "1 where c_hbkr = V_hbkr / V_1bkr was computed with stable fundamental V_1bkr."
+                    "1 where c_hbkr = V_hbkr / V_1bkr satisfied the higher-harmonic relative validity criterion."
+                ]
+            },
+        )
+        metrics[f"{base}/masks/valid_A_b_over_hkr_mask"] = with_attrs(
+            np.asarray(out["valid_A_b_over_hkr_mask"], dtype=np.uint8),
+            {
+                "definition": [
+                    "1 where A_b_over_hkr = median_b |c_hbkr| is finite."
+                ]
+            },
+        )
+        metrics[f"{base}/masks/valid_A_kr_over_hb_mask"] = with_attrs(
+            np.asarray(out["valid_A_kr_over_hb_mask"], dtype=np.uint8),
+            {
+                "definition": [
+                    "1 where A_kr_over_hb = median_{k,r} |c_hbkr| is finite."
                 ]
             },
         )
@@ -592,13 +680,20 @@ class WaveformHarmonicOrganization(ProcessPipeline):
                 "layout": ["(higher_harmonic, beat, branch, radius)"],
             },
         )
+        metrics[f"{base}/normalized/rel_amp_hbkr"] = with_attrs(
+            np.asarray(out["rel_amp_hbkr"], dtype=np.float32),
+            {
+                "definition": [r"Relative higher-harmonic amplitude |V_hbkr| / |V_1bkr| used in the validity rule."],
+                "layout": ["(higher_harmonic, beat, branch, radius)"],
+            },
+        )
 
         self._pack_split_complex(
             metrics,
             f"{base}/beat_aggregated/cbar_b_over_hkr",
             out["cbar_b_over_hkr"],
             {
-                "definition": [r"Beat-aggregated local mean \bar c^(b)_{hkr} = mean_b(c_hbkr)."],
+                "definition": [r"Beat-aggregated local mean \bar c^{(b)}_{hkr} = mean_b(c_hbkr)."],
                 "layout": ["(higher_harmonic, branch, radius)"],
             },
         )
@@ -606,7 +701,7 @@ class WaveformHarmonicOrganization(ProcessPipeline):
             np.asarray(out["Gamma_b_over_hkr"], dtype=np.float32),
             {
                 "definition": [
-                    r"Beat coherence \Gamma^(b)_{hkr} = |sum_b c_hbkr| / sum_b |c_hbkr|."
+                    r"Beat coherence \Gamma^{(b)}_{hkr} = |sum_b c_hbkr| / sum_b |c_hbkr|."
                 ],
                 "layout": ["(higher_harmonic, branch, radius)"],
             },
@@ -615,7 +710,16 @@ class WaveformHarmonicOrganization(ProcessPipeline):
             np.asarray(out["S_b_over_hkr"], dtype=np.float32),
             {
                 "definition": [
-                    r"Beat-varying spread S^(b)_{hkr} around the beat-aggregated local mean."
+                    r"Beat-varying spread S^{(b)}_{hkr} around the beat-aggregated local mean."
+                ],
+                "layout": ["(higher_harmonic, branch, radius)"],
+            },
+        )
+        metrics[f"{base}/beat_aggregated/valid_b_count_over_hkr"] = with_attrs(
+            np.asarray(out["valid_b_count_over_hkr"], dtype=np.int32),
+            {
+                "definition": [
+                    "Number of valid beats contributing at each (h,k,r) for beat-aggregated reductions."
                 ],
                 "layout": ["(higher_harmonic, branch, radius)"],
             },
@@ -626,7 +730,7 @@ class WaveformHarmonicOrganization(ProcessPipeline):
             f"{base}/location_aggregated/cbar_kr_over_hb",
             out["cbar_kr_over_hb"],
             {
-                "definition": [r"Location-aggregated beat mean \bar c^(kr)_{hb} = mean_{k,r}(c_hbkr)."],
+                "definition": [r"Location-aggregated beat mean \bar c^{(kr)}_{hb} = mean_{k,r}(c_hbkr)."],
                 "layout": ["(higher_harmonic, beat)"],
             },
         )
@@ -634,7 +738,7 @@ class WaveformHarmonicOrganization(ProcessPipeline):
             np.asarray(out["Gamma_kr_over_hb"], dtype=np.float32),
             {
                 "definition": [
-                    r"Location coherence \Gamma^(kr)_{hb} = |sum_{k,r} c_hbkr| / sum_{k,r} |c_hbkr|."
+                    r"Location coherence \Gamma^{(kr)}_{hb} = |sum_{k,r} c_hbkr| / sum_{k,r} |c_hbkr|."
                 ],
                 "layout": ["(higher_harmonic, beat)"],
             },
@@ -643,7 +747,16 @@ class WaveformHarmonicOrganization(ProcessPipeline):
             np.asarray(out["S_kr_over_hb"], dtype=np.float32),
             {
                 "definition": [
-                    r"Location-varying spread S^(kr)_{hb} around the location-aggregated beat mean."
+                    r"Location-varying spread S^{(kr)}_{hb} around the location-aggregated beat mean."
+                ],
+                "layout": ["(higher_harmonic, beat)"],
+            },
+        )
+        metrics[f"{base}/location_aggregated/valid_kr_count_over_hb"] = with_attrs(
+            np.asarray(out["valid_kr_count_over_hb"], dtype=np.int32),
+            {
+                "definition": [
+                    "Number of valid locations contributing at each (h,b) for location-aggregated reductions."
                 ],
                 "layout": ["(higher_harmonic, beat)"],
             },
@@ -652,7 +765,7 @@ class WaveformHarmonicOrganization(ProcessPipeline):
         metrics[f"{base}/low_order_phase/delta_phi_low_hbkr"] = with_attrs(
             np.asarray(out["delta_phi_low_hbkr"], dtype=np.float32),
             {
-                "definition": [r"Low-order relative phases \Delta\phi_hbkr = arg(c_hbkr) for h in {2,3}."],
+                "definition": [r"Low-order relative phases \Delta\phi_{hbkr} = arg(c_hbkr) for h in {2,3}."],
                 "layout": ["(low_harmonic, beat, branch, radius)"],
             },
         )
@@ -661,14 +774,14 @@ class WaveformHarmonicOrganization(ProcessPipeline):
             f"{base}/low_order_phase/Z_b_over_hkr",
             out["Z_b_over_hkr"],
             {
-                "definition": [r"Beat-aggregated circular resultant Z^(b)_{hkr} for h in {2,3}."],
+                "definition": [r"Beat-aggregated circular resultant Z^{(b)}_{hkr} for h in {2,3}."],
                 "layout": ["(low_harmonic, branch, radius)"],
             },
         )
         metrics[f"{base}/low_order_phase/PLV_b_over_hkr"] = with_attrs(
             np.asarray(out["PLV_b_over_hkr"], dtype=np.float32),
             {
-                "definition": [r"Beat phase-locking value PLV^(b)_{hkr} = |Z^(b)_{hkr}| for h in {2,3}."],
+                "definition": [r"Beat phase-locking value PLV^{(b)}_{hkr} = |Z^{(b)}_{hkr}| for h in {2,3}."],
                 "layout": ["(low_harmonic, branch, radius)"],
             },
         )
@@ -677,14 +790,32 @@ class WaveformHarmonicOrganization(ProcessPipeline):
             f"{base}/low_order_phase/Z_kr_over_hb",
             out["Z_kr_over_hb"],
             {
-                "definition": [r"Location-aggregated circular resultant Z^(kr)_{hb} for h in {2,3}."],
+                "definition": [r"Location-aggregated circular resultant Z^{(kr)}_{hb} for h in {2,3}."],
                 "layout": ["(low_harmonic, beat)"],
             },
         )
         metrics[f"{base}/low_order_phase/PLV_kr_over_hb"] = with_attrs(
             np.asarray(out["PLV_kr_over_hb"], dtype=np.float32),
             {
-                "definition": [r"Location phase-locking value PLV^(kr)_{hb} = |Z^(kr)_{hb}| for h in {2,3}."],
+                "definition": [r"Location phase-locking value PLV^{(kr)}_{hb} = |Z^{(kr)}_{hb}| for h in {2,3}."],
+                "layout": ["(low_harmonic, beat)"],
+            },
+        )
+        metrics[f"{base}/low_order_phase/valid_b_count_over_hkr"] = with_attrs(
+            np.asarray(out["phase_valid_b_count_over_hkr"], dtype=np.int32),
+            {
+                "definition": [
+                    "Number of valid beats contributing to low-order phase beat-aggregated reductions."
+                ],
+                "layout": ["(low_harmonic, branch, radius)"],
+            },
+        )
+        metrics[f"{base}/low_order_phase/valid_kr_count_over_hb"] = with_attrs(
+            np.asarray(out["phase_valid_kr_count_over_hb"], dtype=np.int32),
+            {
+                "definition": [
+                    "Number of valid locations contributing to low-order phase location-aggregated reductions."
+                ],
                 "layout": ["(low_harmonic, beat)"],
             },
         )
@@ -692,114 +823,159 @@ class WaveformHarmonicOrganization(ProcessPipeline):
         metrics[f"{base}/occupancy/A_b_over_hkr"] = with_attrs(
             np.asarray(out["A_b_over_hkr"], dtype=np.float32),
             {
-                "definition": [r"A^(b)_{hkr} = median_b |c_hbkr|."],
+                "definition": [r"A^{(b)}_{hkr} = median_b |c_hbkr|."],
                 "layout": ["(higher_harmonic, branch, radius)"],
             },
         )
         metrics[f"{base}/occupancy/A_kr_over_hb"] = with_attrs(
             np.asarray(out["A_kr_over_hb"], dtype=np.float32),
             {
-                "definition": [r"A^(kr)_{hb} = median_{k,r} |c_hbkr|."],
+                "definition": [r"A^{(kr)}_{hb} = median_{k,r} |c_hbkr|."],
                 "layout": ["(higher_harmonic, beat)"],
             },
         )
         metrics[f"{base}/occupancy/N_kr_over_h"] = with_attrs(
             np.asarray(out["N_kr_over_h"], dtype=np.float32),
             {
-                "definition": [r"Effective spatial occupancy N^(kr)_h = exp(-sum_{k,r} p log p)."],
+                "definition": [r"Effective spatial occupancy N^{(kr)}_h = exp(-sum_{k,r} p log p)."],
                 "layout": ["(higher_harmonic,)"],
             },
         )
         metrics[f"{base}/occupancy/N_kr_over_h_norm"] = with_attrs(
             np.asarray(out["N_kr_over_h_norm"], dtype=np.float32),
             {
-                "definition": [r"Normalized spatial occupancy N^(kr)_h / N_(KR)."],
+                "definition": [r"Normalized spatial occupancy N^{(kr)}_h divided by the number of valid locations for harmonic h."],
                 "layout": ["(higher_harmonic,)"],
             },
         )
         metrics[f"{base}/occupancy/N_b_over_h"] = with_attrs(
             np.asarray(out["N_b_over_h"], dtype=np.float32),
             {
-                "definition": [r"Effective beat occupancy N^(b)_h = exp(-sum_b p log p)."],
+                "definition": [r"Effective beat occupancy N^{(b)}_h = exp(-sum_b p log p)."],
                 "layout": ["(higher_harmonic,)"],
             },
         )
         metrics[f"{base}/occupancy/N_b_over_h_norm"] = with_attrs(
             np.asarray(out["N_b_over_h_norm"], dtype=np.float32),
             {
-                "definition": [r"Normalized beat occupancy N^(b)_h / N_B."],
+                "definition": [r"Normalized beat occupancy N^{(b)}_h divided by the number of valid beats for harmonic h."],
+                "layout": ["(higher_harmonic,)"],
+            },
+        )
+        metrics[f"{base}/occupancy/valid_kr_count_over_h"] = with_attrs(
+            np.asarray(out["valid_kr_count_over_h"], dtype=np.int32),
+            {
+                "definition": [
+                    "Number of valid locations used to normalize N_kr_over_h_norm for each harmonic h."
+                ],
+                "layout": ["(higher_harmonic,)"],
+            },
+        )
+        metrics[f"{base}/occupancy/valid_b_count_over_h"] = with_attrs(
+            np.asarray(out["valid_b_count_over_h"], dtype=np.int32),
+            {
+                "definition": [
+                    "Number of valid beats used to normalize N_b_over_h_norm for each harmonic h."
+                ],
                 "layout": ["(higher_harmonic,)"],
             },
         )
 
         summary = out["summary"]
 
-        def store_summary(key: str, desc: str, summ: dict, axis_desc: str):
+        def store_summary_locations(key: str, desc: str, summ: dict):
             metrics[f"{base}/summary/{key}/median"] = with_attrs(
                 np.asarray(summ["median"], dtype=np.float32),
                 {
-                    "definition": [f"Median summary of {desc} over {axis_desc}."],
+                    "definition": [f"Median summary of {desc} over (branch, radius)."],
                     "layout": ["(harmonic,)"],
                 },
             )
             metrics[f"{base}/summary/{key}/std"] = with_attrs(
                 np.asarray(summ["std"], dtype=np.float32),
                 {
-                    "definition": [f"Standard deviation summary of {desc} over {axis_desc}."],
+                    "definition": [f"Standard deviation summary of {desc} over (branch, radius)."],
+                    "layout": ["(harmonic,)"],
+                },
+            )
+            metrics[f"{base}/summary/{key}/valid_kr_count_over_h"] = with_attrs(
+                np.asarray(summ["valid_kr_count_over_h"], dtype=np.int32),
+                {
+                    "definition": [
+                        f"Number of valid locations used for the median/std summary of {desc} for each harmonic."
+                    ],
                     "layout": ["(harmonic,)"],
                 },
             )
 
-        store_summary(
+        def store_summary_beats(key: str, desc: str, summ: dict):
+            metrics[f"{base}/summary/{key}/median"] = with_attrs(
+                np.asarray(summ["median"], dtype=np.float32),
+                {
+                    "definition": [f"Median summary of {desc} over beats."],
+                    "layout": ["(harmonic,)"],
+                },
+            )
+            metrics[f"{base}/summary/{key}/std"] = with_attrs(
+                np.asarray(summ["std"], dtype=np.float32),
+                {
+                    "definition": [f"Standard deviation summary of {desc} over beats."],
+                    "layout": ["(harmonic,)"],
+                },
+            )
+            metrics[f"{base}/summary/{key}/valid_b_count_over_h"] = with_attrs(
+                np.asarray(summ["valid_b_count_over_h"], dtype=np.int32),
+                {
+                    "definition": [
+                        f"Number of valid beats used for the median/std summary of {desc} for each harmonic."
+                    ],
+                    "layout": ["(harmonic,)"],
+                },
+            )
+
+        store_summary_locations(
             "abs_cbar_b_over_kr",
-            r"| \bar c^(b)_{hkr} |",
+            r"| \bar c^{(b)}_{hkr} |",
             summary["abs_cbar_b_over_kr"],
-            "(branch, radius)",
         )
-        store_summary(
+        store_summary_locations(
             "Gamma_b_over_kr",
-            r"\Gamma^(b)_{hkr}",
+            r"\Gamma^{(b)}_{hkr}",
             summary["Gamma_b_over_kr"],
-            "(branch, radius)",
         )
-        store_summary(
+        store_summary_locations(
             "S_b_over_kr",
-            r"S^(b)_{hkr}",
+            r"S^{(b)}_{hkr}",
             summary["S_b_over_kr"],
-            "(branch, radius)",
         )
-        store_summary(
+
+        store_summary_beats(
             "abs_cbar_kr_over_b",
-            r"| \bar c^(kr)_{hb} |",
+            r"| \bar c^{(kr)}_{hb} |",
             summary["abs_cbar_kr_over_b"],
-            "beats",
         )
-        store_summary(
+        store_summary_beats(
             "Gamma_kr_over_b",
-            r"\Gamma^(kr)_{hb}",
+            r"\Gamma^{(kr)}_{hb}",
             summary["Gamma_kr_over_b"],
-            "beats",
         )
-        store_summary(
+        store_summary_beats(
             "S_kr_over_b",
-            r"S^(kr)_{hb}",
+            r"S^{(kr)}_{hb}",
             summary["S_kr_over_b"],
-            "beats",
         )
 
         if "PLV_b_over_kr" in summary:
-            store_summary(
+            store_summary_locations(
                 "PLV_b_over_kr",
-                r"PLV^(b)_{hkr}",
+                r"PLV^{(b)}_{hkr}",
                 summary["PLV_b_over_kr"],
-                "(branch, radius)",
             )
         if "PLV_kr_over_b" in summary:
-            store_summary(
+            store_summary_beats(
                 "PLV_kr_over_b",
-                r"PLV^(kr)_{hb}",
+                r"PLV^{(kr)}_{hb}",
                 summary["PLV_kr_over_b"],
-                "beats",
             )
 
     def _pack_vessel_outputs(
