@@ -1,0 +1,21 @@
+name: Pipeline Docs Generation
+
+on:
+  push:
+    branches:
+      - pipeline_docs
+  workflow_dispatch:
+
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Debug info
+        run: |
+          echo "Running on branch:"
+          git branch --show-current
+          echo "Latest commit:"
+          git log -1 --oneline
