@@ -3,7 +3,7 @@ name: Pipeline Docs Generation
 on:
   push:
     branches:
-      - pipeline_docs
+      - pipeline-docs
   workflow_dispatch:
 
 
