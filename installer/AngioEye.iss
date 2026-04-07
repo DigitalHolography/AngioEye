@@ -17,7 +17,7 @@ AppId={{08E860C9-5027-4E3E-99C5-E7D9F4A58216}
 AppName={#MyAppName}
 AppVersion={#AppVersion}
 AppVerName={#MyAppName} {#AppVersion}
-DefaultDirName={localappdata}\Programs\{#MyAppName}
+DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 LicenseFile={#PayloadDir}\LICENSE
@@ -26,7 +26,8 @@ OutputBaseFilename=AngioEye-setup-{#AppVersion}
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
-PrivilegesRequired=lowest
+PrivilegesRequired=admin
+SetupIconFile={#PayloadDir}\AngioEye.ico
 UninstallDisplayIcon={app}\AngioEye.exe
 
 [Tasks]

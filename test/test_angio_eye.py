@@ -37,6 +37,18 @@ sys.modules.setdefault("postprocess", fake_postprocess)
 
 from angio_eye import ProcessApp  # noqa: E402
 
+for _module_name in (
+    "h5py",
+    "pipelines",
+    "pipelines.core",
+    "pipelines.core.errors",
+    "pipelines.core.utils",
+    "postprocess",
+):
+    _module = sys.modules.get(_module_name)
+    if _module is not None and getattr(_module, "__file__", None) is None:
+        sys.modules.pop(_module_name, None)
+
 
 class _Var:
     def __init__(self, value):
@@ -91,8 +103,10 @@ class BatchZipCleanupTests(unittest.TestCase):
             ui_mode="advanced",
             _progress_total_units=1.0,
             _progress_completed_units=0.0,
-            pipeline_check_vars={"Demo": _Var(True)},
-            postprocess_check_vars={},
+            pipeline_rows=[SimpleNamespace(name="Demo", available=True)],
+            postprocess_rows=[],
+            pipeline_visibility={"Demo": True},
+            postprocess_visibility={},
             pipeline_registry={"Demo": object()},
             postprocess_registry={},
             _validate_postprocess_selection=lambda *args, **kwargs: [],
@@ -190,7 +204,6 @@ class BatchZipCleanupTests(unittest.TestCase):
                 batch_zip_name_var=_Var("outputs.zip"),
                 _default_output_stem=lambda input_path: f"{input_path.stem}_angioeye",
                 _default_archive_name=lambda input_path: f"{input_path.stem}_angioeye.zip",
-                _toggle_zip_name_visibility=lambda: None,
                 _reset_progress=lambda: None,
             )
 

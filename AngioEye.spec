@@ -9,6 +9,7 @@ datas += collect_data_files('postprocess')
 datas += collect_data_files('sv_ttk')
 datas += collect_data_files('tkinterdnd2')
 datas += [('Angioeye_logo.png', '.')]
+datas += [('AngioEye.ico', '.')]
 hiddenimports += collect_submodules('pipelines')
 hiddenimports += collect_submodules('postprocess')
 hiddenimports += collect_submodules('tkinterdnd2')
@@ -48,4 +49,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='AngioEye.ico',
 )

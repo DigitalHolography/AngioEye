@@ -1,6 +1,8 @@
 import importlib
+import os
 import pkgutil
 import sys
+from pathlib import Path
 
 from pipelines import load_pipeline_catalog
 
@@ -14,12 +16,31 @@ from .core.base import (
 )
 
 
+def _extend_with_external_postprocess_dir() -> None:
+    candidates: list[Path] = []
+    env_path = os.getenv("ANGIOEYE_POSTPROCESS_DIR")
+    if env_path:
+        candidates.append(Path(env_path))
+    if getattr(sys, "frozen", False):
+        candidates.append(Path(sys.executable).resolve().parent / "postprocess")
+
+    for candidate in reversed(candidates):
+        if candidate.is_dir():
+            path_value = str(candidate.resolve())
+            if path_value not in __path__:
+                __path__.insert(0, path_value)
+
+
+_extend_with_external_postprocess_dir()
+
+
 def _discover_postprocesses() -> tuple[
     list[PostprocessDescriptor], list[PostprocessDescriptor]
 ]:
     available: list[PostprocessDescriptor] = []
     missing: list[PostprocessDescriptor] = []
     POSTPROCESS_REGISTRY.clear()
+    importlib.invalidate_caches()
 
     pipeline_catalog, _ = load_pipeline_catalog()
     available_pipeline_names = {pipeline.name for pipeline in pipeline_catalog}
