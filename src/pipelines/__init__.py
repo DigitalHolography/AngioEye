@@ -1,6 +1,8 @@
 import importlib
+import os
 import pkgutil
 import sys
+from pathlib import Path
 
 # import inspect
 from .core.base import (
@@ -13,10 +15,29 @@ from .core.base import (
 from .core.utils import write_combined_results_h5, write_result_h5
 
 
+def _extend_with_external_pipeline_dir() -> None:
+    candidates: list[Path] = []
+    env_path = os.getenv("ANGIOEYE_PIPELINES_DIR")
+    if env_path:
+        candidates.append(Path(env_path))
+    if getattr(sys, "frozen", False):
+        candidates.append(Path(sys.executable).resolve().parent / "pipelines")
+
+    for candidate in reversed(candidates):
+        if candidate.is_dir():
+            path_value = str(candidate.resolve())
+            if path_value not in __path__:
+                __path__.insert(0, path_value)
+
+
+_extend_with_external_pipeline_dir()
+
+
 def _discover_pipelines() -> tuple[list[PipelineDescriptor], list[PipelineDescriptor]]:
     available: list[PipelineDescriptor] = []
     missing: list[PipelineDescriptor] = []
     PIPELINE_REGISTRY.clear()
+    importlib.invalidate_caches()
 
     for module_info in pkgutil.iter_modules(__path__):
         if module_info.name in {"core"} or module_info.name.startswith("_"):

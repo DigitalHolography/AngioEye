@@ -1,5 +1,6 @@
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -93,13 +94,11 @@ class ProcessApp(_BaseAppTk):
         self.pipeline_registry: dict[str, PipelineDescriptor] = {}
         self.pipeline_catalog: dict[str, PipelineDescriptor] = {}
         self.pipeline_rows: list[PipelineDescriptor] = []
-        self.pipeline_check_vars: dict[str, tk.BooleanVar] = {}
         self.pipeline_visibility: dict[str, bool] = {}
         self.pipeline_visibility_vars: dict[str, tk.BooleanVar] = {}
         self.postprocess_registry: dict[str, PostprocessDescriptor] = {}
         self.postprocess_catalog: dict[str, PostprocessDescriptor] = {}
         self.postprocess_rows: list[PostprocessDescriptor] = []
-        self.postprocess_check_vars: dict[str, tk.BooleanVar] = {}
         self.postprocess_visibility: dict[str, bool] = {}
         self.postprocess_visibility_vars: dict[str, tk.BooleanVar] = {}
         self.batch_input_var = tk.StringVar()
@@ -319,16 +318,13 @@ class ProcessApp(_BaseAppTk):
         self.notebook.grid(row=0, column=0, sticky="nsew")
 
         self.batch_tab = ttk.Frame(self.notebook, padding=10)
-        self.export_tab = ttk.Frame(self.notebook, padding=10)
         self.pipeline_library_tab = ttk.Frame(self.notebook, padding=10)
         self.postprocess_library_tab = ttk.Frame(self.notebook, padding=10)
         self.notebook.add(self.batch_tab, text="Run")
-        self.notebook.add(self.export_tab, text="Export")
         self.notebook.add(self.pipeline_library_tab, text="Pipeline Library")
         self.notebook.add(self.postprocess_library_tab, text="Postprocess Library")
 
         self._build_batch_tab(self.batch_tab)
-        self._build_export_tab(self.export_tab)
         self._build_pipeline_library_tab(self.pipeline_library_tab)
         self._build_postprocess_library_tab(self.postprocess_library_tab)
 
@@ -352,12 +348,9 @@ class ProcessApp(_BaseAppTk):
     def _build_batch_tab(self, parent: ttk.Frame) -> None:
         parent.columnconfigure(1, weight=1)
         parent.columnconfigure(2, weight=0)
-        parent.columnconfigure(3, weight=0)
         parent.rowconfigure(4, weight=1)
 
-        ttk.Label(parent, text="Input (folder / .h5 / .hdf5 / .zip)").grid(
-            row=0, column=0, sticky="w"
-        )
+        ttk.Label(parent, text="Input").grid(row=0, column=0, sticky="w")
         input_entry = ttk.Entry(parent, textvariable=self.batch_input_var)
         input_entry.grid(row=0, column=1, sticky="ew", padx=(0, 4))
         input_btn_frame = ttk.Frame(parent)
@@ -369,160 +362,38 @@ class ProcessApp(_BaseAppTk):
             input_btn_frame, text="Browse file/zip", command=self.choose_batch_file
         ).pack(side="left", padx=(4, 0))
 
-        ttk.Label(parent, text="Pipelines").grid(
-            row=1, column=0, sticky="nw", pady=(8, 0)
+        ttk.Label(parent, text="Output").grid(
+            row=1, column=0, sticky="w", pady=(8, 0)
         )
-        pipelines_wrapper = ttk.Frame(parent)
-        pipelines_wrapper.grid(
-            row=1, column=1, columnspan=2, sticky="nsew", pady=(8, 0)
+        batch_output_entry = ttk.Entry(parent, textvariable=self.batch_output_var)
+        batch_output_entry.grid(
+            row=1, column=1, sticky="ew", padx=(0, 4), pady=(8, 0)
         )
-        pipelines_wrapper.columnconfigure(0, weight=1)
-        pipelines_wrapper.rowconfigure(1, weight=1)
-
-        actions = ttk.Frame(pipelines_wrapper)
-        actions.grid(row=0, column=0, sticky="e", pady=(0, 4))
-        ttk.Button(actions, text="Select all", command=self.select_all_pipelines).pack(
-            side="left", padx=(0, 4)
-        )
-        ttk.Button(actions, text="Clear all", command=self.clear_all_pipelines).pack(
-            side="left"
-        )
-        ttk.Button(
-            actions,
-            text="Pipeline library",
-            command=self.open_pipeline_library,
-        ).pack(side="left", padx=(4, 0))
-
-        pipelines_container = ttk.Frame(pipelines_wrapper)
-        pipelines_container.grid(row=1, column=0, sticky="nsew")
-        pipelines_container.columnconfigure(0, weight=1)
-        pipelines_container.rowconfigure(0, weight=1)
-
-        self.pipeline_checks_canvas = tk.Canvas(
-            pipelines_container, highlightthickness=0, height=220, bg=self._bg_color
-        )
-        self.pipeline_checks_canvas.grid(row=0, column=0, sticky="nsew")
-        pipeline_scroll = ttk.Scrollbar(
-            pipelines_container,
-            orient="vertical",
-            command=self.pipeline_checks_canvas.yview,
-        )
-        pipeline_scroll.grid(row=0, column=1, sticky="ns")
-        self.pipeline_checks_canvas.configure(yscrollcommand=pipeline_scroll.set)
-        self.pipeline_checks_inner = ttk.Frame(self.pipeline_checks_canvas)
-        self.pipeline_checks_window = self.pipeline_checks_canvas.create_window(
-            (0, 0), window=self.pipeline_checks_inner, anchor="nw"
-        )
-        self.pipeline_checks_inner.bind(
-            "<Configure>",
-            lambda _evt: self.pipeline_checks_canvas.configure(
-                scrollregion=self.pipeline_checks_canvas.bbox("all")
-            ),
-        )
-        self.pipeline_checks_canvas.bind(
-            "<Configure>",
-            lambda evt: self.pipeline_checks_canvas.itemconfigure(
-                self.pipeline_checks_window, width=evt.width
-            ),
-        )
-
-        ttk.Label(parent, text="Postprocess").grid(
-            row=2, column=0, sticky="nw", pady=(8, 0)
-        )
-        postprocess_wrapper = ttk.Frame(parent)
-        postprocess_wrapper.grid(
-            row=2, column=1, columnspan=2, sticky="nsew", pady=(8, 0)
-        )
-        postprocess_wrapper.columnconfigure(0, weight=1)
-        postprocess_wrapper.rowconfigure(1, weight=1)
-
-        postprocess_actions = ttk.Frame(postprocess_wrapper)
-        postprocess_actions.grid(row=0, column=0, sticky="e", pady=(0, 4))
-        ttk.Button(
-            postprocess_actions,
-            text="Select all",
-            command=self.select_all_postprocesses,
-        ).pack(side="left", padx=(0, 4))
-        ttk.Button(
-            postprocess_actions,
-            text="Clear all",
-            command=self.clear_all_postprocesses,
-        ).pack(side="left")
-        ttk.Button(
-            postprocess_actions,
-            text="Postprocess library",
-            command=self.open_postprocess_library,
-        ).pack(side="left", padx=(4, 0))
-
-        postprocess_container = ttk.Frame(postprocess_wrapper)
-        postprocess_container.grid(row=1, column=0, sticky="nsew")
-        postprocess_container.columnconfigure(0, weight=1)
-        postprocess_container.rowconfigure(0, weight=1)
-
-        self.postprocess_checks_canvas = tk.Canvas(
-            postprocess_container,
-            highlightthickness=0,
-            height=140,
-            bg=self._bg_color,
-        )
-        self.postprocess_checks_canvas.grid(row=0, column=0, sticky="nsew")
-        postprocess_scroll = ttk.Scrollbar(
-            postprocess_container,
-            orient="vertical",
-            command=self.postprocess_checks_canvas.yview,
-        )
-        postprocess_scroll.grid(row=0, column=1, sticky="ns")
-        self.postprocess_checks_canvas.configure(
-            yscrollcommand=postprocess_scroll.set
-        )
-        self.postprocess_checks_inner = ttk.Frame(self.postprocess_checks_canvas)
-        self.postprocess_checks_window = self.postprocess_checks_canvas.create_window(
-            (0, 0), window=self.postprocess_checks_inner, anchor="nw"
-        )
-        self.postprocess_checks_inner.bind(
-            "<Configure>",
-            lambda _evt: self.postprocess_checks_canvas.configure(
-                scrollregion=self.postprocess_checks_canvas.bbox("all")
-            ),
-        )
-        self.postprocess_checks_canvas.bind(
-            "<Configure>",
-            lambda evt: self.postprocess_checks_canvas.itemconfigure(
-                self.postprocess_checks_window, width=evt.width
-            ),
+        ttk.Button(parent, text="Browse", command=self.choose_batch_output).grid(
+            row=1, column=2, sticky="w", pady=(8, 0)
         )
 
         controls = ttk.Frame(parent)
-        controls.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(10, 4))
-        controls.columnconfigure(3, weight=1)
+        controls.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(12, 4))
 
-        run_btn = ttk.Button(controls, text="Run batch", command=self.run_batch)
+        run_btn = ttk.Button(controls, text="Run", command=self.run_batch)
         run_btn.grid(row=0, column=0, sticky="w")
         ttk.Button(
             controls,
-            text="Open export tab",
-            command=self.open_export_tab,
+            text="Export BatchLog",
+            command=self._export_batch_log,
         ).grid(row=0, column=1, sticky="w", padx=(8, 0))
-        self.advanced_progress = ttk.Progressbar(
-            controls,
-            orient="horizontal",
-            mode="determinate",
-            maximum=100,
-            variable=self.batch_progress_var,
-            length=320,
-        )
-        self.advanced_progress.grid(row=0, column=3, sticky="e")
 
-        ttk.Label(parent, text="Batch log").grid(
-            row=4, column=0, sticky="nw", pady=(8, 2)
+        ttk.Label(parent, text="BatchLog").grid(
+            row=3, column=0, sticky="nw", pady=(8, 2)
         )
         batch_output_frame = ttk.Frame(parent)
-        batch_output_frame.grid(row=4, column=1, columnspan=3, sticky="nsew")
+        batch_output_frame.grid(row=4, column=0, columnspan=3, sticky="nsew")
         batch_output_frame.columnconfigure(0, weight=1)
         batch_output_frame.rowconfigure(0, weight=1)
         self.batch_output = tk.Text(
             batch_output_frame,
-            height=18,
+            height=14,
             state="disabled",
             bg=self._text_bg,
             fg=self._text_fg,
@@ -534,48 +405,6 @@ class ProcessApp(_BaseAppTk):
         self.batch_output.configure(yscrollcommand=batch_output_scroll.set)
         self.batch_output.grid(row=0, column=0, sticky="nsew")
         batch_output_scroll.grid(row=0, column=1, sticky="ns")
-
-    def _build_export_tab(self, parent: ttk.Frame) -> None:
-        parent.columnconfigure(1, weight=1)
-
-        ttk.Label(
-            parent,
-            text=(
-                "Export settings stay hidden from the minimal UI. "
-                "For a loaded .zip, the default archive is recreated next to the input."
-            ),
-            wraplength=760,
-        ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 12))
-
-        ttk.Label(parent, text="Output folder").grid(row=1, column=0, sticky="w")
-        batch_output_entry = ttk.Entry(parent, textvariable=self.batch_output_var)
-        batch_output_entry.grid(row=1, column=1, sticky="ew", padx=(0, 4))
-        ttk.Button(parent, text="Browse", command=self.choose_batch_output).grid(
-            row=1, column=2, sticky="w"
-        )
-
-        ttk.Checkbutton(
-            parent,
-            text="Zip outputs after run",
-            variable=self.batch_zip_var,
-            command=self._toggle_zip_name_visibility,
-        ).grid(row=2, column=0, columnspan=3, sticky="w", pady=(12, 4))
-
-        self.batch_zip_label = ttk.Label(parent, text="Archive name")
-        self.batch_zip_label.grid(row=3, column=0, sticky="w", pady=(2, 0))
-        self.batch_zip_entry = ttk.Entry(
-            parent, textvariable=self.batch_zip_name_var, width=28
-        )
-        self.batch_zip_entry.grid(
-            row=3, column=1, columnspan=2, sticky="w", pady=(2, 0)
-        )
-
-        ttk.Button(
-            parent,
-            text="Export batch log",
-            command=self._export_batch_log,
-        ).grid(row=4, column=0, sticky="w", pady=(16, 0))
-        self._toggle_zip_name_visibility()
 
     def _resource_roots(self) -> list[Path]:
         roots: list[Path] = []
@@ -648,10 +477,10 @@ class ProcessApp(_BaseAppTk):
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         if mode == "advanced":
-            width = max(980, min(1320, screen_width - 80))
-            height = max(820, min(1020, screen_height - 80))
-            min_width = min(980, width)
-            min_height = min(760, height)
+            width = min(900, max(760, screen_width - 240), screen_width)
+            height = min(640, max(520, screen_height - 240), screen_height)
+            min_width = min(620, width)
+            min_height = min(420, height)
         else:
             width = max(560, min(660, screen_width - 260))
             height = max(420, min(520, screen_height - 260))
@@ -834,7 +663,6 @@ class ProcessApp(_BaseAppTk):
         self.batch_zip_var.set(
             input_path.is_file() and input_path.suffix.lower() == ".zip"
         )
-        self._toggle_zip_name_visibility()
         self._reset_progress()
 
     def _minimal_output_filename_for_run(
@@ -860,30 +688,32 @@ class ProcessApp(_BaseAppTk):
 
         ttk.Label(
             parent,
-            text="Choose which pipelines are shown in the Batch tab. "
+            text="Select the pipelines to run. "
             "This preference is saved between app launches.",
         ).grid(row=0, column=0, sticky="w")
 
         controls = ttk.Frame(parent)
         controls.grid(row=1, column=0, sticky="ew", pady=(8, 4))
         controls.columnconfigure(4, weight=1)
-        ttk.Button(controls, text="Open batch", command=self.open_batch_tab).grid(
-            row=0, column=0, sticky="w"
-        )
         ttk.Button(
             controls,
-            text="Show all",
-            command=self.show_all_pipelines_in_main_ui,
+            text="Select all",
+            command=self.select_all_pipelines,
+        ).grid(row=0, column=0, sticky="w")
+        ttk.Button(
+            controls,
+            text="Deselect all",
+            command=self.deselect_all_pipelines,
         ).grid(row=0, column=1, sticky="w", padx=(4, 0))
-        ttk.Button(
-            controls,
-            text="Hide all",
-            command=self.hide_all_pipelines_from_main_ui,
-        ).grid(row=0, column=2, sticky="w", padx=(4, 0))
         ttk.Button(
             controls,
             text="Reload pipelines",
             command=self.refresh_pipeline_catalog,
+        ).grid(row=0, column=2, sticky="w", padx=(4, 0))
+        ttk.Button(
+            controls,
+            text="Open folder",
+            command=self.open_pipeline_folder,
         ).grid(row=0, column=3, sticky="w", padx=(4, 0))
         ttk.Label(controls, textvariable=self.pipeline_library_summary_var).grid(
             row=0, column=4, sticky="e"
@@ -928,30 +758,32 @@ class ProcessApp(_BaseAppTk):
 
         ttk.Label(
             parent,
-            text="Choose which postprocess steps are shown in the Batch tab. "
+            text="Select the postprocess steps to run after pipelines. "
             "This preference is saved between app launches.",
         ).grid(row=0, column=0, sticky="w")
 
         controls = ttk.Frame(parent)
         controls.grid(row=1, column=0, sticky="ew", pady=(8, 4))
         controls.columnconfigure(4, weight=1)
-        ttk.Button(controls, text="Open batch", command=self.open_batch_tab).grid(
-            row=0, column=0, sticky="w"
-        )
         ttk.Button(
             controls,
-            text="Show all",
-            command=self.show_all_postprocesses_in_main_ui,
+            text="Select all",
+            command=self.select_all_postprocesses,
+        ).grid(row=0, column=0, sticky="w")
+        ttk.Button(
+            controls,
+            text="Deselect all",
+            command=self.deselect_all_postprocesses,
         ).grid(row=0, column=1, sticky="w", padx=(4, 0))
-        ttk.Button(
-            controls,
-            text="Hide all",
-            command=self.hide_all_postprocesses_from_main_ui,
-        ).grid(row=0, column=2, sticky="w", padx=(4, 0))
         ttk.Button(
             controls,
             text="Reload postprocess",
             command=self.refresh_postprocess_catalog,
+        ).grid(row=0, column=2, sticky="w", padx=(4, 0))
+        ttk.Button(
+            controls,
+            text="Open folder",
+            command=self.open_postprocess_folder,
         ).grid(row=0, column=3, sticky="w", padx=(4, 0))
         ttk.Label(
             controls, textvariable=self.postprocess_library_summary_var
@@ -999,10 +831,6 @@ class ProcessApp(_BaseAppTk):
         self.pipeline_catalog = {p.name: p for p in rows}
         self.pipeline_rows = rows
         self._sync_pipeline_visibility(rows)
-        selection_state = {
-            name: var.get() for name, var in self.pipeline_check_vars.items()
-        }
-        self._populate_pipeline_checks(rows, selection_state)
         self._populate_pipeline_library(rows)
         self._install_drop_targets()
 
@@ -1015,10 +843,6 @@ class ProcessApp(_BaseAppTk):
         self.postprocess_catalog = {p.name: p for p in rows}
         self.postprocess_rows = rows
         self._sync_postprocess_visibility(rows)
-        selection_state = {
-            name: var.get() for name, var in self.postprocess_check_vars.items()
-        }
-        self._populate_postprocess_checks(rows, selection_state)
         self._populate_postprocess_library(rows)
         self._install_drop_targets()
 
@@ -1061,56 +885,13 @@ class ProcessApp(_BaseAppTk):
             return f"Requires: {', '.join(postprocess.required_pipelines)}"
         return "Available"
 
-    def _populate_pipeline_checks(
-        self,
-        rows: list[PipelineDescriptor],
-        selection_state: dict[str, bool] | None = None,
-    ) -> None:
-        for child in self.pipeline_checks_inner.winfo_children():
-            child.destroy()
-        self.pipeline_check_vars = {}
-        visible_rows = [
-            row for row in rows if self.pipeline_visibility.get(row.name, False)
-        ]
-        if not visible_rows:
-            ttk.Label(
-                self.pipeline_checks_inner,
-                text="No pipelines are visible here. Open Pipeline Library to enable some.",
-            ).grid(row=0, column=0, sticky="w", pady=(0, 6))
-            return
-
-        for idx, pipeline in enumerate(visible_rows):
-            is_available = getattr(pipeline, "available", True)
-            default_value = (
-                selection_state.get(pipeline.name, is_available)
-                if selection_state is not None
-                else is_available
-            )
-            var = tk.BooleanVar(value=default_value if is_available else False)
-            var._enabled = is_available  # type: ignore[attr-defined]
-            label = pipeline.name if is_available else f"{pipeline.name} (unavailable)"
-            state = "normal" if is_available else "disabled"
-            check = ttk.Checkbutton(
-                self.pipeline_checks_inner, text=label, variable=var, state=state
-            )
-            check.grid(row=idx, column=0, sticky="w", padx=(0, 8), pady=(0, 6))
-            tip_text = self._descriptor_tooltip_text(pipeline)
-            if tip_text:
-                _Tooltip(
-                    check,
-                    tip_text,
-                    bg=self._surface_color,
-                    fg=self._text_fg,
-                )
-            self.pipeline_check_vars[pipeline.name] = var
-
     def _populate_pipeline_library(self, rows: list[PipelineDescriptor]) -> None:
         for child in self.pipeline_library_inner.winfo_children():
             child.destroy()
         self.pipeline_visibility_vars = {}
         self.pipeline_library_inner.columnconfigure(0, weight=1)
 
-        ttk.Label(self.pipeline_library_inner, text="Show in Batch").grid(
+        ttk.Label(self.pipeline_library_inner, text="Selected").grid(
             row=0, column=0, sticky="w", pady=(0, 6)
         )
         ttk.Label(self.pipeline_library_inner, text="Status").grid(
@@ -1118,13 +899,16 @@ class ProcessApp(_BaseAppTk):
         )
 
         for idx, pipeline in enumerate(rows, start=1):
+            is_available = getattr(pipeline, "available", True)
             var = tk.BooleanVar(
                 value=self.pipeline_visibility.get(pipeline.name, False)
+                and is_available
             )
             check = ttk.Checkbutton(
                 self.pipeline_library_inner,
                 text=pipeline.name,
                 variable=var,
+                state="normal" if is_available else "disabled",
                 command=lambda name=pipeline.name, visible_var=var: (
                     self._set_pipeline_visibility(name, visible_var.get())
                 ),
@@ -1144,56 +928,6 @@ class ProcessApp(_BaseAppTk):
 
         self._update_pipeline_library_summary()
 
-    def _populate_postprocess_checks(
-        self,
-        rows: list[PostprocessDescriptor],
-        selection_state: dict[str, bool] | None = None,
-    ) -> None:
-        for child in self.postprocess_checks_inner.winfo_children():
-            child.destroy()
-        self.postprocess_check_vars = {}
-        visible_rows = [
-            row for row in rows if self.postprocess_visibility.get(row.name, False)
-        ]
-        if not visible_rows:
-            ttk.Label(
-                self.postprocess_checks_inner,
-                text=(
-                    "No postprocess steps are visible here. "
-                    "Open Postprocess Library to enable some."
-                ),
-            ).grid(row=0, column=0, sticky="w", pady=(0, 6))
-            return
-
-        for idx, postprocess in enumerate(visible_rows):
-            is_available = getattr(postprocess, "available", True)
-            default_value = (
-                selection_state.get(postprocess.name, is_available)
-                if selection_state is not None
-                else is_available
-            )
-            var = tk.BooleanVar(value=default_value if is_available else False)
-            var._enabled = is_available  # type: ignore[attr-defined]
-            label = (
-                postprocess.name
-                if is_available
-                else f"{postprocess.name} (unavailable)"
-            )
-            state = "normal" if is_available else "disabled"
-            check = ttk.Checkbutton(
-                self.postprocess_checks_inner, text=label, variable=var, state=state
-            )
-            check.grid(row=idx, column=0, sticky="w", padx=(0, 8), pady=(0, 6))
-            tip_text = self._descriptor_tooltip_text(postprocess)
-            if tip_text:
-                _Tooltip(
-                    check,
-                    tip_text,
-                    bg=self._surface_color,
-                    fg=self._text_fg,
-                )
-            self.postprocess_check_vars[postprocess.name] = var
-
     def _populate_postprocess_library(
         self, rows: list[PostprocessDescriptor]
     ) -> None:
@@ -1202,7 +936,7 @@ class ProcessApp(_BaseAppTk):
         self.postprocess_visibility_vars = {}
         self.postprocess_library_inner.columnconfigure(0, weight=1)
 
-        ttk.Label(self.postprocess_library_inner, text="Show in Batch").grid(
+        ttk.Label(self.postprocess_library_inner, text="Selected").grid(
             row=0, column=0, sticky="w", pady=(0, 6)
         )
         ttk.Label(self.postprocess_library_inner, text="Status").grid(
@@ -1210,13 +944,16 @@ class ProcessApp(_BaseAppTk):
         )
 
         for idx, postprocess in enumerate(rows, start=1):
+            is_available = getattr(postprocess, "available", True)
             var = tk.BooleanVar(
                 value=self.postprocess_visibility.get(postprocess.name, False)
+                and is_available
             )
             check = ttk.Checkbutton(
                 self.postprocess_library_inner,
                 text=postprocess.name,
                 variable=var,
+                state="normal" if is_available else "disabled",
                 command=lambda name=postprocess.name, visible_var=var: self._set_postprocess_visibility(
                     name, visible_var.get()
                 ),
@@ -1241,6 +978,10 @@ class ProcessApp(_BaseAppTk):
             (pipeline.name for pipeline in rows),
             self.settings_store.load_pipeline_visibility(),
         )
+        for pipeline in rows:
+            if not pipeline.available and visibility.get(pipeline.name, False):
+                visibility[pipeline.name] = False
+                changed = True
         self.pipeline_visibility = visibility
         if changed:
             self._persist_pipeline_visibility()
@@ -1250,6 +991,10 @@ class ProcessApp(_BaseAppTk):
             (postprocess.name for postprocess in rows),
             self.settings_store.load_postprocess_visibility(),
         )
+        for postprocess in rows:
+            if not postprocess.available and visibility.get(postprocess.name, False):
+                visibility[postprocess.name] = False
+                changed = True
         self.postprocess_visibility = visibility
         if changed:
             self._persist_postprocess_visibility()
@@ -1260,7 +1005,7 @@ class ProcessApp(_BaseAppTk):
         except OSError as exc:
             self._show_settings_warning(
                 "Settings not saved",
-                f"Could not save pipeline visibility preferences:\n{exc}",
+                f"Could not save pipeline selection preferences:\n{exc}",
             )
 
     def _persist_postprocess_visibility(self) -> None:
@@ -1269,105 +1014,142 @@ class ProcessApp(_BaseAppTk):
         except OSError as exc:
             self._show_settings_warning(
                 "Settings not saved",
-                f"Could not save postprocess visibility preferences:\n{exc}",
+                f"Could not save postprocess selection preferences:\n{exc}",
             )
 
     def _set_pipeline_visibility(self, name: str, visible: bool) -> None:
+        pipeline = self.pipeline_catalog.get(name)
+        if pipeline is not None and not pipeline.available:
+            visible = False
         if self.pipeline_visibility.get(name) == visible:
             return
         self.pipeline_visibility[name] = visible
         self._persist_pipeline_visibility()
-        selection_state = {
-            pipeline_name: var.get()
-            for pipeline_name, var in self.pipeline_check_vars.items()
-        }
-        self._populate_pipeline_checks(self.pipeline_rows, selection_state)
         self._update_pipeline_library_summary()
 
     def _set_postprocess_visibility(self, name: str, visible: bool) -> None:
+        postprocess = self.postprocess_catalog.get(name)
+        if postprocess is not None and not postprocess.available:
+            visible = False
         if self.postprocess_visibility.get(name) == visible:
             return
         self.postprocess_visibility[name] = visible
         self._persist_postprocess_visibility()
-        selection_state = {
-            postprocess_name: var.get()
-            for postprocess_name, var in self.postprocess_check_vars.items()
-        }
-        self._populate_postprocess_checks(self.postprocess_rows, selection_state)
         self._update_postprocess_library_summary()
 
     def _set_all_pipeline_visibility(self, visible: bool) -> None:
         changed = False
-        for name in self.pipeline_visibility:
-            if self.pipeline_visibility[name] != visible:
-                self.pipeline_visibility[name] = visible
+        target_values = {
+            pipeline.name: visible and pipeline.available
+            for pipeline in self.pipeline_rows
+        }
+        for name, target_value in target_values.items():
+            if self.pipeline_visibility.get(name) != target_value:
+                self.pipeline_visibility[name] = target_value
                 changed = True
         if not changed:
             return
-        for var in self.pipeline_visibility_vars.values():
-            var.set(visible)
+        for name, var in self.pipeline_visibility_vars.items():
+            var.set(self.pipeline_visibility.get(name, False))
         self._persist_pipeline_visibility()
-        selection_state = {
-            pipeline_name: var.get()
-            for pipeline_name, var in self.pipeline_check_vars.items()
-        }
-        self._populate_pipeline_checks(self.pipeline_rows, selection_state)
         self._update_pipeline_library_summary()
 
     def _set_all_postprocess_visibility(self, visible: bool) -> None:
         changed = False
-        for name in self.postprocess_visibility:
-            if self.postprocess_visibility[name] != visible:
-                self.postprocess_visibility[name] = visible
+        target_values = {
+            postprocess.name: visible and postprocess.available
+            for postprocess in self.postprocess_rows
+        }
+        for name, target_value in target_values.items():
+            if self.postprocess_visibility.get(name) != target_value:
+                self.postprocess_visibility[name] = target_value
                 changed = True
         if not changed:
             return
-        for var in self.postprocess_visibility_vars.values():
-            var.set(visible)
+        for name, var in self.postprocess_visibility_vars.items():
+            var.set(self.postprocess_visibility.get(name, False))
         self._persist_postprocess_visibility()
-        selection_state = {
-            postprocess_name: var.get()
-            for postprocess_name, var in self.postprocess_check_vars.items()
-        }
-        self._populate_postprocess_checks(self.postprocess_rows, selection_state)
         self._update_postprocess_library_summary()
 
     def _update_pipeline_library_summary(self) -> None:
-        visible_count = sum(self.pipeline_visibility.values())
-        total_count = len(self.pipeline_visibility)
+        selected_count = sum(
+            1
+            for pipeline in self.pipeline_rows
+            if pipeline.available and self.pipeline_visibility.get(pipeline.name, False)
+        )
+        available_count = sum(1 for pipeline in self.pipeline_rows if pipeline.available)
         self.pipeline_library_summary_var.set(
-            f"Visible in Batch: {visible_count}/{total_count}"
+            f"Selected: {selected_count}/{available_count}"
         )
 
     def _update_postprocess_library_summary(self) -> None:
-        visible_count = sum(self.postprocess_visibility.values())
-        total_count = len(self.postprocess_visibility)
+        selected_count = sum(
+            1
+            for postprocess in self.postprocess_rows
+            if postprocess.available
+            and self.postprocess_visibility.get(postprocess.name, False)
+        )
+        available_count = sum(
+            1 for postprocess in self.postprocess_rows if postprocess.available
+        )
         self.postprocess_library_summary_var.set(
-            f"Visible in Batch: {visible_count}/{total_count}"
+            f"Selected: {selected_count}/{available_count}"
         )
 
-    def open_pipeline_library(self) -> None:
-        self.notebook.select(self.pipeline_library_tab)
+    def _package_folder(self, package_name: str) -> Path | None:
+        module = sys.modules.get(package_name)
+        module_path = getattr(module, "__path__", None)
+        if module_path:
+            for path_value in module_path:
+                folder = Path(path_value).resolve()
+                if folder.is_dir():
+                    return folder
 
-    def open_postprocess_library(self) -> None:
-        self.notebook.select(self.postprocess_library_tab)
+        module_file = getattr(module, "__file__", None)
+        if module_file:
+            folder = Path(module_file).resolve().parent
+            if folder.is_dir():
+                return folder
 
-    def open_batch_tab(self) -> None:
-        self.notebook.select(self.batch_tab)
+        for root in self._resource_roots():
+            folder = root / package_name
+            if folder.is_dir():
+                return folder
+        return None
 
-    def open_export_tab(self) -> None:
-        self.notebook.select(self.export_tab)
+    def _open_folder(self, folder: Path | None, label: str) -> None:
+        if folder is None or not folder.is_dir():
+            messagebox.showerror(label, f"Could not find the {label.lower()}.")
+            return
+        try:
+            if sys.platform.startswith("win"):
+                os.startfile(str(folder))  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                subprocess.run(["open", str(folder)], check=False)
+            else:
+                subprocess.run(["xdg-open", str(folder)], check=False)
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror(label, f"Could not open folder:\n{folder}\n\n{exc}")
 
-    def show_all_pipelines_in_main_ui(self) -> None:
+    def open_pipeline_folder(self) -> None:
+        self._open_folder(self._package_folder("pipelines"), "Pipeline folder")
+
+    def open_postprocess_folder(self) -> None:
+        self._open_folder(
+            self._package_folder("postprocess"),
+            "Postprocess folder",
+        )
+
+    def select_all_pipelines(self) -> None:
         self._set_all_pipeline_visibility(True)
 
-    def hide_all_pipelines_from_main_ui(self) -> None:
+    def deselect_all_pipelines(self) -> None:
         self._set_all_pipeline_visibility(False)
 
-    def show_all_postprocesses_in_main_ui(self) -> None:
+    def select_all_postprocesses(self) -> None:
         self._set_all_postprocess_visibility(True)
 
-    def hide_all_postprocesses_from_main_ui(self) -> None:
+    def deselect_all_postprocesses(self) -> None:
         self._set_all_postprocess_visibility(False)
 
     def refresh_pipeline_catalog(self) -> None:
@@ -1380,8 +1162,8 @@ class ProcessApp(_BaseAppTk):
     def _reset_batch_output(
         self,
         message: str = (
-            "Select an input path, choose pipelines and optional postprocess steps, "
-            "then run batch."
+            "Select an input/output path, choose pipelines in Pipeline Library, "
+            "choose optional postprocess steps in Postprocess Library, then run."
         ),
     ) -> None:
         self.batch_output.configure(state="normal")
@@ -1430,26 +1212,6 @@ class ProcessApp(_BaseAppTk):
         if export:
             self._export_batch_log(initial_dir)
 
-    def select_all_pipelines(self) -> None:
-        for var in self.pipeline_check_vars.values():
-            if getattr(var, "_enabled", True):
-                var.set(True)
-
-    def clear_all_pipelines(self) -> None:
-        for var in self.pipeline_check_vars.values():
-            if getattr(var, "_enabled", True):
-                var.set(False)
-
-    def select_all_postprocesses(self) -> None:
-        for var in self.postprocess_check_vars.values():
-            if getattr(var, "_enabled", True):
-                var.set(True)
-
-    def clear_all_postprocesses(self) -> None:
-        for var in self.postprocess_check_vars.values():
-            if getattr(var, "_enabled", True):
-                var.set(False)
-
     def choose_batch_folder(self) -> None:
         path = filedialog.askdirectory(
             initialdir=self.batch_input_var.get() or None,
@@ -1489,16 +1251,22 @@ class ProcessApp(_BaseAppTk):
         data_path = Path(data_value).expanduser()
 
         selected_names = [
-            name for name, var in self.pipeline_check_vars.items() if var.get()
+            pipeline.name
+            for pipeline in self.pipeline_rows
+            if pipeline.available and self.pipeline_visibility.get(pipeline.name, False)
         ]
         if not selected_names:
             messagebox.showwarning(
-                "No pipelines", "Select at least one pipeline to run."
+                "No pipelines",
+                "Select at least one pipeline in Pipeline Library.",
             )
             return
 
         selected_postprocess_names = [
-            name for name, var in self.postprocess_check_vars.items() if var.get()
+            postprocess.name
+            for postprocess in self.postprocess_rows
+            if postprocess.available
+            and self.postprocess_visibility.get(postprocess.name, False)
         ]
 
         pipelines: list[PipelineDescriptor] = []
@@ -1732,14 +1500,6 @@ class ProcessApp(_BaseAppTk):
             else:
                 self._log_batch(f"[POST OK] {descriptor.name}")
             self._advance_progress()
-
-    def _toggle_zip_name_visibility(self) -> None:
-        if self.batch_zip_var.get():
-            self.batch_zip_label.grid()
-            self.batch_zip_entry.grid()
-        else:
-            self.batch_zip_label.grid_remove()
-            self.batch_zip_entry.grid_remove()
 
     def _prepare_data_root(
         self, data_path: Path
