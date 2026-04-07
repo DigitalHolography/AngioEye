@@ -1,0 +1,33 @@
+{
+  "pipeline_visibility": {
+    "Basic Stats": false,
+    "Dummy Heavy": false,
+    "Harmonic metrics": false,
+    "Static Example": false,
+    "TauhN10": false,
+    "TauhN10PerBeat": false,
+    "VelocityComparison": false,
+    "Windkessel_RC": false,
+    "arterialformshapesegment": false,
+    "lowrank_pulsatility_metrics": false,
+    "modal_analysis": false,
+    "newtesthelloworldpipeline": false,
+    "old_waveform_shape_metrics": false,
+    "reconstruct": false,
+    "segment_waveform_shape_metrics": false,
+    "segmentformshape": false,
+    "signal_reconstruction": false,
+    "waveform": false,
+    "waveform_harmonic_organization": false,
+    "waveform_harmonic_organization_SVD": false,
+    "waveform_shape_metrics": true
+  },
+  "postprocess_visibility": {
+    "Pipeline Metrics Manifest": false,
+    "Postprocess Tutorial": false,
+    "QC_Windkessel_RC": false,
+    "Variability and heterogeneity tables": false,
+    "groups comparison dashboard": false
+  },
+  "ui_mode": "minimal"
+}

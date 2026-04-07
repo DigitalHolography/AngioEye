@@ -90,6 +90,8 @@ class ProcessApp(_BaseAppTk):
         super().__init__()
         self.title("AngioEye")
         self.settings_store = AppSettingsStore()
+        self._settings_warning_shown = False
+        self._ensure_default_settings()
         self.ui_mode = self.settings_store.load_ui_mode()
         self.pipeline_registry: dict[str, PipelineDescriptor] = {}
         self.pipeline_catalog: dict[str, PipelineDescriptor] = {}
@@ -111,7 +113,6 @@ class ProcessApp(_BaseAppTk):
         self.minimal_input_path_var = tk.StringVar(value="No input selected")
         self.minimal_output_path_var = tk.StringVar(value=str(Path.cwd()))
         self.minimal_output_name_var = tk.StringVar(value="Output name: -")
-        self._settings_warning_shown = False
         self._progress_total_units = 1.0
         self._progress_completed_units = 0.0
         self._window_icon_image: tk.PhotoImage | None = None
@@ -457,6 +458,15 @@ class ProcessApp(_BaseAppTk):
             self.iconphoto(True, self._window_icon_image)
         except tk.TclError:
             pass
+
+    def _ensure_default_settings(self) -> None:
+        try:
+            self.settings_store.initialize_from_defaults()
+        except OSError as exc:
+            self._show_settings_warning(
+                "Settings not initialized",
+                f"Could not create default settings file:\n{exc}",
+            )
 
     def _show_settings_warning(self, title: str, details: str) -> None:
         if self._settings_warning_shown:

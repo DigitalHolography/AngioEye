@@ -10,6 +10,7 @@ datas += collect_data_files('sv_ttk')
 datas += collect_data_files('tkinterdnd2')
 datas += [('Angioeye_logo.png', '.')]
 datas += [('AngioEye.ico', '.')]
+datas += [('default_settings.json', '.')]
 hiddenimports += collect_submodules('pipelines')
 hiddenimports += collect_submodules('postprocess')
 hiddenimports += collect_submodules('tkinterdnd2')

@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
 APP_NAME = "AngioEye"
 SETTINGS_FILENAME = "settings.json"
+DEFAULT_SETTINGS_FILENAME = "default_settings.json"
 
 
 def default_settings_path() -> Path:
@@ -18,6 +20,40 @@ def default_settings_path() -> Path:
         xdg_config = os.getenv("XDG_CONFIG_HOME")
         base_dir = Path(xdg_config) if xdg_config else Path.home() / ".config"
     return base_dir / APP_NAME / SETTINGS_FILENAME
+
+
+def _resource_roots() -> list[Path]:
+    roots: list[Path] = []
+    frozen_root = getattr(sys, "_MEIPASS", None)
+    if frozen_root:
+        roots.append(Path(frozen_root))
+    if getattr(sys, "frozen", False):
+        roots.append(Path(sys.executable).resolve().parent)
+    roots.append(Path(__file__).resolve().parents[1])
+    roots.append(Path.cwd())
+    return roots
+
+
+def default_settings_template_path() -> Path | None:
+    env_path = os.getenv("ANGIOEYE_DEFAULT_SETTINGS")
+    if env_path:
+        candidate = Path(env_path).expanduser()
+        if candidate.is_file():
+            return candidate
+
+    for root in _resource_roots():
+        candidate = root / DEFAULT_SETTINGS_FILENAME
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _load_settings_file(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def normalize_named_visibility(
@@ -60,17 +96,36 @@ def normalize_postprocess_visibility(
 
 
 class AppSettingsStore:
-    def __init__(self, path: Path | None = None) -> None:
+    def __init__(
+        self,
+        path: Path | None = None,
+        default_template_path: Path | None = None,
+    ) -> None:
         self.path = path or default_settings_path()
+        self.default_template_path = (
+            default_template_path
+            if default_template_path is not None
+            else (default_settings_template_path() if path is None else None)
+        )
+
+    def load_defaults(self) -> dict[str, Any]:
+        if self.default_template_path is None:
+            return {}
+        return _load_settings_file(self.default_template_path)
+
+    def initialize_from_defaults(self) -> bool:
+        if self.path.exists():
+            return False
+        defaults = self.load_defaults()
+        if not defaults:
+            return False
+        self.save(defaults)
+        return True
 
     def load(self) -> dict[str, Any]:
-        try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            return {}
-        except (OSError, json.JSONDecodeError):
-            return {}
-        return payload if isinstance(payload, dict) else {}
+        if not self.path.exists():
+            return self.load_defaults()
+        return _load_settings_file(self.path)
 
     def save(self, settings: Mapping[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
