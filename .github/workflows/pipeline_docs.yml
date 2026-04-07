@@ -19,3 +19,44 @@ jobs:
           git branch --show-current
           echo "Latest commit:"
           git log -1 --oneline
+
+      - name: Retrieve modified/new files
+        id: get_files
+        run: |
+          echo "Retrieving modified/new files..."
+          git diff --name-only HEAD~1 HEAD > modified_files.txt
+          echo "Modified/New files:"
+          cat modified_files.txt
+
+      - name: Retrieve pipeline python files
+        id: get_pipeline_files
+        run: |
+          echo "Checking for pipeline scripts..."
+          grep '^src/pipelines/.*\.py$' modified_files.txt > pipeline_scripts.txt || true
+          if [ -s pipeline_scripts.txt ]; then
+            echo "Pipeline scripts found:"
+            cat pipeline_scripts.txt
+          else
+            echo "No pipeline scripts found."
+            echo "no_scripts=true" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Exit if no pipeline scripts
+        if: steps.get_pipeline_files.outputs.no_scripts == 'true'
+        run: |
+          echo "No pipeline scripts to process. Exiting."
+          exit 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Process pipeline scripts
+        run: |
+          echo "Processing pipeline scripts..."
+          while IFS= read -r script; do
+            echo "Generating docs for $script"
+            # Placeholder for actual doc generation command, e.g.:
+            # python generate_docs.py --input "$script" --output "docs/$(basename "$script" .py).md"
+          done < pipeline_scripts.txt
