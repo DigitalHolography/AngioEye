@@ -1,3 +1,6 @@
+# Changes to consider:
+# The workflow is triggered manually or on push. Could change this to trigger on pull request to main/dev branches instead, to ensure docs are generated before merging.
+
 name: Pipeline Docs Generation
 
 on:
@@ -24,7 +27,7 @@ jobs:
         id: get_files
         run: |
           echo "Retrieving modified/new files..."
-          git diff --name-only HEAD~1 HEAD > modified_files.txt
+          git diff --name-only ${{ github.event.before }} ${{ github.event.sha }} > modified_files.txt
           echo "Modified/New files:"
           cat modified_files.txt
 
