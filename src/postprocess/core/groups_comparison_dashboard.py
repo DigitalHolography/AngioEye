@@ -786,7 +786,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
             info_box("Missing Delta_DTI support")
             return
         x_lin = np.linspace(0, 1, n)
-        ax.plot(x_lin, a, color=main_color)
+        ax.plot(x_lin, a, color=main_color, linewidth=3)
         ax.fill_between(
             x_lin,
             0,
@@ -831,7 +831,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
         rho_h_80 = float(support.get("rho_h_80", np.nan))
         if not np.isfinite(rho_h_80):
             rho_h_80 = l80 / max(len(b), 1)
-        ax.plot(xk, csum, color="black", linewidth=2, marker="o", markersize=4)
+        ax.plot(xk, csum, color=main_color, linewidth=3, marker="o", markersize=4)
 
         ax.axhline(0.80, linestyle="--", color="black", linewidth=1)
         if np.isfinite(l80):
@@ -864,7 +864,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
         w_h_50_80 = float(support.get("w_h_50_80", np.nan))
         if not np.isfinite(w_h_50_80):
             w_h_50_80 = (l80 - l50) / max(len(b), 1)
-        ax.plot(xk, csum, color="black", linewidth=2, marker="o", markersize=4)
+        ax.plot(xk, csum, color=main_color, linewidth=3, marker="o", markersize=4)
         ax.axhline(0.50, linestyle="--", color="black", linewidth=1)
         ax.axhline(0.80, linestyle="--", color="black", linewidth=1)
         if np.isfinite(l50):
@@ -1080,7 +1080,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
             0,
             sig[tau < tau_k],
             where=np.isfinite(sig[tau < tau_k]),
-            color="#fbd3f2",
+            color= fill_color1,
         )
         ax.fill_between(
             tau,
@@ -1089,7 +1089,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
             where=np.isfinite(sig),
             hatch="//",
             facecolor="none",
-            edgecolor="#FB8F8F",
+            edgecolor=fill_color2,
         )
         vline_to_curve(
             tau_k, tau, sig, y0=0.0, color="#000000", linestyles="--", linewidth=1
@@ -1531,7 +1531,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
             label="reconstruction",
         )
         info_box(
-            [rf"$E_{{recon,Hmax}}={e_recon:.3f}$", f"Hmax={len(harmonic_magnitudes)}"]
+            [rf"$E_{{recon,Hmax}}={e_recon:.4f}$", f"Hmax={len(harmonic_magnitudes)}"]
         )
         ax.legend(frameon=False, fontsize=10)
         ax.set_xlabel("rectified time : t/T", fontsize=14)
