@@ -14,7 +14,10 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Debug info
         run: |
@@ -27,7 +30,7 @@ jobs:
         id: get_files
         run: |
           echo "Retrieving modified/new files..."
-          git diff --name-only ${{ github.event.before }} ${{ github.event.sha }} > modified_files.txt
+          git diff --name-only ${{ github.event.before }} ${{ github.sha }} > modified_files.txt
           echo "Modified/New files:"
           cat modified_files.txt
 
