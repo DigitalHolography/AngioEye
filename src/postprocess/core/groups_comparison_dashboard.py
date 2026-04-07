@@ -15,11 +15,70 @@ import plotly.graph_objects as go
 from matplotlib import gridspec
 from matplotlib.ticker import FormatStrFormatter
 
-PIPELINE_ROOT = "/Pipelines/arterial_waveform_shape_metrics"
+PIPELINE_ROOT = "/Pipelines/waveform_shape_metrics"
 VALID_METRIC_FOLDERS = ["raw", "bandlimited"]
 VALID_VESSELS = ["artery", "vein"]
-VESSEL_COLORS = {"artery" : {"main" :"#EC5241", "fill" : "#F2CCC7", "fill_dark": "#FB8F8F", "secondary" : "#f9c2ca" }, 
-                 "vein" : {"main" :"#3B82F6", "fill" : "#C7DFF2", "fill_dark": "#8FAEFB", "secondary" : "#c2cff9" }}
+PIPELINE_BASE_CANDIDATES_WINDKESSEL = [
+    "/Pipelines/windkessel_rc/bandlimited",
+    "/Pipelines/Windkessel_RC/bandlimited",
+]
+
+METHODS_WINDKESSEL = ["arx", "freq", "time_integral"]
+METRICS_WINDKESSEL = ["tau", "Deltat"]
+
+METHOD_MARKERS_WINDKESSEL = {
+    "arx": "D",
+    "freq": "o",
+    "time_integral": "^",
+}
+
+
+def extract_group_name(root: str, tmpdir: str) -> str:
+    return "all" if root == tmpdir else os.path.basename(root)
+
+
+def iter_h5_files_in_zip(zip_path):
+    """
+    Itère sur tous les fichiers .h5 d'un zip.
+    Yield: (tmpdir, root, group_name, filename, fullpath)
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with zipfile.ZipFile(zip_path, "r") as z:
+            z.extractall(tmpdir)
+
+        for root, _, files in os.walk(tmpdir):
+            h5_files = sorted(f for f in files if f.endswith(".h5"))
+            if not h5_files:
+                continue
+
+            group_name = extract_group_name(root, tmpdir)
+
+            for file in h5_files:
+                yield tmpdir, root, group_name, file, os.path.join(root, file)
+
+
+def build_group_order(groups):
+    groups = sorted(groups)
+    control_name = find_control_group_name(groups)
+    if control_name in groups:
+        groups = [g for g in groups if g != control_name] + [control_name]
+    return groups
+
+
+def find_existing_base_path(h5file, candidates):
+    for base in candidates:
+        if base in h5file:
+            return base
+    return None
+
+
+def read_dataset_safe(h5file, path):
+    if path not in h5file:
+        return None
+    arr = np.asarray(h5file[path], dtype=float)
+    if arr.shape == ():
+        return np.array([float(arr)], dtype=float)
+    return np.ravel(arr).astype(float)
 
 
 def get_metrics_base_path(vessel: str) -> str:
@@ -28,6 +87,39 @@ def get_metrics_base_path(vessel: str) -> str:
 
 def get_mode_path(vessel: str, mode: str) -> str:
     return f"{PIPELINE_ROOT}/{vessel}/global/{mode}"
+
+
+def extract_windkessel_rows_from_h5(h5_path, group_name):
+    rows = []
+
+    with h5py.File(h5_path, "r") as f:
+        base = find_existing_base_path(f, PIPELINE_BASE_CANDIDATES_WINDKESSEL)
+        if base is None:
+            return rows
+
+        for method in METHODS_WINDKESSEL:
+            for metric in METRICS_WINDKESSEL:
+                dataset_path = f"{base}/{method}/{metric}"
+                values = read_dataset_safe(f, dataset_path)
+                if values is None:
+                    continue
+
+                values = values[np.isfinite(values)]
+
+                for v in values:
+                    rows.append(
+                        {
+                            "file": os.path.basename(h5_path),
+                            "group": group_name,
+                            "method": method,
+                            "metric": metric,
+                            "value": float(v),
+                        }
+                    )
+
+    return rows
+
+
 SELECTED_METRICS_PNG = {
     "mu_t_over_T",
     "RI",
@@ -45,21 +137,11 @@ SELECTED_METRICS_PNG = {
     "slope_fall_normalized",
     "t_up_over_T",
     "t_down_over_T",
-    "S_decay",
-    #"crest_factor",
-    "R_SD",
+    "crest_factor",
     "Delta_DTI",
     "gamma_t",
-    "spectral_entropy",
-    "delta_phi2",
-    "rho_h_90",
-    "rho_h_95",
-    "mu_h",
-    "sigma_h",
     "N_eff_over_T",
     "N_H_over_T",
-    "phase_locking_residual",
-    "E_recon_H_MAX",
     "Q_t_skew",
     "Q_t_width",
     "R_Q_t",
@@ -70,9 +152,14 @@ SELECTED_METRICS_PNG = {
     "E_slope",
     "E_curv",
     "t50_over_T",
-    "t_delta_phi_n",
+    "t_delta_phi_over_T",
     "t_delta_phi_n_over_T",
-    "t_delta_phi_over_T"
+    "rho_h_80",                       
+    "w_h_50_80",                       
+    "N_H_spec_over_H_minus_1",         
+    "D_phi",                           
+    "s_delta_phi_over_T",             
+    "eta_H",   
 }
 METRIC_ALIASES = {
     "Hspec": "spectral_entropy",
@@ -82,7 +169,7 @@ LATEX_FORMULAS = {
     "RI": r"$\rm RI$",
     "rho_h_90": r"$\rho_{h,90}$",
     "rho_h_95": r"$\rho_{h,95}$",
-    #"crest_factor": r"$\rm CF$",
+    "crest_factor": r"$\rm CF$",
     "t50_over_T": r"$t_{50}/T$",
     "R_VTI": r"$R_{VTI}$",
     "spectral_entropy": r"$H_{spec}$",
@@ -120,9 +207,14 @@ LATEX_FORMULAS = {
     "W50_over_T": r"$W_{50}/T$",
     "W80_over_T": r"$W_{80}/T$",
     "N_H_over_T": r"$N_H/T$",
-    "t_Delta_phi_n" : r"$t_{\Delta_{\phi_n}}$",
-    "t_Delta_phi_n_over_T" : r"$t_{\Delta_{\phi_n}}/T$",
-    "t_Delta_phi_over_T" : r"$t_{\Delta_{\phi}}/T$"
+    "t_delta_phi_n_over_T": r"$t_{\Delta\phi_n}/T$",
+    "t_delta_phi_over_T": r"$t_{\Delta\phi}/T$",
+    "D_phi": r"$D_{\phi}$",
+    "s_delta_phi_over_T": r"$s_{\Delta\phi}/T$",
+    "eta_H": r"$\eta_H$",
+    "rho_h_80": r"$\rho_{h,80}$",
+    "w_h_50_80": r"$w_{h,50\!-\!80}$",
+    "N_H_spec_over_H_minus_1": r"$N_{H,\mathrm{spec}}/(H-1)$",
 }
 
 
@@ -141,6 +233,175 @@ def extract_graphics_support(h5_path, vessel="artery", mode="bandlimited"):
 
     return out
 
+
+def analyze_zip_windkessel(zip_path):
+    rows = []
+
+    for _, _, group_name, _, h5_path in iter_h5_files_in_zip(zip_path):
+        try:
+            rows.extend(extract_windkessel_rows_from_h5(h5_path, group_name))
+        except Exception as e:
+            print(f"Erreur avec {h5_path}: {e}")
+
+    return pd.DataFrame(rows)
+
+
+def plot_windkessel_metric_for_method(df, metric, method, out_path):
+    sub = df[(df["metric"] == metric) & (df["method"] == method)].copy()
+
+    if sub.empty:
+        print(f"Aucune donnée pour metric={metric}, method={method}")
+        return
+
+    groups = build_group_order(sub["group"].dropna().unique().tolist())
+    x_pos = {g: i for i, g in enumerate(groups)}
+
+    fig, ax = plt.subplots(figsize=(10, 7), dpi=200)
+    ax.set_facecolor("#f2f2f2")
+
+    control_name = find_control_group_name(groups)
+    if control_name in x_pos:
+        cx = x_pos[control_name]
+        ax.axvspan(cx - 0.5, cx + 0.5, color="#d9d9d9", zorder=0)
+
+    rng = np.random.default_rng(0)
+
+    for group in groups:
+        gdf = sub[sub["group"] == group]
+        if gdf.empty:
+            continue
+
+        x = np.full(len(gdf), x_pos[group], dtype=float) + rng.normal(
+            0, 0.05, size=len(gdf)
+        )
+
+        ax.scatter(
+            x,
+            gdf["value"].values,
+            s=22,
+            color="black",
+            zorder=2,
+        )
+
+    stats = sub.groupby("group")["value"].agg(["mean", "std"]).reset_index()
+
+    for _, row in stats.iterrows():
+        group = row["group"]
+        mean_val = row["mean"]
+        std_val = row["std"] if np.isfinite(row["std"]) else 0.0
+
+        ax.errorbar(
+            x_pos[group],
+            mean_val,
+            yerr=std_val,
+            fmt=METHOD_MARKERS_WINDKESSEL[method],
+            color="black",
+            ecolor="black",
+            elinewidth=1.8,
+            capsize=6,
+            markersize=13,
+            markerfacecolor="none",
+            markeredgecolor="black",
+            markeredgewidth=2.2,
+            zorder=3,
+        )
+
+    ax.set_xticks([x_pos[g] for g in groups])
+    ax.set_xticklabels(groups, fontsize=17)
+
+    ylabel = "tau (s)" if metric == "tau" else "Deltat (s)"
+    ax.set_ylabel(ylabel, fontsize=16)
+    ax.set_title(f"Windkessel bandlimited - {metric} - {method}", fontsize=18, pad=15)
+
+    ax.grid(True, axis="y", color="gray", linewidth=0.8)
+    ax.tick_params(axis="y", labelsize=14)
+
+    plt.tight_layout()
+    fig.savefig(out_path, bbox_inches="tight")
+    plt.close(fig)
+
+
+def export_windkessel_figures(zip_path, out_dir, format="png"):
+    os.makedirs(out_dir, exist_ok=True)
+
+    df = analyze_zip_windkessel(zip_path)
+
+    if df.empty:
+        print("Aucune donnée Windkessel trouvée dans le zip.")
+        return
+
+    for metric in METRICS_WINDKESSEL:
+        for method in METHODS_WINDKESSEL:
+            filename = f"windkessel_{metric}_{method}.{format}"
+            out_path = os.path.join(out_dir, filename)
+
+            plot_windkessel_metric_for_method(
+                df,
+                metric,
+                method,
+                out_path,
+            )
+
+    # CSV uniquement une fois (png par exemple)
+    if format == "png":
+        csv_path = os.path.join(out_dir, "windkessel_values.csv")
+        df.to_csv(csv_path, index=False)
+def _safe_norm(v):
+    v = np.asarray(v, dtype=float)
+    s = np.nansum(v)
+    if not np.isfinite(s) or s <= EPS:
+        return np.full_like(v, np.nan, dtype=float)
+    return v / s
+
+def _higher_harmonic_weights_from_support(support):
+    """
+    Retourne les poids normalisés des harmoniques n=2..H.
+    On part de harmonic_energies si disponible, sinon harmonic_energies_weights.
+    """
+    e = np.asarray(support.get("harmonic_energies", []), dtype=float)
+
+    if e.size == 0:
+        w = np.asarray(support.get("harmonic_energies_weights", []), dtype=float)
+        if w.size == 0:
+            return np.array([], dtype=float)
+        # w supposé sur n=1..H -> on enlève la fondamentale
+        hh = w[1:] if w.size >= 2 else np.array([], dtype=float)
+        return _safe_norm(hh)
+
+    # harmonic_energies supposé sur n=1..H
+    hh = e[1:] if e.size >= 2 else np.array([], dtype=float)
+    return _safe_norm(hh)
+
+def _interp_quantile_index_from_weights(weights, q):
+    """
+    weights: b_k, k=1..H-1
+    Retourne l_q au sens du papier, donc dans [1, H-1].
+    """
+    w = np.asarray(weights, dtype=float)
+    if w.size == 0 or not np.any(np.isfinite(w)):
+        return np.nan
+
+    B = np.cumsum(np.where(np.isfinite(w), w, 0.0))
+    for m in range(1, len(B) + 1):
+        b_prev = 0.0 if m == 1 else B[m - 2]
+        b_curr = B[m - 1]
+        if b_prev < q <= b_curr + EPS:
+            denom = max(b_curr - b_prev, EPS)
+            return (m - 1) + (q - b_prev) / denom
+    return float(len(B))
+
+def _phase_delay_equivalents_from_support(support):
+    """
+    t_{Δφ,n}/T = Δφ_n / (2π n), avec n à partir de 2.
+    """
+    dphi = np.asarray(support.get("delta_phi_all", []), dtype=float)
+    if dphi.ndim == 0 or dphi.size == 0:
+        return np.array([], dtype=float)
+
+    # après select_support_beat, on s'attend à un vecteur 1D sur n=2..H
+    dphi = np.ravel(dphi).astype(float)
+    n_vals = np.arange(2, 2 + len(dphi), dtype=float)
+    return dphi / (2.0 * np.pi * n_vals)
 
 def select_support_beat(support, beat_idx):
     out = {}
@@ -265,7 +526,9 @@ def compute_group_delta_phi_stats(zip_path, vessel="artery", mode="bandlimited")
             for file in h5_files:
                 h5_path = os.path.join(root, file)
                 try:
-                    support = extract_graphics_support(h5_path, vessel=vessel, mode=mode)
+                    support = extract_graphics_support(
+                        h5_path, vessel=vessel, mode=mode
+                    )
                     if not support:
                         continue
 
@@ -312,10 +575,6 @@ def plot_group_delta_phi_stats(ax, group_stats, group_name, vessel="artery"):
         ax.text(0.5, 0.5, f"No data for {group_name}", ha="center", va="center")
         ax.axis("off")
         return
-    style = VESSEL_COLORS.get(vessel, VESSEL_COLORS["artery"])
-
-    vessel_color=style["main"]
-    
 
     data = group_stats[group_name]
     hs = data["h"]
@@ -325,7 +584,7 @@ def plot_group_delta_phi_stats(ax, group_stats, group_name, vessel="artery"):
         hs,
         mu,
         width=0.7,
-        color=vessel_color,
+        color="#EC5241" if vessel == "artery" else "#414CEC",
         edgecolor="black",
     )
     ax.axhline(0, color="black", linewidth=1.0)
@@ -407,7 +666,10 @@ def find_control_group_name(groups):
     return None
 
 
-def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
+def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
+    main_color = "#EC5241" if vessel == "artery" else "#414CEC"
+    fill_color1 = "#f9c2ca" if vessel == "artery" else "#A2A7F4"
+    fill_color2 = "#F2CCC7" if vessel == "artery" else "#CCB6EB"
     if not support:
         ax.text(0.5, 0.5, "No graphics support", ha="center", va="center")
         ax.axis("off")
@@ -434,8 +696,6 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
     H_HIGH_MIN = int(np.asarray(support.get("H_HIGH_MIN", 4)).item())
     H_HIGH_MAX = int(np.asarray(support.get("H_HIGH_MAX", 8)).item())
     n = sig.size
-
-    
     if n < 2:
         ax.text(0.5, 0.5, "Signal too short", ha="center", va="center")
         ax.axis("off")
@@ -500,12 +760,6 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
         return np.where(np.isfinite(v), np.maximum(v, 0.0), np.nan)
 
     n = sig.size
-    style = VESSEL_COLORS.get(vessel, VESSEL_COLORS["artery"])
-
-    vessel_color=style["main"]
-    fill_color=style["fill"]
-    fill_dark_color=style["fill_dark"]
-    secondary_color=style["secondary"]
     if n < 2:
         info_box("Signal too short")
         return
@@ -518,7 +772,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
         vmin = float(support["vmin"])
         ri = float(support["RI"])
 
-        ax.plot(tau, sig, linewidth=3, color=vessel_color)
+        ax.plot(tau, sig, linewidth=3, color=main_color)
         hline_label(vmax, "Vmax", va="bottom")
         hline_label(vmin, "Vmin", va="top")
         info_box([f"RI = {ri:.3f}"])
@@ -532,7 +786,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
             info_box("Missing Delta_DTI support")
             return
         x_lin = np.linspace(0, 1, n)
-        ax.plot(x_lin, a, color=vessel_color)
+        ax.plot(x_lin, a, color=main_color)
         ax.fill_between(
             x_lin,
             0,
@@ -540,7 +794,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
             where=np.isfinite(a),
             hatch="//",
             facecolor="none",
-            edgecolor=fill_color,
+            edgecolor=fill_color1,
         )
         info_box([rf"$\Delta_{{DTI}} = {delta_dti:.3f}$"])
 
@@ -553,18 +807,193 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
         vmean = float(support["vmean"])
         pi = float(support["PI"])
 
-        ax.plot(tau, sig, linewidth=3, color=vessel_color)
+        ax.plot(tau, sig, linewidth=3, color=main_color)
         hline_label(vmax, "Vmax", va="bottom")
         hline_label(vmin, "Vmin", va="top")
         hline_label(vmean, r"$\overline{{v}}$", va="bottom")
         info_box([f"PI = {pi:.3f}"])
         ax.set_xlabel("rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
+    elif metric == "rho_h_80":
+        b = _higher_harmonic_weights_from_support(support)
+        if b.size == 0:
+            info_box("Missing higher-harmonic weights")
+            return
 
+        
+        csum = np.cumsum(b)
+        xk = np.arange(1, len(b) + 1)
+
+        l80 = float(support.get("l80", np.nan))
+        if not np.isfinite(l80):
+            l80 = _interp_quantile_index_from_weights(b, 0.80)
+
+        rho_h_80 = float(support.get("rho_h_80", np.nan))
+        if not np.isfinite(rho_h_80):
+            rho_h_80 = l80 / max(len(b), 1)
+        ax.plot(xk, csum, color="black", linewidth=2, marker="o", markersize=4)
+
+        ax.axhline(0.80, linestyle="--", color="black", linewidth=1)
+        if np.isfinite(l80):
+            ax.axvline(l80, linestyle="--", color="black", linewidth=1)
+        if np.isfinite(l80):
+            ax.plot(l80, 0.80, "o", color="black", markersize=5)
+        ax.set_xlim(0.5, len(b) + 0.5)
+        ax.set_ylim(0, 1.05)
+
+        ax.set_xlabel(r"Higher-harmonic index $k = n - 1$", fontsize=14)
+        ax.set_ylabel(r"$B(\ell)$", fontsize=14)
+        info_box([
+            rf"$\ell_{{80}}={l80:.3f}$",
+            rf"$\rho_{{h,80}}={rho_h_80:.3f}$",
+        ])
+    elif metric == "w_h_50_80":
+        b = _higher_harmonic_weights_from_support(support)
+        if b.size == 0:
+            info_box("Missing higher-harmonic weights")
+            return
+        csum = np.cumsum(b)
+        xk = np.arange(1, len(b) + 1)
+        l50 = float(support.get("l50", np.nan))
+        l80 = float(support.get("l80", np.nan))
+
+        if not np.isfinite(l50):
+            l50 = _interp_quantile_index_from_weights(b, 0.50)
+        if not np.isfinite(l80):
+            l80 = _interp_quantile_index_from_weights(b, 0.80)
+        w_h_50_80 = float(support.get("w_h_50_80", np.nan))
+        if not np.isfinite(w_h_50_80):
+            w_h_50_80 = (l80 - l50) / max(len(b), 1)
+        ax.plot(xk, csum, color="black", linewidth=2, marker="o", markersize=4)
+        ax.axhline(0.50, linestyle="--", color="black", linewidth=1)
+        ax.axhline(0.80, linestyle="--", color="black", linewidth=1)
+        if np.isfinite(l50):
+            ax.axvline(l50, linestyle=":", color="black", linewidth=1)
+        if np.isfinite(l80):
+            ax.axvline(l80, linestyle="--", color="black", linewidth=1)
+        if np.isfinite(l50) and np.isfinite(l80):
+            ax.axvspan(l50, l80, color="#cccccc", alpha=0.4)
+
+        if np.isfinite(l50):
+            ax.plot(l50, 0.50, "o", color="black", markersize=5)
+        if np.isfinite(l80):
+            ax.plot(l80, 0.80, "o", color="black", markersize=5)
+        ax.set_xlim(0.5, len(b) + 0.5)
+        ax.set_ylim(0, 1.05)
+
+        ax.set_xlabel(r"Higher-harmonic index $k = n - 1$", fontsize=14)
+        ax.set_ylabel(r"$B(\ell)$", fontsize=14)
+
+        info_box([
+            rf"$\ell_{{50}}={l50:.3f}$",
+            rf"$\ell_{{80}}={l80:.3f}$",
+            rf"$w_{{h,50-80}}={w_h_50_80:.3f}$",
+        ])
+    elif metric == "N_H_spec_over_H_minus_1":
+        b = _higher_harmonic_weights_from_support(support)
+        if b.size == 0:
+            info_box("Missing higher-harmonic weights")
+            return
+
+        hspec = -np.nansum(np.where(b > 0, b * np.log(b), 0.0))
+        nh_spec = float(np.exp(hspec))
+        nh_spec_norm = float(
+            support.get("N_H_spec_over_H_minus_1", np.nan)
+        )
+        if not np.isfinite(nh_spec_norm):
+            nh_spec_norm = nh_spec / max(len(b), 1)
+
+        xk = np.arange(1, len(b) + 1)
+        ax.bar(xk, b, color=main_color, width=0.8)
+        ax.set_yscale("log")
+
+        info_box([
+            rf"$N_{{H,spec}}={nh_spec:.3f}$",
+            rf"$N_{{H,spec}}/(H-1)={nh_spec_norm:.3f}$",
+        ])
+        ax.set_xlabel(r"Higher-harmonic index $k=n-1$", fontsize=14)
+        ax.set_ylabel(r"$b_k$ (a.u.)", fontsize=14, labelpad=12)
+    elif metric == "D_phi":
+        dphi = np.asarray(support.get("delta_phi_all", []), dtype=float)
+        if dphi.size == 0:
+            info_box("Missing phase data")
+            return
+
+        dphi = np.ravel(dphi).astype(float)
+        n_vals = np.arange(2, 2 + len(dphi))
+        wphi = _higher_harmonic_weights_from_support(support)
+        if wphi.size != dphi.size:
+            wphi = np.ones_like(dphi, dtype=float)
+            wphi = _safe_norm(wphi)
+
+        R_phi = np.abs(np.nansum(wphi * np.exp(1j * dphi)))
+        D_phi = float(support.get("D_phi", np.nan))
+        if not np.isfinite(D_phi):
+            D_phi = 1.0 - R_phi
+
+        ax.bar(n_vals, dphi, color=main_color, edgecolor="black")
+        ax.axhline(0, color="black", linewidth=1.0)
+        ax.axhline(np.pi, color="black", linewidth=0.8, linestyle="--")
+        ax.axhline(-np.pi, color="black", linewidth=0.8, linestyle="--")
+        ax.set_yticks([-np.pi, -np.pi/2, 0, np.pi/2, np.pi])
+        ax.set_yticklabels([r"$-\pi$", r"$-\pi/2$", r"$0$", r"$\pi/2$", r"$\pi$"])
+
+        info_box([rf"$R_{{\phi}}={R_phi:.3f}$", rf"$D_{{\phi}}={D_phi:.3f}$"])
+        ax.set_xlabel("Harmonic n (a.u.)", fontsize=14)
+        ax.set_ylabel(r"$\Delta \phi_n$ (rad)", fontsize=14, labelpad=12)
+    elif metric == "s_delta_phi_over_T":
+        tdphi_n = _phase_delay_equivalents_from_support(support)
+        if tdphi_n.size == 0:
+            info_box("Missing phase-delay equivalents")
+            return
+
+        n_vals = np.arange(2, 2 + len(tdphi_n))
+        t_delta = float(support.get("t_delta_phi_over_T", np.nan))
+        if not np.isfinite(t_delta):
+            t_delta = float(np.nanmedian(tdphi_n))
+
+        s_delta = float(support.get("s_delta_phi_over_T", np.nan))
+        if not np.isfinite(s_delta):
+            s_delta = float(np.nanmedian(np.abs(tdphi_n - t_delta)))
+
+        ax.bar(n_vals, tdphi_n, color=main_color, edgecolor="black")
+        ax.axhline(0, color="black", linewidth=1.0)
+        ax.axhline(t_delta, color="black", linestyle="--", linewidth=1.0)
+        ax.axhspan(t_delta - s_delta, t_delta + s_delta, color=fill_color2, alpha=0.5)
+
+        info_box([
+            rf"$t_{{\Delta\phi}}/T={t_delta:.3f}$",
+            rf"$s_{{\Delta\phi}}/T={s_delta:.3f}$",
+        ])
+        ax.set_xlabel("Harmonic n (a.u.)", fontsize=14)
+        ax.set_ylabel(r"$t_{\Delta\phi,n}/T$ (a.u.)", fontsize=14, labelpad=12)
+    elif metric == "eta_H":
+        eta_H = float(support.get("eta_H", np.nan))
+        if not np.isfinite(eta_H):
+            # fallback si le support ne donne pas directement la métrique
+            resid = np.nansum((sig - vb[:len(sig)]) ** 2) if len(vb) == len(sig) else np.nan
+            denom = np.nansum((sig - np.nanmean(sig)) ** 2)
+            eta_H = 1.0 - resid / max(denom, EPS)
+
+        ax.plot(tau, sig, linewidth=3, color=main_color, label="signal")
+        if len(vb) > 0:
+            ax.plot(
+                np.linspace(0.0, 1.0, len(vb), endpoint=False),
+                vb,
+                linestyle="--",
+                linewidth=2,
+                color="black",
+                label="reconstruction",
+            )
+
+        info_box([rf"$\eta_H={eta_H:.3f}$", f"H={len(harmonic_magnitudes)}"])
+        ax.legend(frameon=False, fontsize=10)
+        ax.set_xlabel("rectified time : t/T", fontsize=14)
+        ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
     elif metric == "mu_t_over_T":
         mu_over_T = float(support["mu_t_over_T"])
 
-        ax.plot(tau, sig, linewidth=3, color=vessel_color)
+        ax.plot(tau, sig, linewidth=3, color=main_color)
         vline_to_curve(
             mu_over_T, tau, sig, y0=0.0, color="black", linestyles="--", linewidth=1
         )
@@ -576,7 +1005,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
         mu = float(support["mu_t_over_T"])
         sigma = float(support["sigma_t_over_T"])
 
-        ax.plot(tau, sig, linewidth=3, color=vessel_color)
+        ax.plot(tau, sig, linewidth=3, color=main_color)
         vline_to_curve(
             mu, tau, sig, y0=0, color="#000000", linestyles="--", linewidth=1.5
         )
@@ -584,7 +1013,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
         left = max(0.0, mu - sigma)
         right = min(1.0, mu + sigma)
         mask = (tau >= left) & (tau <= right)
-        ax.fill_between(tau, 0, sig, where=mask & np.isfinite(sig), color=fill_color)
+        ax.fill_between(tau, 0, sig, where=mask & np.isfinite(sig), color=fill_color2)
 
         vline_to_curve(
             mu - sigma, tau, sig, y0=0, color="#000000", linestyles="--", linewidth=1
@@ -602,7 +1031,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
         t50 = float(support["t50_over_T"])
         t90 = float(support["t90_over_T"])
 
-        ax.plot(tau, C, linewidth=3, color=vessel_color)
+        ax.plot(tau, C, linewidth=3, color=main_color)
         for tq in [t10, t50, t90]:
             yq = _y_at(tq, tau, C)
             if np.isfinite(yq):
@@ -616,20 +1045,20 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
     elif metric == "R_VTI":
         ratio = float(support["R_VTI"])
 
-        ax.plot(tau, sig, linewidth=3, color=vessel_color)
+        ax.plot(tau, sig, linewidth=3, color=main_color)
         ax.fill_between(
             tau[tau < 0.5],
             0,
             sig[tau < 0.5],
             where=np.isfinite(sig[tau < 0.5]),
-            color=secondary_color,
+            color=fill_color1,
         )
         ax.fill_between(
             tau[tau >= 0.5],
             0,
             sig[tau >= 0.5],
             where=np.isfinite(sig[tau >= 0.5]),
-            color=fill_color,
+            color=fill_color2,
         )
         vline_to_curve(
             0.5, tau, sig, y0=0.0, color="#000000", linestyles="--", linewidth=1
@@ -645,13 +1074,13 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
         sf = float(support["SF_VTI"])
         tau_k = 1.0 / 3.0
 
-        ax.plot(tau, sig, linewidth=3, color=vessel_color)
+        ax.plot(tau, sig, linewidth=3, color=main_color)
         ax.fill_between(
             tau[tau < tau_k],
             0,
             sig[tau < tau_k],
             where=np.isfinite(sig[tau < tau_k]),
-            color=fill_color,
+            color="#fbd3f2",
         )
         ax.fill_between(
             tau,
@@ -660,7 +1089,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
             where=np.isfinite(sig),
             hatch="//",
             facecolor="none",
-            edgecolor=fill_dark_color,
+            edgecolor="#FB8F8F",
         )
         vline_to_curve(
             tau_k, tau, sig, y0=0.0, color="#000000", linestyles="--", linewidth=1
@@ -675,7 +1104,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
     elif metric == "t_max_over_T":
         t_max_over_T = float(support["t_max_over_T"])
 
-        ax.plot(tau, sig, linewidth=3, color=vessel_color)
+        ax.plot(tau, sig, linewidth=3, color=main_color)
         vline_to_curve(
             t_max_over_T, tau, sig, y0=0.0, color="black", linestyles="--", linewidth=1
         )
@@ -686,7 +1115,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
     elif metric == "t_min_over_T":
         t_min_over_T = float(support["t_min_over_T"])
 
-        ax.plot(tau, sig, linewidth=3, color=vessel_color)
+        ax.plot(tau, sig, linewidth=3, color=main_color)
         vline_to_curve(
             t_min_over_T, tau, sig, y0=0.0, color="black", linestyles="--", linewidth=1
         )
@@ -699,7 +1128,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
         t_min_over_T = float(support["t_min_over_T"])
         delta_t = float(support["Delta_t_over_T"])
 
-        ax.plot(tau, sig, linewidth=3, color=vessel_color)
+        ax.plot(tau, sig, linewidth=3, color=main_color)
         vline_to_curve(
             t_max_over_T, tau, sig, y0=0.0, color="black", linestyles="--", linewidth=1
         )
@@ -713,7 +1142,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
     elif metric == "t_up_over_T":
         t_up = float(support["t_up_over_T"])
 
-        ax.plot(tau, sig, linewidth=3, color=vessel_color)
+        ax.plot(tau, sig, linewidth=3, color=main_color)
         vline_to_curve(
             t_up, tau, sig, y0=0.0, color="black", linestyles="--", linewidth=1
         )
@@ -724,7 +1153,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
     elif metric == "t_down_over_T":
         t_down = float(support["t_down_over_T"])
 
-        ax.plot(tau, sig, linewidth=3, color=vessel_color)
+        ax.plot(tau, sig, linewidth=3, color=main_color)
         vline_to_curve(
             t_down, tau, sig, y0=0.0, color="black", linestyles="--", linewidth=1
         )
@@ -740,7 +1169,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
         t_min = float(support["t_min_over_T"])
         s_decay = float(support["S_decay"])
 
-        ax.plot(tau, sig, linewidth=3, color=vessel_color)
+        ax.plot(tau, sig, linewidth=3, color=main_color)
         a = (vmin - vmax) / ((t_min - t_max) + EPS)
         b = vmax - a * t_max
         x_line = np.linspace(0, 1, sig.size)
@@ -760,7 +1189,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
         s_rise = float(support["slope_rise_normalized"])
         idx = int(np.nanargmax(dvdt))
 
-        ax.plot(tau, sig, linewidth=3, color=vessel_color)
+        ax.plot(tau, sig, linewidth=3, color=main_color)
         vline_to_curve(
             tau[idx], tau, sig, y0=0.0, color="black", linestyles="--", linewidth=1.0
         )
@@ -772,7 +1201,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
         s_fall = float(support["slope_fall_normalized"])
         idx = int(np.nanargmin(dvdt))
 
-        ax.plot(tau, sig, linewidth=3, color=vessel_color)
+        ax.plot(tau, sig, linewidth=3, color=main_color)
         vline_to_curve(
             tau[idx], tau, sig, y0=0.0, color="black", linestyles="--", linewidth=1.0
         )
@@ -787,9 +1216,9 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
         i0 = int(support.get("late_window_start_idx", int(np.floor(0.75 * n))))
         i1 = int(support.get("late_window_end_idx", int(np.ceil(0.90 * n))))
 
-        ax.plot(tau, sig, linewidth=3, color=vessel_color)
+        ax.plot(tau, sig, linewidth=3, color=main_color)
         ax.fill_between(
-            tau[i0:i1], 0, sig[i0:i1], where=np.isfinite(sig[i0:i1]), color=fill_color
+            tau[i0:i1], 0, sig[i0:i1], where=np.isfinite(sig[i0:i1]), color=fill_color2
         )
         hline_label(vmax, "Vmax", va="bottom")
         ax.axhline(vend, linestyle="--", linewidth=1, color="black")
@@ -812,7 +1241,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
         mu = float(support["mu_t_over_T"])
         sigma = float(support["sigma_t_over_T"])
 
-        ax.plot(tau, sig, linewidth=3, color=vessel_color)
+        ax.plot(tau, sig, linewidth=3, color=main_color)
         vline_to_curve(
             mu, tau, sig, y0=0, color="#000000", linestyles="--", linewidth=1.5
         )
@@ -846,7 +1275,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
         ax.plot(
             cumsum_h_interp[mask_i],
             cumsum_interp[mask_i],
-            color=vessel_color,
+            color=main_color,
             linewidth=2,
         )
 
@@ -882,11 +1311,10 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
         mask_i = np.isfinite(cumsum_interp) & np.isfinite(cumsum_h_interp)
         mask_d = np.isfinite(cumsum) & np.isfinite(cumsum_h)
 
-        
         ax.plot(
             cumsum_h_interp[mask_i],
             cumsum_interp[mask_i],
-            color=vessel_color,
+            color=main_color,
             linewidth=2,
         )
 
@@ -910,7 +1338,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
         mu_h = float(support["mu_h"])
         xh = np.arange(1, len(w_h) + 1)
         ax.set_yscale("log")
-        ax.bar(xh, w_h, width=0.8, color=vessel_color)
+        ax.bar(xh, w_h, width=0.8, color=main_color)
         ax.axvline(mu_h, linestyle="--", linewidth=1.2, color="black")
         info_box([rf"$\mu_h={mu_h:.3f}$", f"H={len(w_h)}"])
         ax.set_xlabel("Harmonic n (a.u.)", fontsize=14)
@@ -922,7 +1350,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
         sigma_h = float(support["sigma_h"])
         xh = np.arange(1, len(w_h) + 1)
         ax.set_yscale("log")
-        ax.bar(xh, w_h, width=0.8, color=vessel_color)
+        ax.bar(xh, w_h, width=0.8, color=main_color)
         ax.axvline(mu_h, linestyle="--", linewidth=1.2, color="black")
         ax.axvline(mu_h - sigma_h, linestyle=":", linewidth=1.0, color="black")
         ax.axvline(mu_h + sigma_h, linestyle=":", linewidth=1.0, color="black")
@@ -936,8 +1364,8 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
         n_eff_over_t = float(support["N_eff_over_T"])
         n_eff = n_eff_over_t
 
-        ax.plot(tau, p, linewidth=3, color=vessel_color)
-        ax.fill_between(tau, 0, p, where=np.isfinite(p), color=fill_color)
+        ax.plot(tau, p, linewidth=3, color=main_color)
+        ax.fill_between(tau, 0, p, where=np.isfinite(p), color=fill_color2)
 
         if metric == "N_eff":
             info_box([rf"$N_{{eff}} \approx {n_eff:.3f}$"])
@@ -969,7 +1397,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
             tau_dense,
             h1,
             linewidth=3,
-            color=vessel_color,
+            color=main_color,
             label=r"$A_1\cos(2\pi\tau+\phi_1)$",
         )
         ax.plot(
@@ -993,18 +1421,18 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
             loc="lower left", bbox_to_anchor=(0.02, 0.02), frameon=False, fontsize=10
         )
 
-    #elif metric == "crest_factor":
-        #cf = float(support["crest_factor"])
-        #vmax = float(np.nanmax(vb))
-        #rms = float(np.sqrt(np.nanmean(vb**2)))
-        #vb_tau = np.linspace(0.0, 1.0, len(vb), endpoint=False)
+    elif metric == "crest_factor":
+        cf = float(support["crest_factor"])
+        vmax = float(np.nanmax(vb))
+        rms = float(np.sqrt(np.nanmean(vb**2)))
+        vb_tau = np.linspace(0.0, 1.0, len(vb), endpoint=False)
 
-        #ax.plot(vb_tau, vb, linewidth=3, color=vessel_color)
-        #hline_label(vmax, "Vmax", va="bottom")
-        #hline_label(rms, "RMS", va="top")
-        #info_box([f"H={len(harmonic_magnitudes)}", f"CF= {cf:.3f}"])
-        #ax.set_xlabel("rectified time : t/T", fontsize=14)
-        #ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
+        ax.plot(vb_tau, vb, linewidth=3, color=main_color)
+        hline_label(vmax, "Vmax", va="bottom")
+        hline_label(rms, "RMS", va="top")
+        info_box([f"H={len(harmonic_magnitudes)}", f"CF= {cf:.3f}"])
+        ax.set_xlabel("rectified time : t/T", fontsize=14)
+        ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
 
     elif metric in {"Hspec", "spectral_entropy"}:
         p = harmonic_energies_weights
@@ -1012,7 +1440,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
         ent = float(support["spectral_entropy"])
         xh = np.arange(1, hn + 1)
 
-        ax.bar(xh, p, width=0.8, color=vessel_color)
+        ax.bar(xh, p, width=0.8, color=main_color)
         ymax = float(np.nanmax(p)) if np.any(np.isfinite(p)) else 1.0
         ax.set_ylim(0, ymax * 1.35)
         uniform = 1.0 / hn if hn > 0 else np.nan
@@ -1041,7 +1469,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
         xh = np.arange(0, len(mags2))
 
         ax.set_yscale("log")
-        ax.bar(xh[: H_LOW_MAX + 1], mags2[: H_LOW_MAX + 1], color=vessel_color)
+        ax.bar(xh[: H_LOW_MAX + 1], mags2[: H_LOW_MAX + 1], color=main_color)
         ax.bar(xh[H_LOW_MAX:], mags2[H_LOW_MAX:], color="#cccccc")
         lines = [
             f"E_low = {e_low:.3g}",
@@ -1064,37 +1492,36 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
 
         ax.set_xlabel("Harmonic n (a.u.)", fontsize=14)
         ax.set_ylabel(r"$|V_n|^2 \: (a.u.)$", fontsize=14, labelpad=12)
-        
-    
-    #elif metric == "E_high_over_E_total":
-        #mags2 = harmonic_energies
-        #ax.set_yscale("log")
-        #e_high = float(support["E_high"])
-        #e_total = float(support["E_total"])
-        #ratio = float(support["E_high_over_E_total"])
-        #xh = np.arange(0, len(mags2))
 
-        #ax.bar(xh[1:H_HIGH_MIN], mags2[1:H_HIGH_MIN], color="#cccccc")
-        #ax.bar(
-            #xh[H_HIGH_MIN : H_HIGH_MAX + 1],
-            #mags2[H_HIGH_MIN : H_HIGH_MAX + 1],
-            #color=vessel_color,)
+    # elif metric == "E_high_over_E_total":
+    # mags2 = harmonic_energies
+    # ax.set_yscale("log")
+    # e_high = float(support["E_high"])
+    # e_total = float(support["E_total"])
+    # ratio = float(support["E_high_over_E_total"])
+    # xh = np.arange(0, len(mags2))
 
-        #lines = [
-            #f"E_high = {e_high:.3g}",
-            #f"E_total = {e_total:.3g}",
-            #rf"$E_{{high}}/E_{{total}} = {ratio:.3f}$",
-        #]
-        #text = "\n".join([str(x) for x in lines if x is not None and str(x) != ""])
+    # ax.bar(xh[1:H_HIGH_MIN], mags2[1:H_HIGH_MIN], color="#cccccc")
+    # ax.bar(
+    # xh[H_HIGH_MIN : H_HIGH_MAX + 1],
+    # mags2[H_HIGH_MIN : H_HIGH_MAX + 1],
+    # color=main_color,)
 
-        #ax.text(0.5,0.98,text,transform=ax.transAxes,ha="left",va="top",fontsize=12,bbox=dict(facecolor="white", edgecolor="none", pad=1.0),clip_on=True,)
-        #ax.set_xlabel("Harmonic n (a.u.)", fontsize=14)
-        #ax.set_ylabel(r"$|V_n|^2 \: (a.u.)$", fontsize=14, labelpad=12)
+    # lines = [
+    # f"E_high = {e_high:.3g}",
+    # f"E_total = {e_total:.3g}",
+    # rf"$E_{{high}}/E_{{total}} = {ratio:.3f}$",
+    # ]
+    # text = "\n".join([str(x) for x in lines if x is not None and str(x) != ""])
+
+    # ax.text(0.5,0.98,text,transform=ax.transAxes,ha="left",va="top",fontsize=12,bbox=dict(facecolor="white", edgecolor="none", pad=1.0),clip_on=True,)
+    # ax.set_xlabel("Harmonic n (a.u.)", fontsize=14)
+    # ax.set_ylabel(r"$|V_n|^2 \: (a.u.)$", fontsize=14, labelpad=12)
 
     elif metric == "E_recon_H_MAX":
         e_recon = float(support["E_recon_H_MAX"])
 
-        ax.plot(tau, sig, linewidth=3, color=vessel_color, label="signal")
+        ax.plot(tau, sig, linewidth=3, color=main_color, label="signal")
         ax.plot(
             np.linspace(0.0, 1.0, len(vb), endpoint=False),
             vb,
@@ -1116,7 +1543,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
         t90 = float(support["t90_over_T"])
         q_t_skew = float(support["Q_t_skew"])
 
-        ax.plot(tau, C, linewidth=3, color=vessel_color)
+        ax.plot(tau, C, linewidth=3, color=main_color)
         for tq in [t10, t50, t90]:
             yq = _y_at(tq, tau, C)
             ax.vlines(tq, 0, yq, linestyle="--", linewidth=1, color="black")
@@ -1136,14 +1563,14 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
         t75 = float(support["t75_over_T"])
         q_t_width = float(support["Q_t_width"])
 
-        ax.plot(tau, C, linewidth=3, color=vessel_color)
+        ax.plot(tau, C, linewidth=3, color=main_color)
         y25 = _y_at(t25, tau, C)
         y75 = _y_at(t75, tau, C)
         ax.vlines(t25, 0, y25, linestyle="--", linewidth=1, color="black")
         ax.vlines(t75, 0, y75, linestyle="--", linewidth=1, color="black")
         ax.hlines(y25, 0, t25, linestyle="--", linewidth=1, color="black")
         ax.hlines(y75, 0, t75, linestyle="--", linewidth=1, color="black")
-        ax.fill_between(tau, 0, C, where=(tau >= t25) & (tau <= t75), color=fill_color)
+        ax.fill_between(tau, 0, C, where=(tau >= t25) & (tau <= t75), color=fill_color2)
 
         info_box(
             [rf"$Q_{{t_{{width}}}}={q_t_width:.3f}$", f"t25={t25:.3f}, t75={t75:.3f}"]
@@ -1161,12 +1588,12 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
         q_t_skew = float(support["Q_t_skew"])
         r_q_t = float(support["R_Q_t"])
 
-        ax.plot(tau, C, linewidth=3, color=vessel_color)
+        ax.plot(tau, C, linewidth=3, color=main_color)
         for tq in [t10, t25, t50, t75, t90]:
             yq = _y_at(tq, tau, C)
             ax.vlines(tq, 0, yq, linestyle="--", linewidth=1, color="black")
             ax.hlines(yq, 0, tq, linestyle="--", linewidth=1, color="black")
-        ax.fill_between(tau, 0, C, where=(tau >= t25) & (tau <= t75), color=fill_color)
+        ax.fill_between(tau, 0, C, where=(tau >= t25) & (tau <= t75), color=fill_color2)
 
         info_box(
             [
@@ -1184,7 +1611,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
         d90 = float(support["d90"])
         q_d_skew = float(support["Q_d_skew"])
 
-        ax.plot(tau, C, linewidth=3, color=vessel_color)
+        ax.plot(tau, C, linewidth=3, color=main_color)
         for tq, dq in [(0.1, d10), (0.5, d50), (0.9, d90)]:
             ax.vlines(tq, 0, dq, linestyle="--", linewidth=1, color="black")
             ax.hlines(dq, 0, tq, linestyle="--", linewidth=1, color="black")
@@ -1203,7 +1630,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
         d75 = float(support["d75"])
         q_d_width = float(support["Q_d_width"])
 
-        ax.plot(tau, C, linewidth=3, color=vessel_color)
+        ax.plot(tau, C, linewidth=3, color=main_color)
         ax.vlines(0.25, 0, d25, linestyle="--", linewidth=1, color="black")
         ax.vlines(0.75, 0, d75, linestyle="--", linewidth=1, color="black")
         ax.hlines(d25, 0, 0.25, linestyle="--", linewidth=1, color="black")
@@ -1211,7 +1638,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
 
         y_fill = np.linspace(d25, d75, 300)
         x_curve = np.interp(y_fill, C, tau)
-        ax.fill_betweenx(y_fill, 0, x_curve, color=fill_color)
+        ax.fill_betweenx(y_fill, 0, x_curve, color=fill_color2)
 
         info_box(
             [rf"$Q_{{d_{{width}}}}={q_d_width:.3f}$", f"d25={d25:.3f}, d75={d75:.3f}"]
@@ -1229,14 +1656,14 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
         q_d_skew = float(support["Q_d_skew"])
         r_q_d = float(support["R_Q_d"])
 
-        ax.plot(tau, C, linewidth=3, color=vessel_color)
+        ax.plot(tau, C, linewidth=3, color=main_color)
         for tq, dq in [(0.10, d10), (0.25, d25), (0.50, d50), (0.75, d75), (0.90, d90)]:
             ax.vlines(tq, 0, dq, linestyle="--", linewidth=1, color="black")
             ax.hlines(dq, 0, tq, linestyle="--", linewidth=1, color="black")
 
         y_fill = np.linspace(d25, d75, 300)
         x_curve = np.interp(y_fill, C, tau)
-        ax.fill_betweenx(y_fill, 0, x_curve, color=fill_color)
+        ax.fill_betweenx(y_fill, 0, x_curve, color=fill_color2)
 
         info_box(
             [
@@ -1255,9 +1682,9 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
         i0 = int(support.get("late_window_start_idx", int(np.floor(0.75 * n))))
         i1 = int(support.get("late_window_end_idx", int(np.ceil(0.90 * n))))
 
-        ax.plot(tau, sig, linewidth=3, color=vessel_color)
+        ax.plot(tau, sig, linewidth=3, color=main_color)
         ax.fill_between(
-            tau[i0:i1], 0, sig[i0:i1], where=np.isfinite(sig[i0:i1]), color=fill_color
+            tau[i0:i1], 0, sig[i0:i1], where=np.isfinite(sig[i0:i1]), color=fill_color2
         )
         hline_label(vmean, r"$\overline{{v}}$", va="bottom")
         ax.axhline(vend, linestyle="--", linewidth=1, color="black")
@@ -1278,7 +1705,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
     elif metric == "E_slope":
         e_slope = float(support["E_slope"])
         dvdt_norm = support["dvdt_norm"]
-        ax.plot(tau, sig, linewidth=3, color=vessel_color, label="signal")
+        ax.plot(tau, sig, linewidth=3, color=main_color, label="signal")
         ax2 = ax.twinx()
         ax2.plot(
             tau,
@@ -1294,17 +1721,17 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
         ax.set_xlabel("rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
 
-    #elif metric == "E_curv":
-        #e_curv = float(support["E_curv"])
-        #d2vdt2_norm = support["d2vdt2_norm"]
-        #ax.plot(tau, sig, linewidth=3, color=vessel_color, label="signal")
-        #ax2 = ax.twinx()
-        #ax2.plot(tau,d2vdt2_norm,linestyle="--",linewidth=1.5,color="black",label=r"$\ddot v^2$",)
-        #ax2.set_yticks([])
-        #ax2.set_ylabel(r"$\ddot v^2$", fontsize=12)
-        #info_box([rf"$E_{{curv}}={e_curv:.4f}$"])
-        #ax.set_xlabel("rectified time : t/T", fontsize=14)
-        #ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
+    # elif metric == "E_curv":
+    # e_curv = float(support["E_curv"])
+    # d2vdt2_norm = support["d2vdt2_norm"]
+    # ax.plot(tau, sig, linewidth=3, color=main_color, label="signal")
+    # ax2 = ax.twinx()
+    # ax2.plot(tau,d2vdt2_norm,linestyle="--",linewidth=1.5,color="black",label=r"$\ddot v^2$",)
+    # ax2.set_yticks([])
+    # ax2.set_ylabel(r"$\ddot v^2$", fontsize=12)
+    # info_box([rf"$E_{{curv}}={e_curv:.4f}$"])
+    # ax.set_xlabel("rectified time : t/T", fontsize=14)
+    # ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
 
     elif metric == "W50_over_T":
         w50 = float(support["W50_over_T"])
@@ -1313,14 +1740,14 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
 
         mask = np.isfinite(sig) & (sig >= thr)
 
-        ax.plot(tau, sig, linewidth=3, color=vessel_color)
+        ax.plot(tau, sig, linewidth=3, color=main_color)
         ax.axhline(thr, linestyle="--", linewidth=1, color="black")
         ax.fill_between(
             tau,
             0,
             sig,
             where=mask,
-            color=fill_color,
+            color=fill_color2,
             interpolate=True,
         )
 
@@ -1339,21 +1766,21 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
 
         mask = np.isfinite(sig) & (sig >= thr)
 
-        ax.plot(tau, sig, linewidth=3, color=vessel_color)
+        ax.plot(tau, sig, linewidth=3, color=main_color)
         ax.axhline(thr, linestyle="--", linewidth=1, color="black")
         ax.fill_between(
             tau,
             0,
             sig,
             where=mask,
-            color=fill_color,
+            color=fill_color2,
             interpolate=True,
         )
 
         info_box(
             [
-                rf"$W_{{80}}/T = {w80:.3f}$",
-                rf"$0.8\,V_{{max}} = {thr:.3f}$",
+                rf"$W_{{50}}/T = {w80:.3f}$",
+                rf"$0.5\,V_{{max}} = {thr:.3f}$",
             ]
         )
         ax.set_xlabel("rectified time : t/T", fontsize=14)
@@ -1364,13 +1791,13 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
 
         p = sig / (m0 + EPS)
 
-        ax.plot(tau, p, linewidth=3, color=vessel_color)
+        ax.plot(tau, p, linewidth=3, color=main_color)
         ax.fill_between(
             tau,
             0,
             p,
             where=np.isfinite(p),
-            color=fill_color,
+            color=fill_color2,
             interpolate=True,
         )
 
@@ -1378,13 +1805,13 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel = "artery"):
         ax.set_xlabel("rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$p(\tau)\: (a.u.)$", fontsize=14, labelpad=10)
 
-    
-
     else:
         info_box(f"No illustration for {metric}")
 
 
-def export_selected_metric_pngs_bandlimited(all_results, zip_path, out_dir):
+def export_selected_metric_pngs_bandlimited(
+    all_results, zip_path, out_dir, format="png"
+):
     os.makedirs(out_dir, exist_ok=True)
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -1506,9 +1933,19 @@ def export_selected_metric_pngs_bandlimited(all_results, zip_path, out_dir):
                     chosen = rep_file.get(g, None)
                     path = h5_index.get(g, {}).get(chosen, None) if chosen else None
 
-                    if metric == "phase_locking_residual":
-                        plot_group_delta_phi_stats(ax, group_delta_phi_stats, g)
-                        ax.set_title(f"{g}", fontsize=14)
+                    if metric == "D_phi":
+                        if path and os.path.exists(path):
+                            support = extract_graphics_support(path, vessel=vessel, mode="bandlimited")
+                            if support:
+                                support_beat = select_support_beat(support, 0)
+                                plot_metric_illustration(ax, metric, support_beat, path, vessel)
+                                ax.set_title(f"{g}", fontsize=14)
+                            else:
+                                ax.text(0.5, 0.5, f"No support for {g} ({vessel})", ha="center", va="center")
+                                ax.axis("off")
+                        else:
+                            ax.text(0.5, 0.5, f"No representative file for {g}", ha="center", va="center")
+                            ax.axis("off")
 
                     elif path and os.path.exists(path):
                         support = extract_graphics_support(
@@ -1519,7 +1956,10 @@ def export_selected_metric_pngs_bandlimited(all_results, zip_path, out_dir):
 
                         if support:
                             support_beat = select_support_beat(support, 0)
-                            plot_metric_illustration(ax, metric, support_beat, path, vessel=vessel)
+
+                            plot_metric_illustration(
+                                ax, metric, support_beat, path, vessel
+                            )
                             ax.set_title(f"{g}", fontsize=14)
 
                             ymin, ymax = ax.get_ylim()
@@ -1548,19 +1988,17 @@ def export_selected_metric_pngs_bandlimited(all_results, zip_path, out_dir):
                     c = j % 2
                     ax_empty = fig.add_subplot(right[r, c])
                     ax_empty.axis("off")
+                if format == "png":
+                    png_path = os.path.join(
+                        out_dir, f"{metric}_bandlimited_{vessel}.png"
+                    )
+                    fig.savefig(png_path, bbox_inches="tight")
+                if format == "eps":
+                    eps_path = os.path.join(
+                        out_dir, f"{metric}_bandlimited_{vessel}.eps"
+                    )
+                    fig.savefig(eps_path, bbox_inches="tight")
 
-                png_dir = os.path.join(out_dir, "png")
-                eps_dir = os.path.join(out_dir, "eps")
-
-                os.makedirs(png_dir,exist_ok=True)
-                os.makedirs(eps_dir,exist_ok=True)
-                                       
-                png_path = os.path.join(png_dir,f"{metric}_bandlimited_{vessel}.png")
-                eps_path = os.path.join(eps_dir,f"{metric}_bandlimited_{vessel}.eps")
-               
-                
-                fig.savefig(png_path, bbox_inches="tight")
-                fig.savefig(eps_path, bbox_inches="tight")
                 plt.close(fig)
 
 
@@ -1920,6 +2358,7 @@ def extract_mean_support_per_file(h5_path, vessel="artery", mode="bandlimited"):
                 "harmonic_weights",
                 "harmonic_phases",
                 "delta_phi_all",
+                "t_delta_phi_n_over_T",
             }:
                 out[k] = np.nanmean(arr, axis=0)
             else:
@@ -2162,18 +2601,24 @@ body {
     # -----------------------------
     # export PNGs
     # -----------------------------
-    export_dir = os.path.join(os.path.dirname(dashboard_file), "export_graphics")
+    wk_png_dir = os.path.join(os.path.dirname(dashboard_file), "export_png")
+    wk_eps_dir = os.path.join(os.path.dirname(dashboard_file), "export_eps")
 
-    export_selected_metric_pngs_bandlimited(all_results, original_zip, export_dir)
-    print("PNGs exportés dans :", export_dir)
+    export_windkessel_figures(original_zip, wk_png_dir, format="png")
+    export_windkessel_figures(original_zip, wk_eps_dir, format="eps")
+    png_dir = os.path.join(os.path.dirname(dashboard_file), "export_png")
+    export_selected_metric_pngs_bandlimited(all_results, original_zip, png_dir, "png")
 
-    png_dir=os.path.join(export_dir,"png")
-    eps_dir=os.path.join(export_dir,"eps")
+    replace_folder_in_zip(original_zip, png_dir, arc_folder="export_png")
 
-    replace_folder_in_zip(original_zip, png_dir, arc_folder="export_graphics/png")
-    replace_folder_in_zip(original_zip, eps_dir, arc_folder="export_graphics/eps")
-    if os.path.isdir(export_dir):
-        shutil.rmtree(export_dir)
+    if os.path.isdir(png_dir):
+        shutil.rmtree(png_dir)
+    eps_dir = os.path.join(os.path.dirname(dashboard_file), "export_eps")
+    export_selected_metric_pngs_bandlimited(all_results, original_zip, eps_dir, "eps")
+    replace_folder_in_zip(original_zip, eps_dir, arc_folder="export_eps")
+    if os.path.isdir(eps_dir):
+        shutil.rmtree(eps_dir)
+
     # -----------------------------
     # signaux moyens par vessel / mode
     # -----------------------------
@@ -2183,7 +2628,9 @@ body {
 
     for vessel in VALID_VESSELS:
         for mode in ["raw", "bandlimited"]:
-            group_curves = compute_group_mean_signals(original_zip, vessel=vessel, mode=mode)
+            group_curves = compute_group_mean_signals(
+                original_zip, vessel=vessel, mode=mode
+            )
 
             if not group_curves:
                 continue
@@ -2275,7 +2722,9 @@ body {
 
         with open(dashboard_file, "a", encoding="utf-8") as f:
             f.write('<div class="metric-block">')
-            f.write(f'<div class="metric-title">{metric + " = " + str(definition)}</div>')
+            f.write(
+                f'<div class="metric-title">{metric + " = " + str(definition)}</div>'
+            )
             f.write('<div class="row">')
 
         for vessel in VALID_VESSELS:
@@ -2348,18 +2797,26 @@ body {
 
 if __name__ == "__main__":
     zip_path = choose_zip()
-
-    results, single_group = analyze_zip(zip_path)
-
     dashboard_file = "metric_dashboard.html"
-    export_dir = os.path.join(os.path.dirname(dashboard_file), "export_graphics")
+    results, single_group = analyze_zip(zip_path)
+    wk_png_dir = os.path.join(os.path.dirname(dashboard_file), "export_png")
+    wk_eps_dir = os.path.join(os.path.dirname(dashboard_file), "export_eps")
 
-    export_selected_metric_pngs_bandlimited(results, zip_path, export_dir)
+    export_windkessel_figures(zip_path, wk_png_dir, format="png")
+    export_windkessel_figures(zip_path, wk_eps_dir, format="eps")
 
-    png_dir=os.path.join(export_dir,"png")
-    eps_dir=os.path.join(export_dir,"eps")
+    png_dir = os.path.join(os.path.dirname(dashboard_file), "export_png")
 
-    replace_folder_in_zip(zip_path, png_dir, arc_folder="export_graphics/png")
-    replace_folder_in_zip(zip_path, eps_dir, arc_folder="export_graphics/eps")
-    if os.path.isdir(export_dir):
-        shutil.rmtree(export_dir)
+    export_selected_metric_pngs_bandlimited(results, zip_path, png_dir, "png")
+    replace_folder_in_zip(zip_path, png_dir, arc_folder="export_png")
+
+    if os.path.isdir(png_dir):
+        shutil.rmtree(png_dir)
+    eps_dir = os.path.join(os.path.dirname(dashboard_file), "export_eps")
+
+    export_selected_metric_pngs_bandlimited(results, zip_path, eps_dir, "eps")
+    replace_folder_in_zip(zip_path, eps_dir, arc_folder="export_eps")
+
+    if os.path.isdir(eps_dir):
+        shutil.rmtree(eps_dir)
+    # save_dashboard(results, zip_path, single_group)

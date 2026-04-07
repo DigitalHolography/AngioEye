@@ -109,3 +109,12 @@ class AppSettingsStore:
 
     def save_postprocess_visibility(self, visibility: Mapping[str, bool]) -> None:
         self.save_named_visibility("postprocess_visibility", visibility)
+
+    def load_ui_mode(self) -> str:
+        mode = self.load().get("ui_mode")
+        return mode if mode in {"minimal", "advanced"} else "minimal"
+
+    def save_ui_mode(self, mode: str) -> None:
+        settings = self.load()
+        settings["ui_mode"] = "advanced" if mode == "advanced" else "minimal"
+        self.save(settings)

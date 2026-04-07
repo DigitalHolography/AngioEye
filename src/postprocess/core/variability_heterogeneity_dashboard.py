@@ -9,7 +9,7 @@ import h5py
 import numpy as np
 import pandas as pd
 
-SEGMENT_METRIC_FOLDER = "/Pipelines/arterial_waveform_shape_metrics/artery/by_segment/"
+SEGMENT_METRIC_FOLDER = "/Pipelines/waveform_shape_metrics/artery/by_segment/"
 SEGMENT_MODE = "bandlimited_segment"
 EPS = 1e-12
 
@@ -51,7 +51,6 @@ INPUT_METRICS = [
     "R_Q_d",
     "v_end_over_v_mean",
     "E_slope",
-    
 ]
 METRIC_LABELS = {
     "mu_t_over_T": r"$\mu_t/T$",
@@ -92,7 +91,6 @@ METRIC_LABELS = {
     "R_Q_d": r"$R_{Q_d}$",
     "v_end_over_v_mean": r"$R_{EM}$",
     "E_slope": r"$E_{\mathrm{slope}}$",
-    
 }
 COLUMN_LABELS = {
     "MED_seg_medbeat": r"$\mathrm{med}_{b}(\mathrm{med}_{seg})$",
@@ -163,6 +161,7 @@ def cv_1d(x, eps=EPS):
     sd = np.nanstd(x, ddof=1) if x.size > 1 else 0.0
     return float(sd / (np.abs(mu) + eps))
 
+
 def median_1d(x, eps=EPS):
     x = np.asarray(x, dtype=float)
     x = x[np.isfinite(x)]
@@ -170,6 +169,7 @@ def median_1d(x, eps=EPS):
         return np.nan
     med = np.nanmedian(x)
     return float(med)
+
 
 def std_1d(x, eps=EPS):
     x = np.asarray(x, dtype=float)
@@ -200,8 +200,8 @@ def compute_file_higher_metrics_from_segment_array(arr, eps=EPS):
     beat_iqr = []
     beat_mad = []
     beat_cv_seg = []
-    beat_std=[]
-    beat_median=[]
+    beat_std = []
+    beat_median = []
 
     for b in range(arr.shape[0]):
         x = arr[b, :, :]
@@ -212,14 +212,12 @@ def compute_file_higher_metrics_from_segment_array(arr, eps=EPS):
         beat_cv_seg.append(cv_1d(x, eps=eps))
         beat_std.append(std_1d(x))
         beat_median.append(median_1d(x))
-        
 
     beat_iqr = np.asarray(beat_iqr, dtype=float)
     beat_mad = np.asarray(beat_mad, dtype=float)
     beat_cv_seg = np.asarray(beat_cv_seg, dtype=float)
     beat_median = np.asarray(beat_median, dtype=float)
     beat_std = np.asarray(beat_std, dtype=float)
-    
 
     # 2) Variabilité temporelle par segment, puis médiane sur segments
     seg_cv_beat = []
@@ -232,10 +230,13 @@ def compute_file_higher_metrics_from_segment_array(arr, eps=EPS):
 
     seg_cv_beat = np.asarray(seg_cv_beat, dtype=float)
 
-    return {"MED_seg_medbeat" : (
-            float(np.nanmedian(beat_median)) if np.any(np.isfinite(beat_median)) else np.nan
+    return {
+        "MED_seg_medbeat": (
+            float(np.nanmedian(beat_median))
+            if np.any(np.isfinite(beat_median))
+            else np.nan
         ),
-        "STD_seg_medbeat" : (
+        "STD_seg_medbeat": (
             float(np.nanmedian(beat_std)) if np.any(np.isfinite(beat_std)) else np.nan
         ),
         "IQR_seg_medbeat": (
