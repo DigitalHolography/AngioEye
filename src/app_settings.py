@@ -10,6 +10,7 @@ from typing import Any
 APP_NAME = "AngioEye"
 SETTINGS_FILENAME = "settings.json"
 DEFAULT_SETTINGS_FILENAME = "default_settings.json"
+LAST_BATCH_LOG_FILENAME = "last_batch_log.txt"
 
 
 def default_settings_path() -> Path:
@@ -20,6 +21,10 @@ def default_settings_path() -> Path:
         xdg_config = os.getenv("XDG_CONFIG_HOME")
         base_dir = Path(xdg_config) if xdg_config else Path.home() / ".config"
     return base_dir / APP_NAME / SETTINGS_FILENAME
+
+
+def default_batch_log_path() -> Path:
+    return default_settings_path().with_name(LAST_BATCH_LOG_FILENAME)
 
 
 def _resource_roots() -> list[Path]:

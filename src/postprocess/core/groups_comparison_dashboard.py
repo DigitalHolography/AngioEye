@@ -25,6 +25,7 @@ PIPELINE_BASE_CANDIDATES_WINDKESSEL = [
 
 METHODS_WINDKESSEL = ["arx", "freq", "time_integral"]
 METRICS_WINDKESSEL = ["tau", "Deltat"]
+POSTSCRIPT_BACKEND_MODULE = "matplotlib.backends.backend_ps"
 
 METHOD_MARKERS_WINDKESSEL = {
     "arx": "D",
@@ -35,6 +36,22 @@ METHOD_MARKERS_WINDKESSEL = {
 
 def extract_group_name(root: str, tmpdir: str) -> str:
     return "all" if root == tmpdir else os.path.basename(root)
+
+
+def _run_optional_eps_export(export_func, output_dir: str) -> bool:
+    try:
+        export_func()
+    except ModuleNotFoundError as exc:
+        if exc.name != POSTSCRIPT_BACKEND_MODULE:
+            raise
+        if os.path.isdir(output_dir):
+            shutil.rmtree(output_dir)
+        print(
+            "[WARN] EPS export skipped because the Matplotlib PostScript backend "
+            f"'{POSTSCRIPT_BACKEND_MODULE}' is unavailable in this build."
+        )
+        return False
+    return True
 
 
 def iter_h5_files_in_zip(zip_path):
@@ -2605,7 +2622,10 @@ body {
     wk_eps_dir = os.path.join(os.path.dirname(dashboard_file), "export_eps")
 
     export_windkessel_figures(original_zip, wk_png_dir, format="png")
-    export_windkessel_figures(original_zip, wk_eps_dir, format="eps")
+    eps_supported = _run_optional_eps_export(
+        lambda: export_windkessel_figures(original_zip, wk_eps_dir, format="eps"),
+        wk_eps_dir,
+    )
     png_dir = os.path.join(os.path.dirname(dashboard_file), "export_png")
     export_selected_metric_pngs_bandlimited(all_results, original_zip, png_dir, "png")
 
@@ -2614,8 +2634,18 @@ body {
     if os.path.isdir(png_dir):
         shutil.rmtree(png_dir)
     eps_dir = os.path.join(os.path.dirname(dashboard_file), "export_eps")
-    export_selected_metric_pngs_bandlimited(all_results, original_zip, eps_dir, "eps")
-    replace_folder_in_zip(original_zip, eps_dir, arc_folder="export_eps")
+    if eps_supported:
+        eps_supported = _run_optional_eps_export(
+            lambda: export_selected_metric_pngs_bandlimited(
+                all_results,
+                original_zip,
+                eps_dir,
+                "eps",
+            ),
+            eps_dir,
+        )
+    if eps_supported:
+        replace_folder_in_zip(original_zip, eps_dir, arc_folder="export_eps")
     if os.path.isdir(eps_dir):
         shutil.rmtree(eps_dir)
 
@@ -2803,7 +2833,10 @@ if __name__ == "__main__":
     wk_eps_dir = os.path.join(os.path.dirname(dashboard_file), "export_eps")
 
     export_windkessel_figures(zip_path, wk_png_dir, format="png")
-    export_windkessel_figures(zip_path, wk_eps_dir, format="eps")
+    eps_supported = _run_optional_eps_export(
+        lambda: export_windkessel_figures(zip_path, wk_eps_dir, format="eps"),
+        wk_eps_dir,
+    )
 
     png_dir = os.path.join(os.path.dirname(dashboard_file), "export_png")
 
@@ -2814,8 +2847,18 @@ if __name__ == "__main__":
         shutil.rmtree(png_dir)
     eps_dir = os.path.join(os.path.dirname(dashboard_file), "export_eps")
 
-    export_selected_metric_pngs_bandlimited(results, zip_path, eps_dir, "eps")
-    replace_folder_in_zip(zip_path, eps_dir, arc_folder="export_eps")
+    if eps_supported:
+        eps_supported = _run_optional_eps_export(
+            lambda: export_selected_metric_pngs_bandlimited(
+                results,
+                zip_path,
+                eps_dir,
+                "eps",
+            ),
+            eps_dir,
+        )
+    if eps_supported:
+        replace_folder_in_zip(zip_path, eps_dir, arc_folder="export_eps")
 
     if os.path.isdir(eps_dir):
         shutil.rmtree(eps_dir)

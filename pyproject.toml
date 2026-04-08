@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "AngioEye"
-version = "1.7.0"
+version = "1.8.0"
 description = "Cohort-analysis engine for retinal Doppler holography"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -34,7 +34,14 @@ lint-tool = "scripts.ruff_linter:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
-py-modules = ["angio_eye", "cli", "app_settings", "graphics", "launcher"]
+py-modules = [
+    "angio_eye",
+    "cli",
+    "app_settings",
+    "dependency_utils",
+    "graphics",
+    "launcher",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

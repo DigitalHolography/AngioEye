@@ -15,6 +15,7 @@ from tkinter import filedialog, messagebox, ttk
 import h5py
 
 from app_settings import (
+    LAST_BATCH_LOG_FILENAME,
     AppSettingsStore,
     normalize_pipeline_visibility,
     normalize_postprocess_visibility,
@@ -108,6 +109,7 @@ class ProcessApp(_BaseAppTk):
         self.batch_zip_var = tk.BooleanVar(value=False)
         self.batch_zip_name_var = tk.StringVar(value="outputs.zip")
         self.batch_progress_var = tk.DoubleVar(value=0.0)
+        self.minimal_status_var = tk.StringVar(value="Ready.")
         self.pipeline_library_summary_var = tk.StringVar(value="")
         self.postprocess_library_summary_var = tk.StringVar(value="")
         self.minimal_input_path_var = tk.StringVar(value="No input selected")
@@ -115,6 +117,9 @@ class ProcessApp(_BaseAppTk):
         self.minimal_output_name_var = tk.StringVar(value="Output name: -")
         self._progress_total_units = 1.0
         self._progress_completed_units = 0.0
+        self._last_saved_batch_log_path: Path | None = None
+        self._progress_primary_style = "MinimalPrimary.Horizontal.TProgressbar"
+        self._progress_final_style = "MinimalFinal.Horizontal.TProgressbar"
         self._window_icon_image: tk.PhotoImage | None = None
         self._minimal_logo_image: tk.PhotoImage | None = None
         self._minimal_title_font: tkfont.Font | None = None
@@ -151,6 +156,7 @@ class ProcessApp(_BaseAppTk):
         Apply the Sun Valley ttk theme when available; otherwise fall back to a simple dark palette.
         """
         style = ttk.Style(self)
+        self._style = style
         if sv_ttk:
             try:
                 sv_ttk.set_theme("dark")
@@ -189,6 +195,25 @@ class ProcessApp(_BaseAppTk):
         self._bg_color = bg
         self._surface_color = surface
         self._accent_color = accent
+        self._configure_progress_styles()
+
+    def _configure_progress_styles(self) -> None:
+        progress_colors = {
+            self._progress_primary_style: self._accent_color,
+            self._progress_final_style: "#3fb37f",
+        }
+        for style_name, color in progress_colors.items():
+            try:
+                self._style.configure(
+                    style_name,
+                    troughcolor=self._surface_color,
+                    background=color,
+                    bordercolor=color,
+                    lightcolor=color,
+                    darkcolor=color,
+                )
+            except tk.TclError:
+                self._style.configure(style_name, background=color)
 
     def _build_ui(self) -> None:
         self._build_menu()
@@ -300,8 +325,18 @@ class ProcessApp(_BaseAppTk):
             maximum=100,
             variable=self.batch_progress_var,
             length=340,
+            style=self._progress_primary_style,
         )
         self.minimal_progress.grid(row=8, column=0, sticky="ew")
+        self.minimal_status_label = tk.Label(
+            content,
+            textvariable=self.minimal_status_var,
+            bg=self._bg_color,
+            fg=self._text_fg,
+            justify="center",
+            wraplength=420,
+        )
+        self.minimal_status_label.grid(row=9, column=0, pady=(8, 0), sticky="ew")
 
     def _get_minimal_title_font(self) -> tkfont.Font:
         if self._minimal_title_font is None:
@@ -379,11 +414,6 @@ class ProcessApp(_BaseAppTk):
 
         run_btn = ttk.Button(controls, text="Run", command=self.run_batch)
         run_btn.grid(row=0, column=0, sticky="w")
-        ttk.Button(
-            controls,
-            text="Export BatchLog",
-            command=self._export_batch_log,
-        ).grid(row=0, column=1, sticky="w", padx=(8, 0))
 
         ttk.Label(parent, text="BatchLog").grid(
             row=3, column=0, sticky="nw", pady=(8, 2)
@@ -639,16 +669,50 @@ class ProcessApp(_BaseAppTk):
         output_value = (self.batch_output_var.get() or "").strip()
         self.minimal_output_path_var.set(output_value or "No output folder selected")
 
+    def _set_minimal_status(self, text: str) -> None:
+        self.minimal_status_var.set(text)
+        self.update_idletasks()
+
+    def _batch_log_path(self) -> Path:
+        return self.settings_store.path.with_name(LAST_BATCH_LOG_FILENAME)
+
+    def _persist_batch_log_snapshot(self) -> None:
+        log_path = self._batch_log_path()
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_path.write_text(
+                self.batch_output.get("1.0", "end-1c"),
+                encoding="utf-8",
+            )
+        except OSError:
+            self._last_saved_batch_log_path = None
+            return
+        self._last_saved_batch_log_path = log_path
+
+    def _set_progress_style(self, style_name: str) -> None:
+        if hasattr(self, "minimal_progress"):
+            self.minimal_progress.configure(style=style_name)
+
     def _reset_progress(self) -> None:
         self._progress_total_units = 1.0
         self._progress_completed_units = 0.0
+        self._set_progress_style(self._progress_primary_style)
         self.batch_progress_var.set(0.0)
         self.update_idletasks()
 
-    def _start_progress(self, total_units: float) -> None:
+    def _start_progress(
+        self,
+        total_units: float,
+        *,
+        style_name: str | None = None,
+        status_text: str | None = None,
+    ) -> None:
         self._progress_total_units = max(float(total_units), 1.0)
         self._progress_completed_units = 0.0
+        self._set_progress_style(style_name or self._progress_primary_style)
         self.batch_progress_var.set(0.0)
+        if status_text is not None:
+            self._set_minimal_status(status_text)
         self.update_idletasks()
 
     def _set_progress_units(self, completed_units: float) -> None:
@@ -674,6 +738,7 @@ class ProcessApp(_BaseAppTk):
             input_path.is_file() and input_path.suffix.lower() == ".zip"
         )
         self._reset_progress()
+        self._set_minimal_status("Ready.")
 
     def _minimal_output_filename_for_run(
         self,
@@ -1180,47 +1245,27 @@ class ProcessApp(_BaseAppTk):
         self.batch_output.delete("1.0", "end")
         self.batch_output.insert("end", message)
         self.batch_output.configure(state="disabled")
+        self._persist_batch_log_snapshot()
 
     def _log_batch(self, text: str) -> None:
         self.batch_output.configure(state="normal")
         self.batch_output.insert("end", f"{text}\n")
         self.batch_output.see("end")
         self.batch_output.configure(state="disabled")
+        self._persist_batch_log_snapshot()
         self.batch_output.update_idletasks()
         self.update_idletasks()
 
-    def _export_batch_log(self, initial_dir: Path | None = None) -> Path | None:
-        if initial_dir is None:
-            initial_dir = Path(self.batch_output_var.get() or Path.cwd())
-        if not initial_dir.exists():
-            initial_dir = Path.cwd()
-        path = filedialog.asksaveasfilename(
-            defaultextension=".txt",
-            filetypes=[("Text file", "*.txt"), ("All files", "*.*")],
-            initialdir=str(initial_dir),
-            initialfile="batch_log.txt",
-            title="Export batch log",
-        )
-        if not path:
-            return None
-        try:
-            log_text = self.batch_output.get("1.0", "end").rstrip()
-            Path(path).write_text(log_text, encoding="utf-8")
-            self._log_batch(f"[LOG] Exported batch log -> {path}")
-            return Path(path)
-        except Exception as exc:  # noqa: BLE001
-            messagebox.showerror("Export failed", f"Could not save log: {exc}")
-            return None
-
-    def _show_batch_error_dialog(self, message: str, initial_dir: Path) -> None:
+    def _show_batch_error_dialog(self, message: str) -> None:
         self.bell()
-        export = messagebox.askyesno(
+        if self._last_saved_batch_log_path is not None:
+            message = (
+                f"{message}\n\nLatest log saved to:\n{self._last_saved_batch_log_path}"
+            )
+        messagebox.showwarning(
             "Batch completed with errors",
-            f"{message}\n\nExport log to .txt?",
-            icon="warning",
+            message,
         )
-        if export:
-            self._export_batch_log(initial_dir)
 
     def choose_batch_folder(self) -> None:
         path = filedialog.askdirectory(
@@ -1328,6 +1373,7 @@ class ProcessApp(_BaseAppTk):
         base_output_dir.mkdir(parents=True, exist_ok=True)
 
         self._reset_batch_output("Starting batch run...\n")
+        self._set_minimal_status("Preparing batch...")
 
         tempdir: tempfile.TemporaryDirectory | None = None
         try:
@@ -1336,16 +1382,18 @@ class ProcessApp(_BaseAppTk):
         except Exception as exc:  # noqa: BLE001
             messagebox.showerror("Invalid input", f"Cannot prepare input: {exc}")
             self._log_batch(f"Error: {exc}")
+            self._set_minimal_status("Run failed.")
             if tempdir is not None:
                 tempdir.cleanup()
             return
 
-        total_progress_units = (
-            (len(inputs) * len(pipelines))
-            + len(postprocesses)
-            + (1 if self.batch_zip_var.get() else 0)
+        pipeline_progress_units = len(inputs) * len(pipelines)
+        final_progress_units = len(postprocesses) + (1 if self.batch_zip_var.get() else 0)
+        self._start_progress(
+            pipeline_progress_units,
+            style_name=self._progress_primary_style,
+            status_text="Running pipelines...",
         )
-        self._start_progress(total_progress_units)
         minimal_output_filename = self._minimal_output_filename_for_run(
             data_path,
             inputs,
@@ -1353,6 +1401,7 @@ class ProcessApp(_BaseAppTk):
 
         work_output_dir: Path | None = None
         clean_work_output = False
+        zip_failed = False
         try:
             output_dir = base_output_dir
             if self.batch_zip_var.get():
@@ -1376,6 +1425,18 @@ class ProcessApp(_BaseAppTk):
                     failures.append(f"{h5_path}: {exc}")
                     self._log_batch(f"[FAIL] {h5_path.name}: {exc}")
 
+            if final_progress_units:
+                final_status = (
+                    "Running postprocess..."
+                    if postprocesses
+                    else "Creating ZIP..."
+                )
+                self._start_progress(
+                    final_progress_units,
+                    style_name=self._progress_final_style,
+                    status_text=final_status,
+                )
+
             if postprocesses and processed_outputs:
                 self._run_postprocesses(
                     postprocesses=postprocesses,
@@ -1390,6 +1451,7 @@ class ProcessApp(_BaseAppTk):
                     "[POST SKIP] No successful pipeline outputs were generated, "
                     "so postprocess steps were skipped."
                 )
+                self._advance_progress(len(postprocesses))
 
             summary_msg: str
             if self.batch_zip_var.get():
@@ -1397,6 +1459,7 @@ class ProcessApp(_BaseAppTk):
                     zip_name = self.batch_zip_name_var.get().strip() or "outputs.zip"
                     if not zip_name.lower().endswith(".zip"):
                         zip_name += ".zip"
+                    self._set_minimal_status("Creating ZIP...")
                     self._log_batch("[ZIP] Preparing archive...")
                     last_progress_log = 0.0
                     zip_progress_base = self._progress_completed_units
@@ -1425,6 +1488,7 @@ class ProcessApp(_BaseAppTk):
                     summary_msg = f"ZIP archive: {zip_path}"
                     clean_work_output = True
                 except Exception as exc:  # noqa: BLE001
+                    zip_failed = True
                     self._set_progress_units(zip_progress_base + 1.0)
                     self._log_batch(f"[ZIP FAIL] {exc}")
                     messagebox.showerror(
@@ -1441,12 +1505,14 @@ class ProcessApp(_BaseAppTk):
             self._log_batch(f"Completed. {summary_msg}")
 
             if failures:
+                self._set_minimal_status("Completed with errors.")
                 self._show_batch_error_dialog(
-                    f"{len(failures)} failure(s). See log for details.\n\n{summary_msg}",
-                    initial_dir=base_output_dir,
+                    f"{len(failures)} failure(s). See log for details.\n\n{summary_msg}"
                 )
             else:
-                messagebox.showinfo("Batch completed", summary_msg)
+                self._set_minimal_status(
+                    "Completed with errors." if zip_failed else "Process ended."
+                )
         finally:
             if tempdir is not None:
                 tempdir.cleanup()
