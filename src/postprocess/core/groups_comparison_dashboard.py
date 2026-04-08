@@ -194,10 +194,10 @@ LATEX_FORMULAS = {
     "sigma_h": r"$\sigma_h$",
     "N_eff_over_T": r"$N_{\mathrm{eff}}/T$",
     "E_recon_H_MAX": r"$E_{\mathrm{recon},H_{\max}}$",
-    "s_t": r"$Q_{\mathrm{t,skew}}$",
-    "w_t": r"$Q_{\mathrm{t,width}}$",
-    "s_d": r"$Q_{\mathrm{d,skew}}$",
-    "w_d": r"$Q_{\mathrm{d,width}}$",
+    "s_t": r"$s_{\mathrm{t}}$",
+    "w_t": r"$w_{\mathrm{t}}$",
+    "s_d": r"$s_{\mathrm{d}}$",
+    "w_d": r"$w_{\mathrm{d}}$",
     
     "v_end_over_v_mean": r"$R_{EM}$",
     "E_slope": r"$E_{\mathrm{slope}}$",
@@ -206,13 +206,13 @@ LATEX_FORMULAS = {
     "W80_over_T": r"$W_{80}/T$",
     "N_H_over_T": r"$N_H/T$",
     "t_phi_n_over_T": r"$t_{\Delta\phi_n}/T$",
-    "t_phi_over_T": r"$t_{\Delta\phi}/T$",
+    "t_phi_over_T": r"$t_{\phi}/T$",
     "D_phi": r"$D_{\phi}$",
     "s_phi_over_T": r"$s_{\Delta\phi}/T$",
     "eta_h": r"$\eta_h$",
-    "rho_h": r"$\rho_{h,80}$",
-    "w_h": r"$w_{h,50\!-\!80}$",
-    "N_h_over_H_minus_1": r"$N_{H,\mathrm{spec}}/(H-1)$",
+    "rho_h": r"$\rho_{h}$",
+    "w_h": r"$w_{h}$",
+    "N_h_over_H_minus_1": r"$N_{H}/(H-1)$",
 }
 
 
