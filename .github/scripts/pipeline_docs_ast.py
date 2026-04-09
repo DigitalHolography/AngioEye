@@ -6,7 +6,10 @@ metrics output keys.
 
 import ast
 import json
+import re
 import sys
+
+_VAR_RE = re.compile(r"\{(\w+)\}")
 
 
 # ---------------------------------------------------------------------------
@@ -35,78 +38,7 @@ def find_pipeline_class(tree):
     return None, None
 
 
-# ---------------------------------------------------------------------------
-# Value resolution (rigorous AST-based)
-# ---------------------------------------------------------------------------
-
-def resolve_value(node, env):
-    """
-    Rigorous resolution of AST expressions to their values.
-    Returns a value (str, dict, list, etc.) or None if unresolvable.
-    """
-    if isinstance(node, ast.Constant):
-        return node.value
-
-    if isinstance(node, ast.Name):
-        if node.id in env:
-            return env[node.id]
-        return "{" + node.id + "}"
-
-    if isinstance(node, ast.Attribute):
-        if isinstance(node.value, ast.Name) and node.value.id == "self":
-            return "{self." + node.attr + "}"
-        return None
-
-    if isinstance(node, ast.IfExp):
-        body_val = resolve_value(node.body, env)
-        orelse_val = resolve_value(node.orelse, env)
-        if body_val == orelse_val:
-            return body_val
-        if body_val is not None and orelse_val is not None:
-            return "{" + str(body_val) + "|" + str(orelse_val) + "}"
-        return body_val or orelse_val
-
-    if isinstance(node, ast.JoinedStr):
-        parts = []
-        for part in node.values:
-            if isinstance(part, ast.Constant):
-                parts.append(str(part.value))
-            elif isinstance(part, ast.FormattedValue):
-                val = resolve_value(part.value, env)
-                parts.append(str(val) if val is not None else "{?}")
-            else:
-                parts.append("{?}")
-        return "".join(parts)
-
-    if isinstance(node, ast.Dict):
-        out = {}
-        for k_node, v_node in zip(node.keys, node.values):
-            k = resolve_value(k_node, env)
-            v = resolve_value(v_node, env)
-            if isinstance(k, str):
-                out[k] = v
-        return out
-
-    if isinstance(node, ast.List):
-        return [resolve_value(elt, env) for elt in node.elts]
-
-    if isinstance(node, ast.Tuple):
-        return tuple(resolve_value(elt, env) for elt in node.elts)
-
-    if isinstance(node, ast.Subscript):
-        base = resolve_value(node.value, env)
-        key = resolve_value(node.slice, env)
-        if isinstance(base, dict) and key in base:
-            return base[key]
-        if isinstance(base, (list, tuple)) and isinstance(key, int):
-            if -len(base) <= key < len(base):
-                return base[key]
-        return None
-
-    return None
-
-
-def build_method_env(method_node):
+def build_method_env(method_node, class_strs):
     """Build local variable environment for a method."""
     env = {}
 
@@ -118,7 +50,7 @@ def build_method_env(method_node):
         if isinstance(node, ast.Assign) and len(node.targets) == 1:
             if isinstance(node.targets[0], ast.Name):
                 name = node.targets[0].id
-                val = resolve_value(node.value, env)
+                val = _resolve(node.value, env, class_strs)
                 if val is not None and isinstance(val, str):
                     env[name] = val
 
@@ -129,20 +61,21 @@ def build_method_env(method_node):
 # H5 input extraction
 # ---------------------------------------------------------------------------
 
-def extract_h5_inputs(class_node):
-    """Trace h5file[...] accesses in run() and called methods."""
-    
-    # Collect class string constants 
-    class_strs = {}
+def get_class_strs(class_node):
+    """Collect class-level string constant assignments."""
+    out = {}
     for item in class_node.body:
-        if (
-            isinstance(item, ast.Assign)
-            and len(item.targets) == 1
-            and isinstance(item.targets[0], ast.Name)
-        ):
-            value = resolve_value(item.value, {})
-            if isinstance(value, str):
-                class_strs[item.targets[0].id] = value
+        if isinstance(item, ast.Assign) and len(item.targets) == 1 and isinstance(item.targets[0], ast.Name):
+            val = _resolve(item.value, {}, {})
+            if isinstance(val, str):
+                out[item.targets[0].id] = val
+    return out
+
+
+def extract_h5_inputs(class_node, class_strs=None):
+    """Trace h5file[...] accesses in run() and called methods."""
+
+    class_strs = class_strs or get_class_strs(class_node)
     
     methods = {n.name: n for n in class_node.body if isinstance(n, ast.FunctionDef)}
     run_method = methods.get("run")
@@ -534,15 +467,16 @@ def _expr_type(node, env_types=None):
     return {"kind": "unknown"}
 
 
-def extract_metrics_types(class_node):
+def extract_metrics_types(class_node, class_strs=None):
     """Collect metrics full path -> inferred type."""
     metric_types = {}
+    class_strs = class_strs or get_class_strs(class_node)
 
     for method_node in class_node.body:
         if not isinstance(method_node, ast.FunctionDef):
             continue
 
-        env = build_method_env(method_node)
+        env = build_method_env(method_node, class_strs)
         env_types = {}
 
         for arg in method_node.args.args:
@@ -564,7 +498,7 @@ def extract_metrics_types(class_node):
 
                 if isinstance(target, ast.Subscript):
                     if isinstance(target.value, ast.Name) and target.value.id == "metrics":
-                        key = resolve_value(target.slice, env)
+                        key = _resolve(target.slice, env, class_strs)
                         if isinstance(key, str):
                             _set_type(metric_types, key, _expr_type(node.value, env_types))
 
@@ -577,7 +511,7 @@ def extract_metrics_types(class_node):
                     and func.value.id == "self"
                     and len(node.args) >= 2
                 ):
-                    path = resolve_value(node.args[1], env)
+                    path = _resolve(node.args[1], env, class_strs)
                     if isinstance(path, str):
                         for suffix in ["_real", "_imag"]:
                             combined = path + suffix
@@ -660,6 +594,109 @@ def build_metrics_tree(metric_types):
 
 
 # ---------------------------------------------------------------------------
+# Expandable variable value discovery
+# ---------------------------------------------------------------------------
+
+def _harvest_var_values(stmts, target_var, env, class_strs, out):
+    """Walk statements collecting all concrete string values assigned to target_var."""
+    for stmt in stmts:
+        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
+            tgt = stmt.targets[0]
+            val = _resolve(stmt.value, env, class_strs)
+            if isinstance(tgt, ast.Name):
+                if tgt.id == target_var and isinstance(val, str) and not _VAR_RE.search(val):
+                    out.add(val)
+                if val is not None:
+                    env[tgt.id] = val
+            continue
+        if isinstance(stmt, ast.For) and isinstance(stmt.target, ast.Name):
+            itr = _resolve(stmt.iter, env, class_strs)
+            for item in (itr if isinstance(itr, list) else []):
+                le = {**env, stmt.target.id: item}
+                if stmt.target.id == target_var and isinstance(item, str) and not _VAR_RE.search(item):
+                    out.add(item)
+                _harvest_var_values(stmt.body, target_var, le, class_strs, out)
+            continue
+        child_lists = []
+        for attr in ("body", "orelse", "finalbody"):
+            sub = getattr(stmt, attr, None)
+            if isinstance(sub, list):
+                child_lists.append(sub)
+        for handler in getattr(stmt, "handlers", []):
+            child_lists.append(handler.body)
+        for substmts in child_lists:
+            _harvest_var_values(substmts, target_var, env.copy(), class_strs, out)
+
+
+def _harvest_call_args(methods, class_strs, var_name, out):
+    """Collect string literals passed as var_name arg at all call sites (handles inner functions)."""
+    pos_map = {}
+    for method in methods:
+        for node in ast.walk(method):
+            if isinstance(node, ast.FunctionDef):
+                params = [a.arg for a in node.args.args if a.arg != "self"]
+                if var_name in params:
+                    pos_map[node.name] = params.index(var_name)
+    if not pos_map:
+        return
+    for method in methods:
+        for node in ast.walk(method):
+            if not isinstance(node, ast.Call):
+                continue
+            fname = _call_name(node.func)
+            if fname not in pos_map:
+                continue
+            pos = pos_map[fname]
+            if pos < len(node.args):
+                val = _resolve(node.args[pos], {}, class_strs)
+                if isinstance(val, str) and not _VAR_RE.search(val):
+                    out.add(val)
+            for kw in node.keywords:
+                if kw.arg == var_name:
+                    val = _resolve(kw.value, {}, class_strs)
+                    if isinstance(val, str) and not _VAR_RE.search(val):
+                        out.add(val)
+
+
+def collect_var_values(methods, class_strs, var_name):
+    """Return sorted list of all concrete string values var_name can take across methods."""
+    out = set()
+    for method in methods:
+        _harvest_var_values(method.body, var_name, {}, class_strs, out)
+    _harvest_call_args(methods, class_strs, var_name, out)
+    return sorted(out)
+
+
+def annotate_var_keys(metrics, methods, class_strs):
+    """Inject {varname: [values]} lists into grouped nodes at the appropriate level."""
+    grouped = metrics.get("grouped", {})
+    cache = {}
+
+    def vals(var):
+        if var not in cache:
+            cache[var] = collect_var_values(methods, class_strs, var)
+        return cache[var]
+
+    root_vars = {}
+    for path_key in list(grouped.keys()):
+        segs = path_key.split("/")
+        for var in _VAR_RE.findall(segs[0]):
+            var_values = vals(var)
+            if var not in root_vars and var_values:
+                root_vars[var] = var_values
+        node = grouped[path_key]
+        for seg in segs[1:]:
+            for var in _VAR_RE.findall(seg):
+                var_values = vals(var)
+                if var not in node and var_values:
+                    grouped[path_key] = {var: var_values, **node}
+                    node = grouped[path_key]
+
+    if root_vars:
+        metrics["grouped"] = {**root_vars, **{k: v for k, v in grouped.items() if k not in root_vars}}
+
+
+# ---------------------------------------------------------------------------
 # Description extraction
 # ---------------------------------------------------------------------------
 
@@ -689,15 +726,19 @@ def process_pipeline_script(filepath):
         return {"error": "No @registerPipeline class found", "filepath": filepath}
 
     docstring = ast.get_docstring(class_node)
-    inputs = extract_h5_inputs(class_node)
-    metric_types = extract_metrics_types(class_node)
+    class_strs = get_class_strs(class_node)
+    inputs = extract_h5_inputs(class_node, class_strs)
+    metric_types = extract_metrics_types(class_node, class_strs)
+    metrics = build_metrics_tree(metric_types)
+    methods = [n for n in class_node.body if isinstance(n, ast.FunctionDef)]
+    annotate_var_keys(metrics, methods, class_strs)
 
     return {
         "filepath": filepath,
         "pipeline_name": pipeline_name,
         "description": get_description(docstring),
         "inputs": inputs,
-        "metrics": build_metrics_tree(metric_types),
+        "metrics": metrics,
     }
 
 

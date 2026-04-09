@@ -4,14 +4,28 @@
 name: Pipeline Docs Generation
 
 on:
+  pull_request:
+    paths:
+      - src/pipelines/**/*.py
+      - .github/scripts/pipeline_docs_ast.py
+      - .github/scripts/pipeline_docs_latex_gen.py
+      - .github/workflows/pipeline_docs.yml
   push:
     branches:
       - pipeline-docs
+    paths:
+      - src/pipelines/**/*.py
+      - .github/scripts/pipeline_docs_ast.py
+      - .github/scripts/pipeline_docs_latex_gen.py
+      - .github/workflows/pipeline_docs.yml
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 
 jobs:
-  test:
+  generate-docs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -19,50 +33,79 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Debug info
-        run: |
-          echo "Running on branch:"
-          git branch --show-current
-          echo "Latest commit:"
-          git log -1 --oneline
-
       - name: Retrieve modified/new files
         id: get_files
+        shell: bash
         run: |
-          echo "Retrieving modified/new files..."
-          git diff --name-only ${{ github.event.before }} ${{ github.sha }} > modified_files.txt
-          echo "Modified/New files:"
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base_sha="${{ github.event.pull_request.base.sha }}"
+            git diff --name-only "$base_sha" "${{ github.sha }}" > modified_files.txt
+          elif [[ "${{ github.event_name }}" == "push" && "${{ github.event.before }}" != "" && "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]]; then
+            git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" > modified_files.txt
+          else
+            git ls-files 'src/pipelines/*.py' 'src/pipelines/**/*.py' > modified_files.txt
+          fi
           cat modified_files.txt
 
       - name: Retrieve pipeline python files
         id: get_pipeline_files
+        shell: bash
         run: |
-          echo "Checking for pipeline scripts..."
           grep '^src/pipelines/.*\.py$' modified_files.txt > pipeline_scripts.txt || true
           if [ -s pipeline_scripts.txt ]; then
-            echo "Pipeline scripts found:"
             cat pipeline_scripts.txt
           else
-            echo "No pipeline scripts found."
             echo "no_scripts=true" >> $GITHUB_OUTPUT
           fi
-      
+
       - name: Exit if no pipeline scripts
         if: steps.get_pipeline_files.outputs.no_scripts == 'true'
-        run: |
-          echo "No pipeline scripts to process. Exiting."
-          exit 0
+        run: exit 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Process pipeline scripts
+      - name: Generate pipeline docs
+        shell: bash
         run: |
-          echo "Processing pipeline scripts..."
+          mkdir -p docs/pipelines
+          rm -f docs/pipelines/.gitkeep
           while IFS= read -r script; do
-            echo "Generating docs for $script"
-            # Placeholder for actual doc generation command, e.g.:
-            # python generate_docs.py --input "$script" --output "docs/$(basename "$script" .py).md"
+            [[ -f "$script" ]] || continue
+            stem="$(basename "$script" .py)"
+            json_out="docs/pipelines/${stem}.json"
+            tex_out="docs/pipelines/${stem}.tex"
+
+            python .github/scripts/pipeline_docs_ast.py "$script" > "$json_out"
+
+            if python -c "import json, sys; payload = json.load(open(sys.argv[1], 'r', encoding='utf-8')); sys.exit(0 if 'error' not in payload else 1)" "$json_out"
+            then
+              python .github/scripts/pipeline_docs_latex_gen.py "$json_out" "$tex_out"
+            else
+              rm -f "$json_out"
+            fi
           done < pipeline_scripts.txt
+
+      - name: Commit generated docs
+        if: steps.get_pipeline_files.outputs.no_scripts != 'true' && github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          if git diff --quiet -- docs/pipelines; then
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/pipelines
+          git commit -m "Update pipeline docs"
+          git push
+
+      - name: Upload generated docs
+        if: steps.get_pipeline_files.outputs.no_scripts != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-docs
+          path: docs/pipelines
+          if-no-files-found: ignore
