@@ -62,21 +62,28 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install LaTeX
+        run: sudo apt-get install -y texlive-latex-extra latexmk
+
       - name: Generate pipeline docs
         shell: bash
         run: |
-          mkdir -p docs/pipelines
-          rm -f docs/pipelines/.gitkeep
+          mkdir -p docs/pipelines/latex
           while IFS= read -r script; do
             [[ -f "$script" ]] || continue
             stem="$(basename "$script" .py)"
-            tex_out="docs/pipelines/${stem}.tex"
+            tex_out="docs/pipelines/latex/${stem}.tex"
 
             json_payload="$(python .github/scripts/pipeline_docs_ast.py "$script")"
 
             if printf '%s' "$json_payload" | python -c "import json, sys; payload = json.load(sys.stdin); sys.exit(0 if 'error' not in payload else 1)"
             then
               printf '%s' "$json_payload" | python .github/scripts/pipeline_docs_latex_gen.py "$tex_out"
+              if latexmk -pdf -interaction=nonstopmode -output-directory="docs/pipelines/latex" "$tex_out"; then
+                mv "docs/pipelines/latex/${stem}.pdf" "docs/pipelines/${stem}.pdf"
+              else
+                echo "LaTeX compilation failed for $stem"
+              fi
             fi
           done < pipeline_scripts.txt
 
@@ -103,5 +110,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: pipeline-docs
-          path: docs/pipelines
+          path: |
+            docs/pipelines/*.pdf
+            docs/pipelines/latex/*.tex
           if-no-files-found: ignore
