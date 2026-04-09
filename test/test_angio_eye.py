@@ -35,7 +35,19 @@ fake_postprocess.PostprocessDescriptor = object
 fake_postprocess.load_postprocess_catalog = lambda: ([], [])
 sys.modules.setdefault("postprocess", fake_postprocess)
 
-from angio_eye import ProcessApp
+from angio_eye import ProcessApp  # noqa: E402
+
+for _module_name in (
+    "h5py",
+    "pipelines",
+    "pipelines.core",
+    "pipelines.core.errors",
+    "pipelines.core.utils",
+    "postprocess",
+):
+    _module = sys.modules.get(_module_name)
+    if _module is not None and getattr(_module, "__file__", None) is None:
+        sys.modules.pop(_module_name, None)
 
 
 class _Var:
@@ -44,6 +56,9 @@ class _Var:
 
     def get(self):
         return self._value
+
+    def set(self, value):
+        self._value = value
 
 
 class BatchZipCleanupTests(unittest.TestCase):
@@ -63,10 +78,11 @@ class BatchZipCleanupTests(unittest.TestCase):
             _pipelines,
             output_dir,
             output_relative_parent=Path("."),
+            output_filename=None,
         ):
             target_dir = output_dir / output_relative_parent
             target_dir.mkdir(parents=True, exist_ok=True)
-            result_path = target_dir / "sample_pipelines_result.h5"
+            result_path = target_dir / (output_filename or "sample_pipelines_result.h5")
             result_path.write_text("result", encoding="utf-8")
             return result_path
 
@@ -84,8 +100,13 @@ class BatchZipCleanupTests(unittest.TestCase):
             batch_output_var=_Var(str(base_output_dir)),
             batch_zip_var=_Var(True),
             batch_zip_name_var=_Var("outputs.zip"),
-            pipeline_check_vars={"Demo": _Var(True)},
-            postprocess_check_vars={},
+            ui_mode="advanced",
+            _progress_total_units=1.0,
+            _progress_completed_units=0.0,
+            pipeline_rows=[SimpleNamespace(name="Demo", available=True)],
+            postprocess_rows=[],
+            pipeline_visibility={"Demo": True},
+            postprocess_visibility={},
             pipeline_registry={"Demo": object()},
             postprocess_registry={},
             _validate_postprocess_selection=lambda *args, **kwargs: [],
@@ -98,6 +119,11 @@ class BatchZipCleanupTests(unittest.TestCase):
             _zip_output_dir=_zip_output_dir,
             _log_batch=logs.append,
             _show_batch_error_dialog=lambda *args, **kwargs: None,
+            _reset_progress=lambda: None,
+            _start_progress=lambda total_units: None,
+            _set_progress_units=lambda completed_units: None,
+            _advance_progress=lambda units=1.0: None,
+            _minimal_output_filename_for_run=lambda _data_path, _inputs: None,
             update=lambda: None,
             logs=logs,
         )
@@ -165,6 +191,66 @@ class BatchZipCleanupTests(unittest.TestCase):
             self.assertFalse((base_output_dir / "outputs.zip").exists())
             self.assertIn(str(work_dirs[0]), showinfo.call_args.args[1])
             self.assertEqual("Zip failed", showerror.call_args.args[0])
+
+    def test_apply_input_defaults_for_zip_input(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            input_path = tmp_path / "sample.zip"
+            input_path.write_text("dummy", encoding="utf-8")
+
+            app = SimpleNamespace(
+                batch_output_var=_Var(""),
+                batch_zip_var=_Var(False),
+                batch_zip_name_var=_Var("outputs.zip"),
+                _default_output_stem=lambda input_path: f"{input_path.stem}_angioeye",
+                _default_archive_name=lambda input_path: f"{input_path.stem}_angioeye.zip",
+                _reset_progress=lambda: None,
+            )
+
+            ProcessApp._apply_input_defaults(app, input_path)
+
+            self.assertEqual(str(tmp_path), app.batch_output_var.get())
+            self.assertTrue(app.batch_zip_var.get())
+            self.assertEqual("sample_angioeye.zip", app.batch_zip_name_var.get())
+
+    def test_minimal_output_filename_for_single_h5(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            input_path = Path(tmp_dir) / "sample.h5"
+            input_path.write_text("dummy", encoding="utf-8")
+
+            app = SimpleNamespace(
+                ui_mode="minimal",
+                batch_zip_var=_Var(False),
+                _default_output_artifact_name=lambda path: f"{path.stem}_angioeye.h5",
+            )
+
+            output_name = ProcessApp._minimal_output_filename_for_run(
+                app,
+                input_path,
+                [input_path],
+            )
+
+            self.assertEqual("sample_angioeye.h5", output_name)
+
+    def test_handle_dropped_paths_accepts_supported_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            input_path = Path(tmp_dir) / "sample.zip"
+            input_path.write_text("dummy", encoding="utf-8")
+            applied_paths: list[Path] = []
+            logs: list[str] = []
+
+            app = SimpleNamespace(
+                batch_input_var=_Var(""),
+                _apply_input_defaults=lambda path: applied_paths.append(path),
+                _log_batch=logs.append,
+            )
+
+            accepted = ProcessApp._handle_dropped_paths(app, [input_path])
+
+            self.assertTrue(accepted)
+            self.assertEqual(str(input_path), app.batch_input_var.get())
+            self.assertEqual([input_path], applied_paths)
+            self.assertIn("Drag and drop", logs[0])
 
 
 if __name__ == "__main__":

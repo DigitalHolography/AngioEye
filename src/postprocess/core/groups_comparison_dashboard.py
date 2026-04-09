@@ -140,28 +140,25 @@ SELECTED_METRICS_PNG = {
     "crest_factor",
     "Delta_DTI",
     "gamma_t",
-    "spectral_entropy",
-    "delta_phi2",
-    "rho_h_90",
-    "rho_h_95",
-    "mu_h",
-    "sigma_h",
     "N_eff_over_T",
     "N_H_over_T",
-    "phase_locking_residual",
-    "E_recon_H_MAX",
-    "Q_t_skew",
-    "Q_t_width",
-    "R_Q_t",
+    "s_t",
+    "w_t",
     "Q_d_skew",
-    "Q_d_width",
-    "R_Q_d",
+    "w_d",
+    
     "v_end_over_v_mean",
     "E_slope",
     "E_curv",
     "t50_over_T",
-    "t_delta_phi_over_T",
-    "t_delta_phi_n_over_T",
+    "t_phi_over_T",
+    "t_phi_n_over_T",
+    "rho_h",                       
+    "w_h",                       
+    "N_h_over_H_minus_1",         
+    "D_phi",                           
+    "s_phi_over_T",             
+    "eta_h",   
 }
 METRIC_ALIASES = {
     "Hspec": "spectral_entropy",
@@ -197,20 +194,25 @@ LATEX_FORMULAS = {
     "sigma_h": r"$\sigma_h$",
     "N_eff_over_T": r"$N_{\mathrm{eff}}/T$",
     "E_recon_H_MAX": r"$E_{\mathrm{recon},H_{\max}}$",
-    "Q_t_skew": r"$Q_{\mathrm{t,skew}}$",
-    "Q_t_width": r"$Q_{\mathrm{t,width}}$",
-    "Q_d_skew": r"$Q_{\mathrm{d,skew}}$",
-    "Q_d_width": r"$Q_{\mathrm{d,width}}$",
-    "R_Q_t": r"$R_{\mathrm{Q_{{t}}}}$",
-    "R_Q_d": r"$R_{\mathrm{Q_{{d}}}}$",
+    "s_t": r"$s_{\mathrm{t}}$",
+    "w_t": r"$w_{\mathrm{t}}$",
+    "s_d": r"$s_{\mathrm{d}}$",
+    "w_d": r"$w_{\mathrm{d}}$",
+    
     "v_end_over_v_mean": r"$R_{EM}$",
     "E_slope": r"$E_{\mathrm{slope}}$",
     "phase_locking_residual": r"$E_{\phi}$",
     "W50_over_T": r"$W_{50}/T$",
     "W80_over_T": r"$W_{80}/T$",
     "N_H_over_T": r"$N_H/T$",
-    "t_delta_phi_n_over_T": r"$t_{\Delta\phi_n}/T$",
-    "t_delta_phi_over_T": r"$t_{\Delta\phi}/T$",
+    "t_phi_n_over_T": r"$t_{\Delta\phi_n}/T$",
+    "t_phi_over_T": r"$t_{\phi}/T$",
+    "D_phi": r"$D_{\phi}$",
+    "s_phi_over_T": r"$s_{\Delta\phi}/T$",
+    "eta_h": r"$\eta_h$",
+    "rho_h": r"$\rho_{h}$",
+    "w_h": r"$w_{h}$",
+    "N_h_over_H_minus_1": r"$N_{H}/(H-1)$",
 }
 
 
@@ -342,7 +344,62 @@ def export_windkessel_figures(zip_path, out_dir, format="png"):
     if format == "png":
         csv_path = os.path.join(out_dir, "windkessel_values.csv")
         df.to_csv(csv_path, index=False)
+def _safe_norm(v):
+    v = np.asarray(v, dtype=float)
+    s = np.nansum(v)
+    if not np.isfinite(s) or s <= EPS:
+        return np.full_like(v, np.nan, dtype=float)
+    return v / s
 
+def _higher_harmonic_weights_from_support(support):
+    """
+    Retourne les poids normalisés des harmoniques n=2..H.
+    On part de harmonic_energies si disponible, sinon harmonic_energies_weights.
+    """
+    e = np.asarray(support.get("harmonic_energies", []), dtype=float)
+
+    if e.size == 0:
+        w = np.asarray(support.get("harmonic_energies_weights", []), dtype=float)
+        if w.size == 0:
+            return np.array([], dtype=float)
+        # w supposé sur n=1..H -> on enlève la fondamentale
+        hh = w[1:] if w.size >= 2 else np.array([], dtype=float)
+        return _safe_norm(hh)
+
+    # harmonic_energies supposé sur n=1..H
+    hh = e[1:] if e.size >= 2 else np.array([], dtype=float)
+    return _safe_norm(hh)
+
+def _interp_quantile_index_from_weights(weights, q):
+    """
+    weights: b_k, k=1..H-1
+    Retourne l_q au sens du papier, donc dans [1, H-1].
+    """
+    w = np.asarray(weights, dtype=float)
+    if w.size == 0 or not np.any(np.isfinite(w)):
+        return np.nan
+
+    B = np.cumsum(np.where(np.isfinite(w), w, 0.0))
+    for m in range(1, len(B) + 1):
+        b_prev = 0.0 if m == 1 else B[m - 2]
+        b_curr = B[m - 1]
+        if b_prev < q <= b_curr + EPS:
+            denom = max(b_curr - b_prev, EPS)
+            return (m - 1) + (q - b_prev) / denom
+    return float(len(B))
+
+def _phase_delay_equivalents_from_support(support):
+    """
+    t_{Δφ,n}/T = Δφ_n / (2π n), avec n à partir de 2.
+    """
+    dphi = np.asarray(support.get("delta_phi_all", []), dtype=float)
+    if dphi.ndim == 0 or dphi.size == 0:
+        return np.array([], dtype=float)
+
+    # après select_support_beat, on s'attend à un vecteur 1D sur n=2..H
+    dphi = np.ravel(dphi).astype(float)
+    n_vals = np.arange(2, 2 + len(dphi), dtype=float)
+    return dphi / (2.0 * np.pi * n_vals)
 
 def select_support_beat(support, beat_idx):
     out = {}
@@ -727,7 +784,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
             info_box("Missing Delta_DTI support")
             return
         x_lin = np.linspace(0, 1, n)
-        ax.plot(x_lin, a, color=main_color)
+        ax.plot(x_lin, a, color=main_color, linewidth=3)
         ax.fill_between(
             x_lin,
             0,
@@ -755,7 +812,182 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
         info_box([f"PI = {pi:.3f}"])
         ax.set_xlabel("rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
+    elif metric == "rho_h":
+        b = _higher_harmonic_weights_from_support(support)
+        if b.size == 0:
+            info_box("Missing higher-harmonic weights")
+            return
 
+        
+        csum = np.cumsum(b)
+        xk = np.arange(1, len(b) + 1)
+
+        l80 = float(support.get("l80", np.nan))
+        if not np.isfinite(l80):
+            l80 = _interp_quantile_index_from_weights(b, 0.80)
+
+        rho_h = float(support.get("rho_h", np.nan))
+        if not np.isfinite(rho_h):
+            rho_h = l80 / max(len(b), 1)
+        ax.plot(xk, csum, color=main_color, linewidth=3, marker="o", markersize=4)
+
+        ax.axhline(0.80, linestyle="--", color="black", linewidth=1)
+        if np.isfinite(l80):
+            ax.axvline(l80, linestyle="--", color="black", linewidth=1)
+        if np.isfinite(l80):
+            ax.plot(l80, 0.80, "o", color="black", markersize=5)
+        ax.set_xlim(0.5, len(b) + 0.5)
+        ax.set_ylim(0, 1.05)
+
+        ax.set_xlabel(r"Higher-harmonic index $k = n - 1$", fontsize=14)
+        ax.set_ylabel(r"$B(\ell)$", fontsize=14)
+        info_box([
+            rf"$\ell_{{80}}={l80:.3f}$",
+            rf"$\rho_{{h,80}}={rho_h:.3f}$",
+        ])
+    elif metric == "w_h":
+        b = _higher_harmonic_weights_from_support(support)
+        if b.size == 0:
+            info_box("Missing higher-harmonic weights")
+            return
+        csum = np.cumsum(b)
+        xk = np.arange(1, len(b) + 1)
+        l50 = float(support.get("l50", np.nan))
+        l80 = float(support.get("l80", np.nan))
+
+        if not np.isfinite(l50):
+            l50 = _interp_quantile_index_from_weights(b, 0.50)
+        if not np.isfinite(l80):
+            l80 = _interp_quantile_index_from_weights(b, 0.80)
+        w_h = float(support.get("w_h", np.nan))
+        if not np.isfinite(w_h):
+            w_h = (l80 - l50) / max(len(b), 1)
+        ax.plot(xk, csum, color=main_color, linewidth=3, marker="o", markersize=4)
+        ax.axhline(0.50, linestyle="--", color="black", linewidth=1)
+        ax.axhline(0.80, linestyle="--", color="black", linewidth=1)
+        if np.isfinite(l50):
+            ax.axvline(l50, linestyle=":", color="black", linewidth=1)
+        if np.isfinite(l80):
+            ax.axvline(l80, linestyle="--", color="black", linewidth=1)
+        if np.isfinite(l50) and np.isfinite(l80):
+            ax.axvspan(l50, l80, color="#cccccc", alpha=0.4)
+
+        if np.isfinite(l50):
+            ax.plot(l50, 0.50, "o", color="black", markersize=5)
+        if np.isfinite(l80):
+            ax.plot(l80, 0.80, "o", color="black", markersize=5)
+        ax.set_xlim(0.5, len(b) + 0.5)
+        ax.set_ylim(0, 1.05)
+
+        ax.set_xlabel(r"Higher-harmonic index $k = n - 1$", fontsize=14)
+        ax.set_ylabel(r"$B(\ell)$", fontsize=14)
+
+        info_box([
+            rf"$\ell_{{50}}={l50:.3f}$",
+            rf"$\ell_{{80}}={l80:.3f}$",
+            rf"$w_{{h,50-80}}={w_h:.3f}$",
+        ])
+    elif metric == "N_h_over_H_minus_1":
+        b = _higher_harmonic_weights_from_support(support)
+        if b.size == 0:
+            info_box("Missing higher-harmonic weights")
+            return
+
+        hspec = -np.nansum(np.where(b > 0, b * np.log(b), 0.0))
+        nh_spec = float(np.exp(hspec))
+        nh_spec_norm = float(
+            support.get("N_h_over_H_minus_1", np.nan)
+        )
+        if not np.isfinite(nh_spec_norm):
+            nh_spec_norm = nh_spec / max(len(b), 1)
+
+        xk = np.arange(1, len(b) + 1)
+        ax.bar(xk, b, color=main_color, width=0.8)
+        ax.set_yscale("log")
+
+        info_box([
+            rf"$N_{{H,spec}}={nh_spec:.3f}$",
+            rf"$N_{{H,spec}}/(H-1)={nh_spec_norm:.3f}$",
+        ])
+        ax.set_xlabel(r"Higher-harmonic index $k=n-1$", fontsize=14)
+        ax.set_ylabel(r"$b_k$ (a.u.)", fontsize=14, labelpad=12)
+    elif metric == "D_phi":
+        dphi = np.asarray(support.get("delta_phi_all", []), dtype=float)
+        if dphi.size == 0:
+            info_box("Missing phase data")
+            return
+
+        dphi = np.ravel(dphi).astype(float)
+        n_vals = np.arange(2, 2 + len(dphi))
+        wphi = _higher_harmonic_weights_from_support(support)
+        if wphi.size != dphi.size:
+            wphi = np.ones_like(dphi, dtype=float)
+            wphi = _safe_norm(wphi)
+
+        R_phi = np.abs(np.nansum(wphi * np.exp(1j * dphi)))
+        D_phi = float(support.get("D_phi", np.nan))
+        if not np.isfinite(D_phi):
+            D_phi = 1.0 - R_phi
+
+        ax.bar(n_vals, dphi, color=main_color, edgecolor="black")
+        ax.axhline(0, color="black", linewidth=1.0)
+        ax.axhline(np.pi, color="black", linewidth=0.8, linestyle="--")
+        ax.axhline(-np.pi, color="black", linewidth=0.8, linestyle="--")
+        ax.set_yticks([-np.pi, -np.pi/2, 0, np.pi/2, np.pi])
+        ax.set_yticklabels([r"$-\pi$", r"$-\pi/2$", r"$0$", r"$\pi/2$", r"$\pi$"])
+
+        info_box([rf"$R_{{\phi}}={R_phi:.3f}$", rf"$D_{{\phi}}={D_phi:.3f}$"])
+        ax.set_xlabel("Harmonic n (a.u.)", fontsize=14)
+        ax.set_ylabel(r"$\Delta \phi_n$ (rad)", fontsize=14, labelpad=12)
+    elif metric == "s_phi_over_T":
+        tdphi_n = _phase_delay_equivalents_from_support(support)
+        if tdphi_n.size == 0:
+            info_box("Missing phase-delay equivalents")
+            return
+
+        n_vals = np.arange(2, 2 + len(tdphi_n))
+        t_delta = float(support.get("t_phi_over_T", np.nan))
+        if not np.isfinite(t_delta):
+            t_delta = float(np.nanmedian(tdphi_n))
+
+        s_delta = float(support.get("s_phi_over_T", np.nan))
+        if not np.isfinite(s_delta):
+            s_delta = float(np.nanmedian(np.abs(tdphi_n - t_delta)))
+
+        ax.bar(n_vals, tdphi_n, color=main_color, edgecolor="black")
+        ax.axhline(0, color="black", linewidth=1.0)
+        ax.axhline(t_delta, color="black", linestyle="--", linewidth=1.0)
+        ax.axhspan(t_delta - s_delta, t_delta + s_delta, color=fill_color2, alpha=0.5)
+
+        info_box([
+            rf"$t_{{\Delta\phi}}/T={t_delta:.3f}$",
+            rf"$s_{{\Delta\phi}}/T={s_delta:.3f}$",
+        ])
+        ax.set_xlabel("Harmonic n (a.u.)", fontsize=14)
+        ax.set_ylabel(r"$t_{\Delta\phi,n}/T$ (a.u.)", fontsize=14, labelpad=12)
+    elif metric == "eta_h":
+        eta_h = float(support.get("eta_h", np.nan))
+        if not np.isfinite(eta_h):
+            # fallback si le support ne donne pas directement la métrique
+            resid = np.nansum((sig - vb[:len(sig)]) ** 2) if len(vb) == len(sig) else np.nan
+            denom = np.nansum((sig - np.nanmean(sig)) ** 2)
+            eta_h = 1.0 - resid / max(denom, EPS)
+
+        ax.plot(tau, sig, linewidth=3, color=main_color, label="signal")
+        if len(vb) > 0:
+            ax.plot(
+                np.linspace(0.0, 1.0, len(vb), endpoint=False),
+                vb,
+                linestyle="--",
+                linewidth=2,
+                color="black",
+                label="reconstruction",
+            )
+
+        info_box([rf"$\eta_h={eta_h:.3f}$", f"H={len(harmonic_magnitudes)}"])
+        ax.legend(frameon=False, fontsize=10)
+        ax.set_xlabel("rectified time : t/T", fontsize=14)
+        ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
     elif metric == "mu_t_over_T":
         mu_over_T = float(support["mu_t_over_T"])
 
@@ -846,7 +1078,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
             0,
             sig[tau < tau_k],
             where=np.isfinite(sig[tau < tau_k]),
-            color="#fbd3f2",
+            color= fill_color1,
         )
         ax.fill_between(
             tau,
@@ -855,7 +1087,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
             where=np.isfinite(sig),
             hatch="//",
             facecolor="none",
-            edgecolor="#FB8F8F",
+            edgecolor=fill_color2,
         )
         vline_to_curve(
             tau_k, tau, sig, y0=0.0, color="#000000", linestyles="--", linewidth=1
@@ -1297,17 +1529,17 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
             label="reconstruction",
         )
         info_box(
-            [rf"$E_{{recon,Hmax}}={e_recon:.3f}$", f"Hmax={len(harmonic_magnitudes)}"]
+            [rf"$E_{{recon,Hmax}}={e_recon:.4f}$", f"Hmax={len(harmonic_magnitudes)}"]
         )
         ax.legend(frameon=False, fontsize=10)
         ax.set_xlabel("rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v_b\: (mm/s)$", fontsize=14, labelpad=12)
 
-    elif metric == "Q_t_skew":
+    elif metric == "s_t":
         t10 = float(support["t10_over_T"])
         t50 = float(support["t50_over_T"])
         t90 = float(support["t90_over_T"])
-        q_t_skew = float(support["Q_t_skew"])
+        s_t = float(support["s_t"])
 
         ax.plot(tau, C, linewidth=3, color=main_color)
         for tq in [t10, t50, t90]:
@@ -1317,17 +1549,17 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
 
         info_box(
             [
-                rf"$Q_{{t_{{skew}}}}={q_t_skew:.3f}$",
+                rf"$Q_{{t_{{skew}}}}={s_t:.3f}$",
                 f"t10={t10:.3f}, t50={t50:.3f}, t90={t90:.3f}",
             ]
         )
         ax.set_xlabel("rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$d(\tau) \: (a.u.)$", fontsize=14, labelpad=12)
 
-    elif metric == "Q_t_width":
+    elif metric == "w_t":
         t25 = float(support["t25_over_T"])
         t75 = float(support["t75_over_T"])
-        q_t_width = float(support["Q_t_width"])
+        w_t = float(support["w_t"])
 
         ax.plot(tau, C, linewidth=3, color=main_color)
         y25 = _y_at(t25, tau, C)
@@ -1339,7 +1571,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
         ax.fill_between(tau, 0, C, where=(tau >= t25) & (tau <= t75), color=fill_color2)
 
         info_box(
-            [rf"$Q_{{t_{{width}}}}={q_t_width:.3f}$", f"t25={t25:.3f}, t75={t75:.3f}"]
+            [rf"$Q_{{t_{{width}}}}={w_t:.3f}$", f"t25={t25:.3f}, t75={t75:.3f}"]
         )
         ax.set_xlabel("rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$d(\tau) \: (a.u.)$", fontsize=14, labelpad=12)
@@ -1350,8 +1582,8 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
         t50 = float(support["t50_over_T"])
         t75 = float(support["t75_over_T"])
         t90 = float(support["t90_over_T"])
-        q_t_width = float(support["Q_t_width"])
-        q_t_skew = float(support["Q_t_skew"])
+        w_t = float(support["w_t"])
+        s_t = float(support["s_t"])
         r_q_t = float(support["R_Q_t"])
 
         ax.plot(tau, C, linewidth=3, color=main_color)
@@ -1363,8 +1595,8 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
 
         info_box(
             [
-                rf"$Q_{{t_{{width}}}}={q_t_width:.3f}$",
-                rf"$Q_{{t_{{skew}}}}={q_t_skew:.3f}$",
+                rf"$Q_{{t_{{width}}}}={w_t:.3f}$",
+                rf"$Q_{{t_{{skew}}}}={s_t:.3f}$",
                 rf"$R_{{Q_{{t}}}}={r_q_t:.3f}$",
             ]
         )
@@ -1391,10 +1623,10 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
         ax.set_xlabel("rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$d(\tau) \: (a.u.)$", fontsize=14, labelpad=12)
 
-    elif metric == "Q_d_width":
+    elif metric == "w_d":
         d25 = float(support["d25"])
         d75 = float(support["d75"])
-        q_d_width = float(support["Q_d_width"])
+        w_d = float(support["w_d"])
 
         ax.plot(tau, C, linewidth=3, color=main_color)
         ax.vlines(0.25, 0, d25, linestyle="--", linewidth=1, color="black")
@@ -1407,7 +1639,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
         ax.fill_betweenx(y_fill, 0, x_curve, color=fill_color2)
 
         info_box(
-            [rf"$Q_{{d_{{width}}}}={q_d_width:.3f}$", f"d25={d25:.3f}, d75={d75:.3f}"]
+            [rf"$Q_{{d_{{width}}}}={w_d:.3f}$", f"d25={d25:.3f}, d75={d75:.3f}"]
         )
         ax.set_xlabel("rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$d(\tau) \: (a.u.)$", fontsize=14, labelpad=12)
@@ -1418,7 +1650,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
         d50 = float(support["d50"])
         d75 = float(support["d75"])
         d90 = float(support["d90"])
-        q_d_width = float(support["Q_d_width"])
+        w_d = float(support["w_d"])
         q_d_skew = float(support["Q_d_skew"])
         r_q_d = float(support["R_Q_d"])
 
@@ -1433,7 +1665,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
 
         info_box(
             [
-                rf"$Q_{{d_{{width}}}}={q_d_width:.3f}$",
+                rf"$Q_{{d_{{width}}}}={w_d:.3f}$",
                 rf"$Q_{{d_{{skew}}}}={q_d_skew:.3f}$",
                 rf"$R_{{Q_{{d}}}}={r_q_d:.3f}$",
             ]
@@ -1699,9 +1931,19 @@ def export_selected_metric_pngs_bandlimited(
                     chosen = rep_file.get(g, None)
                     path = h5_index.get(g, {}).get(chosen, None) if chosen else None
 
-                    if metric == "phase_locking_residual":
-                        plot_group_delta_phi_stats(ax, group_delta_phi_stats, g, vessel)
-                        ax.set_title(f"{g}", fontsize=14)
+                    if metric == "D_phi":
+                        if path and os.path.exists(path):
+                            support = extract_graphics_support(path, vessel=vessel, mode="bandlimited")
+                            if support:
+                                support_beat = select_support_beat(support, 0)
+                                plot_metric_illustration(ax, metric, support_beat, path, vessel)
+                                ax.set_title(f"{g}", fontsize=14)
+                            else:
+                                ax.text(0.5, 0.5, f"No support for {g} ({vessel})", ha="center", va="center")
+                                ax.axis("off")
+                        else:
+                            ax.text(0.5, 0.5, f"No representative file for {g}", ha="center", va="center")
+                            ax.axis("off")
 
                     elif path and os.path.exists(path):
                         support = extract_graphics_support(
@@ -2114,7 +2356,7 @@ def extract_mean_support_per_file(h5_path, vessel="artery", mode="bandlimited"):
                 "harmonic_weights",
                 "harmonic_phases",
                 "delta_phi_all",
-                "t_delta_phi_n_over_T",
+                "t_phi_n_over_T",
             }:
                 out[k] = np.nanmean(arr, axis=0)
             else:

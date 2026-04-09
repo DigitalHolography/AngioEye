@@ -1,3 +1,4 @@
+import json
 import sys
 import tempfile
 import unittest
@@ -8,7 +9,7 @@ SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from app_settings import (
+from app_settings import (  # noqa: E402
     AppSettingsStore,
     default_settings_path,
     normalize_pipeline_visibility,
@@ -71,6 +72,77 @@ class AppSettingsTests(unittest.TestCase):
             store.save_postprocess_visibility(expected)
 
             self.assertEqual(store.load_postprocess_visibility(), expected)
+
+    def test_load_ui_mode_defaults_to_minimal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            store = AppSettingsStore(Path(tmp_dir) / "settings.json")
+
+            self.assertEqual(store.load_ui_mode(), "minimal")
+
+    def test_load_uses_default_template_when_user_settings_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            template_path = tmp_path / "default_settings.json"
+            settings_path = tmp_path / "settings.json"
+            template_path.write_text(
+                json.dumps(
+                    {
+                        "pipeline_visibility": {"Demo": True},
+                        "postprocess_visibility": {"Report": False},
+                        "ui_mode": "advanced",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            store = AppSettingsStore(settings_path, template_path)
+
+            self.assertEqual(store.load_ui_mode(), "advanced")
+            self.assertEqual(store.load_pipeline_visibility(), {"Demo": True})
+
+    def test_initialize_from_defaults_does_not_overwrite_existing_settings(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            template_path = tmp_path / "default_settings.json"
+            settings_path = tmp_path / "settings.json"
+            template_path.write_text(
+                json.dumps({"ui_mode": "advanced"}),
+                encoding="utf-8",
+            )
+            settings_path.write_text(
+                json.dumps({"ui_mode": "minimal"}),
+                encoding="utf-8",
+            )
+            store = AppSettingsStore(settings_path, template_path)
+
+            self.assertFalse(store.initialize_from_defaults())
+            self.assertEqual(store.load_ui_mode(), "minimal")
+
+    def test_initialize_from_defaults_writes_missing_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            template_path = tmp_path / "default_settings.json"
+            settings_path = tmp_path / "settings.json"
+            template_path.write_text(
+                json.dumps({"ui_mode": "advanced"}),
+                encoding="utf-8",
+            )
+            store = AppSettingsStore(settings_path, template_path)
+
+            self.assertTrue(store.initialize_from_defaults())
+            self.assertEqual(
+                json.loads(settings_path.read_text(encoding="utf-8")),
+                {"ui_mode": "advanced"},
+            )
+
+    def test_store_round_trips_ui_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            store = AppSettingsStore(Path(tmp_dir) / "settings.json")
+
+            store.save_ui_mode("advanced")
+
+            self.assertEqual(store.load_ui_mode(), "advanced")
 
 
 if __name__ == "__main__":

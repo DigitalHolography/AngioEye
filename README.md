@@ -78,7 +78,7 @@ The GUI handles batch processing for folders, single .h5/.hdf5 files, or .zip ar
 
 You can also select batch-level postprocess steps. These run after the selected pipelines finish and before optional zipping, so any generated dashboards, PNGs, or summaries are included in the final output folder or archive.
 
-Use the Pipeline Library tab to decide which pipelines are shown in the main Batch tab. Visibility preferences are saved per user between app launches, including installed builds.
+Use the Pipeline Library tab to select which pipelines run. Selection preferences are saved per user between app launches, including installed builds.
 Use the Postprocess Library tab the same way for postprocess steps.
 
 ```sh
@@ -90,6 +90,8 @@ python src/angio_eye.py
 ```
 
 When you run `angioeye` from inside the repository checkout, the launcher prefers the local `src/` tree so newly added or edited pipelines are picked up without needing a full reinstall.
+
+Installed builds expose editable `pipelines/` and `postprocess/` folders next to `AngioEye.exe`; use the Library tabs' Open folder and Reload buttons to edit and refresh them.
 
 ### CLI
 
