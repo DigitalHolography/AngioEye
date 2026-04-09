@@ -1,0 +1,45 @@
+\documentclass[11pt]{article}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{hyperref}
+\usepackage{longtable}
+\setlength{\parindent}{0pt}
+\begin{document}
+\begin{center}
+\LARGE\textbf{modal\_analysis}
+\end{center}
+\textbf{Source:} \texttt{src/\allowbreak{}pipelines/\allowbreak{}modal\_\allowbreak{}analysis.py}\\
+\textbf{Description:} Tutorial pipeline showing the full surface area of a pipeline:
+
+\subsection*{Inputs}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Input} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Input} & \textbf{Type} \\ \hline
+\endhead
+\texttt{/\allowbreak{}moment0} & ndarray \\ \hline
+\texttt{/\allowbreak{}moment1} & ndarray \\ \hline
+\texttt{/\allowbreak{}moment2} & ndarray \\ \hline
+\end{longtable}
+
+\subsection*{Metrics}
+\subsubsection*{1) \texttt{(root)}}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endhead
+\texttt{S\_\allowbreak{}M2\_\allowbreak{}over\_\allowbreak{}M0\_\allowbreak{}squared\_\allowbreak{}per\_\allowbreak{}beat} & ndarray \\ \hline
+\texttt{S\_\allowbreak{}moment0\_\allowbreak{}per\_\allowbreak{}beat} & ndarray \\ \hline
+\texttt{Vt\_\allowbreak{}M2\_\allowbreak{}over\_\allowbreak{}M0\_\allowbreak{}squared\_\allowbreak{}per\_\allowbreak{}beat} & ndarray \\ \hline
+\texttt{Vt\_\allowbreak{}moment0\_\allowbreak{}per\_\allowbreak{}beat} & ndarray \\ \hline
+\texttt{spatial\_\allowbreak{}modes\_\allowbreak{}M2\_\allowbreak{}over\_\allowbreak{}M0\_\allowbreak{}squared\_\allowbreak{}per\_\allowbreak{}beat} & ndarray \\ \hline
+\texttt{spatial\_\allowbreak{}modes\_\allowbreak{}moment0\_\allowbreak{}per\_\allowbreak{}beat} & ndarray \\ \hline
+\end{longtable}
+
+\end{document}

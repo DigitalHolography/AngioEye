@@ -1,0 +1,55 @@
+\documentclass[11pt]{article}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{hyperref}
+\usepackage{longtable}
+\setlength{\parindent}{0pt}
+\begin{document}
+\begin{center}
+\LARGE\textbf{Static Example}
+\end{center}
+\textbf{Source:} \texttt{src/\allowbreak{}pipelines/\allowbreak{}static\_\allowbreak{}example.py}\\
+\textbf{Description:} Tutorial pipeline showing the full surface area of a pipeline:
+
+\subsection*{Inputs}
+\emph{No inputs detected.}
+
+\subsection*{Metrics}
+\subsubsection*{1) \texttt{(root)}}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endhead
+\texttt{cube\_\allowbreak{}example} & ndarray \\ \hline
+\texttt{scalar\_\allowbreak{}example} & float \\ \hline
+\texttt{vector\_\allowbreak{}example} & list \\ \hline
+\end{longtable}
+
+\subsubsection*{2) \texttt{aggregates}}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endhead
+\texttt{matrix\_\allowbreak{}example} & list \\ \hline
+\end{longtable}
+
+\subsubsection*{3) \texttt{subfolder}}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endhead
+\texttt{metrics\_\allowbreak{}1} & float \\ \hline
+\texttt{metrics\_\allowbreak{}2} & float \\ \hline
+\end{longtable}
+
+\end{document}

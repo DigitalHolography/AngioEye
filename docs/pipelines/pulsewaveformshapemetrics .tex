@@ -1,0 +1,65 @@
+\documentclass[11pt]{article}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{hyperref}
+\usepackage{longtable}
+\setlength{\parindent}{0pt}
+\begin{document}
+\begin{center}
+\LARGE\textbf{waveform}
+\end{center}
+\textbf{Source:} \texttt{src/\allowbreak{}pipelines/\allowbreak{}pulsewaveformshapemetrics .py}\\
+\textbf{Description:} Tutorial pipeline showing the full surface area of a pipeline:
+
+\subsection*{Inputs}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Input} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Input} & \textbf{Type} \\ \hline
+\endhead
+\texttt{/\allowbreak{}Artery/\allowbreak{}VelocityPerBeat/\allowbreak{}VelocitySignalPerBeat/\allowbreak{}value} & ndarray \\ \hline
+\texttt{/\allowbreak{}Artery/\allowbreak{}VelocityPerBeat/\allowbreak{}beatPeriodSeconds/\allowbreak{}value} & ndarray \\ \hline
+\end{longtable}
+
+\subsection*{Metrics}
+\subsubsection*{1) \texttt{(root)}}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endhead
+\texttt{AVTI} & ndarray \\ \hline
+\texttt{BV} & ndarray \\ \hline
+\texttt{Delta\_\allowbreak{}Phi\_\allowbreak{}2} & ndarray \\ \hline
+\texttt{Delta\_\allowbreak{}Phi\_\allowbreak{}3} & ndarray \\ \hline
+\texttt{FVTI} & ndarray \\ \hline
+\texttt{Fspec} & ndarray \\ \hline
+\texttt{H2} & ndarray \\ \hline
+\texttt{HRI\_\allowbreak{}2\_\allowbreak{}10} & ndarray \\ \hline
+\texttt{HRI\_\allowbreak{}2\_\allowbreak{}10\_\allowbreak{}noisecorrec} & ndarray \\ \hline
+\texttt{Hspec} & ndarray \\ \hline
+\texttt{IVTI} & ndarray \\ \hline
+\texttt{R10} & ndarray \\ \hline
+\texttt{RVTI} & ndarray \\ \hline
+\texttt{S1\_\allowbreak{}10} & ndarray \\ \hline
+\texttt{Sigma\_\allowbreak{}n} & ndarray \\ \hline
+\texttt{TAU\_\allowbreak{}H\_\allowbreak{}N} & ndarray \\ \hline
+\texttt{TAU\_\allowbreak{}P} & ndarray \\ \hline
+\texttt{TAU\_\allowbreak{}P\_\allowbreak{}N} & ndarray \\ \hline
+\texttt{VTI\_\allowbreak{}0\_\allowbreak{}T2} & ndarray \\ \hline
+\texttt{VTI\_\allowbreak{}T2\_\allowbreak{}T} & ndarray \\ \hline
+\texttt{Xn} & ndarray \\ \hline
+\texttt{nc} & ndarray \\ \hline
+\texttt{sigma\_\allowbreak{}M} & ndarray \\ \hline
+\texttt{tau\_\allowbreak{}G} & ndarray \\ \hline
+\texttt{tau\_\allowbreak{}M1} & ndarray \\ \hline
+\texttt{tau\_\allowbreak{}phi} & ndarray \\ \hline
+\texttt{tau\_\allowbreak{}phi\_\allowbreak{}n} & ndarray \\ \hline
+\end{longtable}
+
+\end{document}

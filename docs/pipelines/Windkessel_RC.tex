@@ -1,0 +1,123 @@
+\documentclass[11pt]{article}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{hyperref}
+\usepackage{longtable}
+\setlength{\parindent}{0pt}
+\begin{document}
+\begin{center}
+\LARGE\textbf{Windkessel\_RC}
+\end{center}
+\textbf{Source:} \texttt{src/\allowbreak{}pipelines/\allowbreak{}Windkessel\_\allowbreak{}RC.py}\\
+\textbf{Description:} Beat-resolved artery-vein Windkessel RC analysis from global arterial and venous
+
+\subsection*{Inputs}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Input} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Input} & \textbf{Type} \\ \hline
+\endhead
+\texttt{/\allowbreak{}Artery/\allowbreak{}VelocityPerBeat/\allowbreak{}beatPeriodSeconds/\allowbreak{}value} & ndarray (float) \\ \hline
+\end{longtable}
+
+\subsection*{Metrics}
+\subsubsection*{1) \texttt{(root)}}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endhead
+\texttt{\{key\}} & unknown \\ \hline
+\end{longtable}
+
+\subsubsection*{2) \texttt{params}}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endhead
+\texttt{arx\_\allowbreak{}a\_\allowbreak{}max} & ndarray (float) \\ \hline
+\texttt{arx\_\allowbreak{}a\_\allowbreak{}min} & ndarray (float) \\ \hline
+\texttt{arx\_\allowbreak{}delay\_\allowbreak{}max\_\allowbreak{}fraction\_\allowbreak{}of\_\allowbreak{}cycle} & ndarray (float) \\ \hline
+\texttt{delay\_\allowbreak{}grid\_\allowbreak{}step\_\allowbreak{}seconds} & ndarray (float) \\ \hline
+\texttt{delay\_\allowbreak{}max\_\allowbreak{}seconds} & ndarray (float) \\ \hline
+\texttt{delay\_\allowbreak{}min\_\allowbreak{}seconds} & ndarray (float) \\ \hline
+\texttt{harmonic\_\allowbreak{}indices} & ndarray (int) \\ \hline
+\texttt{min\_\allowbreak{}valid\_\allowbreak{}fraction} & ndarray (float) \\ \hline
+\texttt{n\_\allowbreak{}beats} & ndarray (int) \\ \hline
+\texttt{primitive\_\allowbreak{}max\_\allowbreak{}abs\_\allowbreak{}delay\_\allowbreak{}seconds} & ndarray (float) \\ \hline
+\texttt{primitive\_\allowbreak{}max\_\allowbreak{}tau\_\allowbreak{}seconds} & ndarray (float) \\ \hline
+\texttt{primitive\_\allowbreak{}min\_\allowbreak{}methods\_\allowbreak{}for\_\allowbreak{}consensus} & ndarray (int) \\ \hline
+\texttt{time\_\allowbreak{}grid\_\allowbreak{}step\_\allowbreak{}seconds} & ndarray (float) \\ \hline
+\texttt{use\_\allowbreak{}gain\_\allowbreak{}in\_\allowbreak{}frequency\_\allowbreak{}fit} & ndarray (int) \\ \hline
+\texttt{use\_\allowbreak{}mean\_\allowbreak{}normalization\_\allowbreak{}arx} & ndarray (int) \\ \hline
+\texttt{use\_\allowbreak{}mean\_\allowbreak{}normalization\_\allowbreak{}time\_\allowbreak{}domain} & ndarray (int) \\ \hline
+\end{longtable}
+
+\subsubsection*{3) \texttt{\{representation\}/\allowbreak{}qc}}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endhead
+\texttt{\{key\}} & ndarray (float) \\ \hline
+\end{longtable}
+
+\subsubsection*{4) \texttt{\{representation\}/\allowbreak{}qc/\allowbreak{}cross\_\allowbreak{}method}}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endhead
+\texttt{\{key\}} & ndarray \\ \hline
+\end{longtable}
+
+\subsubsection*{5) \texttt{\{representation\}/\allowbreak{}qc/\allowbreak{}plausibility}}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endhead
+\texttt{\{key\}} & ndarray (int) \\ \hline
+\end{longtable}
+
+\subsubsection*{6) \texttt{\{representation\}/\allowbreak{}qc/\allowbreak{}summary}}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endhead
+\texttt{\{key\}} & ndarray \\ \hline
+\end{longtable}
+
+\subsubsection*{7) \texttt{\{representation\}/\allowbreak{}\{method\_\allowbreak{}name\}}}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endhead
+\texttt{Deltat} & ndarray (float) \\ \hline
+\texttt{accepted} & ndarray (int) \\ \hline
+\texttt{tau} & ndarray (float) \\ \hline
+\texttt{tau\_\allowbreak{}over\_\allowbreak{}T} & ndarray (float) \\ \hline
+\texttt{\{extra\}} & ndarray (float) \\ \hline
+\end{longtable}
+
+\end{document}
