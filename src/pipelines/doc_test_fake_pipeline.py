@@ -1,1 +1,0 @@
-print("This is a test script for Github Action generating documentation. It does not do anything.")

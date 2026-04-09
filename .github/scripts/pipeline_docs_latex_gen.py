@@ -226,25 +226,31 @@ def build_latex(payload):
     return "\n".join(lines)
 
 
-def main():
-    args = [a for a in sys.argv[1:] if a != "--keep-json"]
-    keep_json = "--keep-json" in sys.argv[1:]
+def load_payload(json_arg=None):
+    if json_arg is None:
+        text = sys.stdin.read()
+    else:
+        text = json_arg
 
-    if len(args) not in {1, 2}:
-        print("Usage: pipeline_docs_latex_gen.py <input.json> [output.tex] [--keep-json]", file=sys.stderr)
+    if not text.strip():
+        raise ValueError("No JSON input provided")
+
+    if text.startswith("\ufeff"):
+        text = text.lstrip("\ufeff")
+    return json.loads(text)
+
+
+def main():
+    if len(sys.argv) not in {2, 3}:
+        print("Usage: pipeline_docs_latex_gen.py <output.tex> [json_input]", file=sys.stderr)
         sys.exit(1)
 
-    input_path = Path(args[0])
-    output_path = Path(args[1]) if len(args) == 2 else input_path.with_suffix(".tex")
-
-    with input_path.open("r", encoding="utf-8-sig") as handle:
-        payload = json.load(handle)
+    output_path = Path(sys.argv[1])
+    json_input = sys.argv[2] if len(sys.argv) == 3 else None
+    payload = load_payload(json_input)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(build_latex(payload), encoding="utf-8")
-
-    if not keep_json:
-        input_path.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

@@ -495,6 +495,11 @@ def extract_metrics_types(class_node, class_strs=None):
                 target = node.targets[0]
                 if isinstance(target, ast.Name):
                     _set_env_type(env_types, target.id, _expr_type(node.value, env_types))
+                    if target.id == "metrics" and isinstance(node.value, ast.Dict):
+                        for k_node, v_node in zip(node.value.keys, node.value.values):
+                            key = _resolve(k_node, env, class_strs)
+                            if isinstance(key, str):
+                                _set_type(metric_types, key, _expr_type(v_node, env_types))
 
                 if isinstance(target, ast.Subscript):
                     if isinstance(target.value, ast.Name) and target.value.id == "metrics":

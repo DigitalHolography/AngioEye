@@ -5,19 +5,14 @@ name: Pipeline Docs Generation
 
 on:
   pull_request:
-    paths:
+    paths: &doc_paths
       - src/pipelines/**/*.py
       - .github/scripts/pipeline_docs_ast.py
       - .github/scripts/pipeline_docs_latex_gen.py
       - .github/workflows/pipeline_docs.yml
   push:
-    branches:
-      - pipeline-docs
-    paths:
-      - src/pipelines/**/*.py
-      - .github/scripts/pipeline_docs_ast.py
-      - .github/scripts/pipeline_docs_latex_gen.py
-      - .github/workflows/pipeline_docs.yml
+    branches: pipeline-docs
+    paths: *doc_paths
   workflow_dispatch:
 
 permissions:
@@ -40,7 +35,7 @@ jobs:
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             base_sha="${{ github.event.pull_request.base.sha }}"
             git diff --name-only "$base_sha" "${{ github.sha }}" > modified_files.txt
-          elif [[ "${{ github.event_name }}" == "push" && "${{ github.event.before }}" != "" && "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]]; then
+          elif [[ "${{ github.event_name }}" == "push" && "${{ github.event.before }}" != "" && "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]] && git cat-file -e "${{ github.event.before }}" 2>/dev/null; then
             git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" > modified_files.txt
           else
             git ls-files 'src/pipelines/*.py' 'src/pipelines/**/*.py' > modified_files.txt
@@ -75,16 +70,13 @@ jobs:
           while IFS= read -r script; do
             [[ -f "$script" ]] || continue
             stem="$(basename "$script" .py)"
-            json_out="docs/pipelines/${stem}.json"
             tex_out="docs/pipelines/${stem}.tex"
 
-            python .github/scripts/pipeline_docs_ast.py "$script" > "$json_out"
+            json_payload="$(python .github/scripts/pipeline_docs_ast.py "$script")"
 
-            if python -c "import json, sys; payload = json.load(open(sys.argv[1], 'r', encoding='utf-8')); sys.exit(0 if 'error' not in payload else 1)" "$json_out"
+            if printf '%s' "$json_payload" | python -c "import json, sys; payload = json.load(sys.stdin); sys.exit(0 if 'error' not in payload else 1)"
             then
-              python .github/scripts/pipeline_docs_latex_gen.py "$json_out" "$tex_out"
-            else
-              rm -f "$json_out"
+              printf '%s' "$json_payload" | python .github/scripts/pipeline_docs_latex_gen.py "$tex_out"
             fi
           done < pipeline_scripts.txt
 
@@ -92,16 +84,20 @@ jobs:
         if: steps.get_pipeline_files.outputs.no_scripts != 'true' && github.event_name != 'pull_request'
         shell: bash
         run: |
-          if git diff --quiet -- docs/pipelines; then
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@github.com"
+        
+          git add docs/pipelines
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
             exit 0
           fi
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/pipelines
           git commit -m "Update pipeline docs"
-          git push
-
+          git push origin HEAD:${GITHUB_REF_NAME}
+      
       - name: Upload generated docs
         if: steps.get_pipeline_files.outputs.no_scripts != 'true'
         uses: actions/upload-artifact@v4
