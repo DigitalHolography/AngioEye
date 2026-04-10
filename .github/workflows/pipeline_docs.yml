@@ -28,32 +28,46 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Retrieve modified/new files
-        id: get_files
+      - name: Retrieve changed file statuses
+        id: get_changed_files
         shell: bash
         run: |
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             base_sha="${{ github.event.pull_request.base.sha }}"
-            git diff --name-only "$base_sha" "${{ github.sha }}" > modified_files.txt
+            git diff --name-status "$base_sha" "${{ github.sha }}" > changed_files_status.txt
           elif [[ "${{ github.event_name }}" == "push" && "${{ github.event.before }}" != "" && "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]] && git cat-file -e "${{ github.event.before }}" 2>/dev/null; then
-            git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" > modified_files.txt
+            git diff --name-status "${{ github.event.before }}" "${{ github.sha }}" > changed_files_status.txt
           else
-            git ls-files 'src/pipelines/*.py' 'src/pipelines/**/*.py' > modified_files.txt
+            git ls-files 'src/pipelines/*.py' 'src/pipelines/**/*.py' | sed 's/^/M	/' > changed_files_status.txt
           fi
-          cat modified_files.txt
+          cat changed_files_status.txt
 
       - name: Retrieve pipeline python files
         id: get_pipeline_files
         shell: bash
         run: |
-          grep '^src/pipelines/.*\.py$' modified_files.txt > pipeline_scripts.txt || true
+          : > pipeline_scripts.txt
+          : > deleted_pipeline_scripts.txt
 
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]] || ! ls docs/pipelines/*.pdf > /dev/null 2>&1; then
-            echo "No existing docs found or manual trigger - processing all pipeline scripts"
+          awk -F '\t' '
+            function is_pipeline(path) { return path ~ /^src\/pipelines\/.*\.py$/ }
+            $1 ~ /^R/ { if (is_pipeline($2)) print $2 >> "deleted_pipeline_scripts.txt"; if (is_pipeline($3)) print $3 >> "pipeline_scripts.txt"; next }
+            $1 == "D" { if (is_pipeline($2)) print $2 >> "deleted_pipeline_scripts.txt"; next }
+            is_pipeline($2) { print $2 >> "pipeline_scripts.txt" }
+          ' changed_files_status.txt
+
+          sort -u -o pipeline_scripts.txt pipeline_scripts.txt
+          sort -u -o deleted_pipeline_scripts.txt deleted_pipeline_scripts.txt
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]] || \
+              ! ls docs/pipelines/*.pdf > /dev/null 2>&1 || \
+              grep -qE '\.github/scripts' changed_files_status.txt; then
+            echo "Triggering full pipeline docs generation"
             git ls-files 'src/pipelines/*.py' 'src/pipelines/**/*.py' > pipeline_scripts.txt
+            : > deleted_pipeline_scripts.txt
           fi
 
-          if [ -s pipeline_scripts.txt ]; then
+          if [ -s pipeline_scripts.txt ] || [ -s deleted_pipeline_scripts.txt ]; then
             cat pipeline_scripts.txt
           else
             echo "no_scripts=true" >> $GITHUB_OUTPUT
@@ -75,6 +89,14 @@ jobs:
         shell: bash
         run: |
           mkdir -p docs/pipelines/latex
+
+          while IFS= read -r script; do
+            [[ -n "$script" ]] || continue
+            stem="$(basename "$script" .py)"
+            rm -f "docs/pipelines/${stem}.pdf"
+            rm -f "docs/pipelines/latex/${stem}.tex"
+          done < deleted_pipeline_scripts.txt
+
           while IFS= read -r script; do
             [[ -f "$script" ]] || continue
             stem="$(basename "$script" .py)"
@@ -87,6 +109,7 @@ jobs:
               printf '%s' "$json_payload" | python .github/scripts/pipeline_docs_latex_gen.py "$tex_out"
               if latexmk -pdf -interaction=nonstopmode -output-directory="docs/pipelines/latex" "$tex_out"; then
                 mv "docs/pipelines/latex/${stem}.pdf" "docs/pipelines/${stem}.pdf"
+                latexmk -c -output-directory="docs/pipelines/latex" "$tex_out" || true
               else
                 echo "LaTeX compilation failed for $stem"
               fi
@@ -101,7 +124,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@github.com"
         
-          git add -A docs/pipelines
+          git add docs/pipelines/*.pdf docs/pipelines/latex/*.tex
 
           if git diff --cached --quiet; then
             echo "No changes to commit"
@@ -109,6 +132,8 @@ jobs:
           fi
 
           git commit -m "Update pipeline docs"
+
+          git pull --rebase origin "${GITHUB_REF_NAME}"
           git push origin HEAD:${GITHUB_REF_NAME}
       
       - name: Upload generated docs
