@@ -896,7 +896,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
         ax.axhline(0.80, linestyle="--", color="black", linewidth=1)
 
         if np.isfinite(m50):
-            ax.axvline(m50, linestyle=":", color="black", linewidth=1)
+            ax.axvline(m50, linestyle="--", color="black", linewidth=1)
             ax.plot(m50, 0.50, "o", color="black", markersize=5)
 
         if np.isfinite(m80):
@@ -993,7 +993,15 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
         ax.bar(n_vals, tdphi_n, color=main_color, edgecolor="black")
         ax.axhline(0, color="black", linewidth=1.0)
         ax.axhline(t_delta, color="black", linestyle="--", linewidth=1.0)
-        ax.axhspan(t_delta - s_delta, t_delta + s_delta, color=fill_color2)
+        ax.axhspan(
+            t_delta - s_delta, 
+            t_delta + s_delta, 
+            facecolor='none',  
+            hatch="////",            
+            edgecolor="black",       
+            alpha=0.3,               
+            linewidth=0              
+        )
 
         info_box(
             [
@@ -1820,8 +1828,8 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
 
         info_box(
             [
-                rf"$W_{{50}}/T = {w80:.3f}$",
-                rf"$0.5\,V_{{max}} = {thr:.3f}$",
+                rf"$W_{{80}}/T = {w80:.3f}$",
+                rf"$0.8\,V_{{max}} = {thr:.3f}$",
             ]
         )
         ax.set_xlabel( r"rectified time : $\tau$ = t/T", fontsize=14)
