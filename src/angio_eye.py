@@ -826,6 +826,13 @@ class ProcessApp(_BaseAppTk):
                 self.pipeline_library_window, width=evt.width
             ),
         )
+        self._bind_vertical_mousewheel(
+            self.pipeline_library_canvas, self.pipeline_library_canvas
+        )
+        self._bind_vertical_mousewheel(
+            self.pipeline_library_inner, self.pipeline_library_canvas
+        )
+        self._bind_vertical_mousewheel(library_scroll, self.pipeline_library_canvas)
 
     def _build_postprocess_library_tab(self, parent: ttk.Frame) -> None:
         parent.columnconfigure(0, weight=1)
@@ -896,6 +903,48 @@ class ProcessApp(_BaseAppTk):
                 self.postprocess_library_window, width=evt.width
             ),
         )
+        self._bind_vertical_mousewheel(
+            self.postprocess_library_canvas, self.postprocess_library_canvas
+        )
+        self._bind_vertical_mousewheel(
+            self.postprocess_library_inner, self.postprocess_library_canvas
+        )
+        self._bind_vertical_mousewheel(
+            library_scroll, self.postprocess_library_canvas
+        )
+
+    def _bind_vertical_mousewheel(self, widget: tk.Misc, canvas: tk.Canvas) -> None:
+        for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            widget.bind(
+                sequence,
+                lambda event, target_canvas=canvas: self._on_vertical_mousewheel(
+                    event, target_canvas
+                ),
+                add="+",
+            )
+
+    @staticmethod
+    def _mousewheel_scroll_units(event: tk.Event) -> int:
+        delta = int(getattr(event, "delta", 0) or 0)
+        if delta:
+            steps = max(1, abs(delta) // 120) if abs(delta) >= 120 else 1
+            return -steps if delta > 0 else steps
+
+        button = getattr(event, "num", None)
+        if button == 4:
+            return -1
+        if button == 5:
+            return 1
+        return 0
+
+    def _on_vertical_mousewheel(
+        self, event: tk.Event, canvas: tk.Canvas
+    ) -> str | None:
+        scroll_units = self._mousewheel_scroll_units(event)
+        if not scroll_units:
+            return None
+        canvas.yview_scroll(scroll_units, "units")
+        return "break"
 
     def _register_pipelines(self) -> None:
         available, missing = load_pipeline_catalog()
@@ -966,12 +1015,18 @@ class ProcessApp(_BaseAppTk):
         self.pipeline_visibility_vars = {}
         self.pipeline_library_inner.columnconfigure(0, weight=1)
 
-        ttk.Label(self.pipeline_library_inner, text="Selected").grid(
+        selected_header = ttk.Label(self.pipeline_library_inner, text="Selected")
+        selected_header.grid(
             row=0, column=0, sticky="w", pady=(0, 6)
         )
-        ttk.Label(self.pipeline_library_inner, text="Status").grid(
+        status_header = ttk.Label(self.pipeline_library_inner, text="Status")
+        status_header.grid(
             row=0, column=1, sticky="w", padx=(12, 0), pady=(0, 6)
         )
+        self._bind_vertical_mousewheel(
+            selected_header, self.pipeline_library_canvas
+        )
+        self._bind_vertical_mousewheel(status_header, self.pipeline_library_canvas)
 
         for idx, pipeline in enumerate(rows, start=1):
             is_available = getattr(pipeline, "available", True)
@@ -989,10 +1044,12 @@ class ProcessApp(_BaseAppTk):
                 ),
             )
             check.grid(row=idx, column=0, sticky="w", pady=(0, 6))
+            self._bind_vertical_mousewheel(check, self.pipeline_library_canvas)
 
             status_text = self._pipeline_status_text(pipeline)
             status = ttk.Label(self.pipeline_library_inner, text=status_text)
             status.grid(row=idx, column=1, sticky="w", padx=(12, 0), pady=(0, 6))
+            self._bind_vertical_mousewheel(status, self.pipeline_library_canvas)
 
             tip_text = self._descriptor_tooltip_text(pipeline)
             if tip_text:
@@ -1011,11 +1068,19 @@ class ProcessApp(_BaseAppTk):
         self.postprocess_visibility_vars = {}
         self.postprocess_library_inner.columnconfigure(0, weight=1)
 
-        ttk.Label(self.postprocess_library_inner, text="Selected").grid(
+        selected_header = ttk.Label(self.postprocess_library_inner, text="Selected")
+        selected_header.grid(
             row=0, column=0, sticky="w", pady=(0, 6)
         )
-        ttk.Label(self.postprocess_library_inner, text="Status").grid(
+        status_header = ttk.Label(self.postprocess_library_inner, text="Status")
+        status_header.grid(
             row=0, column=1, sticky="w", padx=(12, 0), pady=(0, 6)
+        )
+        self._bind_vertical_mousewheel(
+            selected_header, self.postprocess_library_canvas
+        )
+        self._bind_vertical_mousewheel(
+            status_header, self.postprocess_library_canvas
         )
 
         for idx, postprocess in enumerate(rows, start=1):
@@ -1034,10 +1099,12 @@ class ProcessApp(_BaseAppTk):
                 ),
             )
             check.grid(row=idx, column=0, sticky="w", pady=(0, 6))
+            self._bind_vertical_mousewheel(check, self.postprocess_library_canvas)
 
             status_text = self._postprocess_status_text(postprocess)
             status = ttk.Label(self.postprocess_library_inner, text=status_text)
             status.grid(row=idx, column=1, sticky="w", padx=(12, 0), pady=(0, 6))
+            self._bind_vertical_mousewheel(status, self.postprocess_library_canvas)
 
             tip_text = self._descriptor_tooltip_text(postprocess)
             if tip_text:
