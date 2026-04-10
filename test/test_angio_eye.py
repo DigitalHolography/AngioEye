@@ -253,5 +253,48 @@ class BatchZipCleanupTests(unittest.TestCase):
             self.assertIn("Drag and drop", logs[0])
 
 
+class MouseWheelBindingTests(unittest.TestCase):
+    def test_mousewheel_scroll_units_handles_delta_and_button_events(self) -> None:
+        self.assertEqual(
+            -1, ProcessApp._mousewheel_scroll_units(SimpleNamespace(delta=120))
+        )
+        self.assertEqual(
+            1, ProcessApp._mousewheel_scroll_units(SimpleNamespace(delta=-120))
+        )
+        self.assertEqual(
+            -2, ProcessApp._mousewheel_scroll_units(SimpleNamespace(delta=240))
+        )
+        self.assertEqual(
+            -1, ProcessApp._mousewheel_scroll_units(SimpleNamespace(delta=1))
+        )
+        self.assertEqual(
+            -1, ProcessApp._mousewheel_scroll_units(SimpleNamespace(delta=0, num=4))
+        )
+        self.assertEqual(
+            1, ProcessApp._mousewheel_scroll_units(SimpleNamespace(delta=0, num=5))
+        )
+
+    def test_bind_vertical_mousewheel_registers_handlers_that_scroll_canvas(self):
+        app = ProcessApp.__new__(ProcessApp)
+        widget = mock.Mock()
+        canvas = mock.Mock()
+
+        ProcessApp._bind_vertical_mousewheel(app, widget, canvas)
+
+        self.assertEqual(
+            ["<MouseWheel>", "<Button-4>", "<Button-5>"],
+            [call.args[0] for call in widget.bind.call_args_list],
+        )
+        self.assertTrue(
+            all(call.kwargs.get("add") == "+" for call in widget.bind.call_args_list)
+        )
+
+        mousewheel_handler = widget.bind.call_args_list[0].args[1]
+        result = mousewheel_handler(SimpleNamespace(delta=-120))
+
+        canvas.yview_scroll.assert_called_once_with(1, "units")
+        self.assertEqual("break", result)
+
+
 if __name__ == "__main__":
     unittest.main()

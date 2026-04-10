@@ -14,6 +14,7 @@ datas += [('default_settings.json', '.')]
 hiddenimports += collect_submodules('pipelines')
 hiddenimports += collect_submodules('postprocess')
 hiddenimports += collect_submodules('tkinterdnd2')
+hiddenimports += ['matplotlib.backends.backend_ps']
 
 
 a = Analysis(
