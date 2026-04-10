@@ -1,0 +1,190 @@
+\documentclass[11pt]{article}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{hyperref}
+\usepackage{longtable}
+\setlength{\parindent}{0pt}
+\begin{document}
+\begin{center}
+\LARGE\textbf{waveform\_harmonic\_organization}
+\end{center}
+\textbf{Source:} \texttt{src/\allowbreak{}pipelines/\allowbreak{}waveform\_\allowbreak{}harmonic\_\allowbreak{}organization.py}\\
+\textbf{Description:} Direct harmonic-organization metrics on beat-resolved segment waveforms.
+
+\subsection*{Inputs}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Input} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Input} & \textbf{Type} \\ \hline
+\endhead
+{\scriptsize \texttt{/\allowbreak{}Artery/\allowbreak{}VelocityPerBeat/\allowbreak{}Segments/\allowbreak{}VelocitySignalPerBeatPerSegment/\allowbreak{}value}} & ndarray \\ \hline
+{\scriptsize \texttt{/\allowbreak{}Artery/\allowbreak{}VelocityPerBeat/\allowbreak{}beatPeriodSeconds/\allowbreak{}value}} & ndarray \\ \hline
+{\scriptsize \texttt{/\allowbreak{}Vein/\allowbreak{}VelocityPerBeat/\allowbreak{}Segments/\allowbreak{}VelocitySignalPerBeatPerSegment/\allowbreak{}value}} & ndarray \\ \hline
+\end{longtable}
+
+\subsection*{Metrics}
+\textbf{\textit{vessel\_prefix}}: \texttt{artery}, \texttt{vein}
+\subsubsection*{1) \texttt{\{vessel\_\allowbreak{}prefix\}/\allowbreak{}by\_\allowbreak{}segment/\allowbreak{}params}}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endhead
+\texttt{n\_\allowbreak{}beats} & ndarray (int32) \\ \hline
+\texttt{n\_\allowbreak{}branches} & ndarray (int32) \\ \hline
+\texttt{n\_\allowbreak{}radii} & ndarray (int32) \\ \hline
+\texttt{n\_\allowbreak{}t} & ndarray (int32) \\ \hline
+\end{longtable}
+
+\subsubsection*{2) \texttt{\{vessel\_\allowbreak{}prefix\}/\allowbreak{}by\_\allowbreak{}segment/\allowbreak{}raw/\allowbreak{}axes}}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endhead
+\texttt{harmonics} & ndarray (int32) \\ \hline
+\texttt{low\_\allowbreak{}harmonics} & ndarray (int32) \\ \hline
+\end{longtable}
+
+\subsubsection*{3) \texttt{\{vessel\_\allowbreak{}prefix\}/\allowbreak{}by\_\allowbreak{}segment/\allowbreak{}raw/\allowbreak{}beat\_\allowbreak{}aggregated}}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endhead
+\texttt{Gamma\_\allowbreak{}b\_\allowbreak{}over\_\allowbreak{}hkr} & ndarray (float32) \\ \hline
+\texttt{S\_\allowbreak{}b\_\allowbreak{}over\_\allowbreak{}hkr} & ndarray (float32) \\ \hline
+\texttt{cbar\_\allowbreak{}b\_\allowbreak{}over\_\allowbreak{}hkr\_\allowbreak{}imag} & ndarray \\ \hline
+\texttt{cbar\_\allowbreak{}b\_\allowbreak{}over\_\allowbreak{}hkr\_\allowbreak{}real} & ndarray \\ \hline
+\texttt{valid\_\allowbreak{}b\_\allowbreak{}count\_\allowbreak{}over\_\allowbreak{}hkr} & ndarray (int32) \\ \hline
+\end{longtable}
+
+\subsubsection*{4) \texttt{\{vessel\_\allowbreak{}prefix\}/\allowbreak{}by\_\allowbreak{}segment/\allowbreak{}raw/\allowbreak{}harmonics}}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endhead
+\texttt{V\_\allowbreak{}hbkr\_\allowbreak{}imag} & ndarray \\ \hline
+\texttt{V\_\allowbreak{}hbkr\_\allowbreak{}real} & ndarray \\ \hline
+\end{longtable}
+
+\subsubsection*{5) \texttt{\{vessel\_\allowbreak{}prefix\}/\allowbreak{}by\_\allowbreak{}segment/\allowbreak{}raw/\allowbreak{}location\_\allowbreak{}aggregated}}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endhead
+\texttt{Gamma\_\allowbreak{}kr\_\allowbreak{}over\_\allowbreak{}hb} & ndarray (float32) \\ \hline
+\texttt{S\_\allowbreak{}kr\_\allowbreak{}over\_\allowbreak{}hb} & ndarray (float32) \\ \hline
+\texttt{cbar\_\allowbreak{}kr\_\allowbreak{}over\_\allowbreak{}hb\_\allowbreak{}imag} & ndarray \\ \hline
+\texttt{cbar\_\allowbreak{}kr\_\allowbreak{}over\_\allowbreak{}hb\_\allowbreak{}real} & ndarray \\ \hline
+\texttt{valid\_\allowbreak{}kr\_\allowbreak{}count\_\allowbreak{}over\_\allowbreak{}hb} & ndarray (int32) \\ \hline
+\end{longtable}
+
+\subsubsection*{6) \texttt{\{vessel\_\allowbreak{}prefix\}/\allowbreak{}by\_\allowbreak{}segment/\allowbreak{}raw/\allowbreak{}low\_\allowbreak{}order\_\allowbreak{}phase}}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endhead
+\texttt{PLV\_\allowbreak{}b\_\allowbreak{}over\_\allowbreak{}hkr} & ndarray (float32) \\ \hline
+\texttt{PLV\_\allowbreak{}kr\_\allowbreak{}over\_\allowbreak{}hb} & ndarray (float32) \\ \hline
+\texttt{Z\_\allowbreak{}b\_\allowbreak{}over\_\allowbreak{}hkr\_\allowbreak{}imag} & ndarray \\ \hline
+\texttt{Z\_\allowbreak{}b\_\allowbreak{}over\_\allowbreak{}hkr\_\allowbreak{}real} & ndarray \\ \hline
+\texttt{Z\_\allowbreak{}kr\_\allowbreak{}over\_\allowbreak{}hb\_\allowbreak{}imag} & ndarray \\ \hline
+\texttt{Z\_\allowbreak{}kr\_\allowbreak{}over\_\allowbreak{}hb\_\allowbreak{}real} & ndarray \\ \hline
+\texttt{delta\_\allowbreak{}phi\_\allowbreak{}low\_\allowbreak{}hbkr} & ndarray (float32) \\ \hline
+\texttt{valid\_\allowbreak{}b\_\allowbreak{}count\_\allowbreak{}over\_\allowbreak{}hkr} & ndarray (int32) \\ \hline
+\texttt{valid\_\allowbreak{}kr\_\allowbreak{}count\_\allowbreak{}over\_\allowbreak{}hb} & ndarray (int32) \\ \hline
+\end{longtable}
+
+\subsubsection*{7) \texttt{\{vessel\_\allowbreak{}prefix\}/\allowbreak{}by\_\allowbreak{}segment/\allowbreak{}raw/\allowbreak{}masks}}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endhead
+\texttt{valid\_\allowbreak{}A\_\allowbreak{}b\_\allowbreak{}over\_\allowbreak{}hkr\_\allowbreak{}mask} & ndarray (uint8) \\ \hline
+\texttt{valid\_\allowbreak{}A\_\allowbreak{}kr\_\allowbreak{}over\_\allowbreak{}hb\_\allowbreak{}mask} & ndarray (uint8) \\ \hline
+\texttt{valid\_\allowbreak{}c\_\allowbreak{}hbkr\_\allowbreak{}mask} & ndarray (uint8) \\ \hline
+\texttt{valid\_\allowbreak{}waveform\_\allowbreak{}bkr\_\allowbreak{}mask} & ndarray (uint8) \\ \hline
+\end{longtable}
+
+\subsubsection*{8) \texttt{\{vessel\_\allowbreak{}prefix\}/\allowbreak{}by\_\allowbreak{}segment/\allowbreak{}raw/\allowbreak{}normalized}}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endhead
+\texttt{c\_\allowbreak{}hbkr\_\allowbreak{}imag} & ndarray \\ \hline
+\texttt{c\_\allowbreak{}hbkr\_\allowbreak{}real} & ndarray \\ \hline
+\texttt{rel\_\allowbreak{}amp\_\allowbreak{}hbkr} & ndarray (float32) \\ \hline
+\end{longtable}
+
+\subsubsection*{9) \texttt{\{vessel\_\allowbreak{}prefix\}/\allowbreak{}by\_\allowbreak{}segment/\allowbreak{}raw/\allowbreak{}occupancy}}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endhead
+\texttt{A\_\allowbreak{}b\_\allowbreak{}over\_\allowbreak{}hkr} & ndarray (float32) \\ \hline
+\texttt{A\_\allowbreak{}kr\_\allowbreak{}over\_\allowbreak{}hb} & ndarray (float32) \\ \hline
+\texttt{N\_\allowbreak{}b\_\allowbreak{}over\_\allowbreak{}h} & ndarray (float32) \\ \hline
+\texttt{N\_\allowbreak{}b\_\allowbreak{}over\_\allowbreak{}h\_\allowbreak{}norm} & ndarray (float32) \\ \hline
+\texttt{N\_\allowbreak{}kr\_\allowbreak{}over\_\allowbreak{}h} & ndarray (float32) \\ \hline
+\texttt{N\_\allowbreak{}kr\_\allowbreak{}over\_\allowbreak{}h\_\allowbreak{}norm} & ndarray (float32) \\ \hline
+\texttt{valid\_\allowbreak{}b\_\allowbreak{}count\_\allowbreak{}over\_\allowbreak{}h} & ndarray (int32) \\ \hline
+\texttt{valid\_\allowbreak{}kr\_\allowbreak{}count\_\allowbreak{}over\_\allowbreak{}h} & ndarray (int32) \\ \hline
+\end{longtable}
+
+\subsubsection*{10) \texttt{\{vessel\_\allowbreak{}prefix\}/\allowbreak{}by\_\allowbreak{}segment/\allowbreak{}raw/\allowbreak{}params}}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endhead
+\texttt{H\_\allowbreak{}MAX} & ndarray (int32) \\ \hline
+\texttt{eps} & ndarray (float32) \\ \hline
+\texttt{higher\_\allowbreak{}harmonic\_\allowbreak{}rel\_\allowbreak{}threshold} & ndarray (float32) \\ \hline
+\end{longtable}
+
+\subsubsection*{11) \texttt{\{vessel\_\allowbreak{}prefix\}/\allowbreak{}by\_\allowbreak{}segment/\allowbreak{}raw/\allowbreak{}summary/\allowbreak{}\{key\}}}
+\textbf{\textit{key}}: \texttt{Gamma\_\allowbreak{}b\_\allowbreak{}over\_\allowbreak{}kr}, \texttt{Gamma\_\allowbreak{}kr\_\allowbreak{}over\_\allowbreak{}b}, \texttt{PLV\_\allowbreak{}b\_\allowbreak{}over\_\allowbreak{}kr}, \texttt{PLV\_\allowbreak{}kr\_\allowbreak{}over\_\allowbreak{}b}, \texttt{S\_\allowbreak{}b\_\allowbreak{}over\_\allowbreak{}kr}, \texttt{S\_\allowbreak{}kr\_\allowbreak{}over\_\allowbreak{}b}, \texttt{abs\_\allowbreak{}cbar\_\allowbreak{}b\_\allowbreak{}over\_\allowbreak{}kr}, \texttt{abs\_\allowbreak{}cbar\_\allowbreak{}kr\_\allowbreak{}over\_\allowbreak{}b}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endhead
+\texttt{median} & ndarray (float32) \\ \hline
+\texttt{std} & ndarray (float32) \\ \hline
+\texttt{valid\_\allowbreak{}b\_\allowbreak{}count\_\allowbreak{}over\_\allowbreak{}h} & ndarray (int32) \\ \hline
+\texttt{valid\_\allowbreak{}kr\_\allowbreak{}count\_\allowbreak{}over\_\allowbreak{}h} & ndarray (int32) \\ \hline
+\end{longtable}
+
+\end{document}

@@ -1,0 +1,212 @@
+\documentclass[11pt]{article}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{hyperref}
+\usepackage{longtable}
+\setlength{\parindent}{0pt}
+\begin{document}
+\begin{center}
+\LARGE\textbf{lowrank\_pulsatility\_metrics}
+\end{center}
+\textbf{Source:} \texttt{src/\allowbreak{}pipelines/\allowbreak{}lowrank\_\allowbreak{}pulsatility\_\allowbreak{}metrics.py}\\
+\textbf{Description:} Compute a low-rank decomposition of beat-aligned arterial segment waveforms within one
+
+\subsection*{Inputs}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Input} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Input} & \textbf{Type} \\ \hline
+\endhead
+\texttt{/\allowbreak{}Artery/\allowbreak{}VelocityPerBeat/\allowbreak{}beatPeriodSeconds/\allowbreak{}value} & ndarray \\ \hline
+\end{longtable}
+
+\subsection*{Metrics}
+\subsubsection*{1) \texttt{\{rep\_\allowbreak{}name\}/\allowbreak{}acquisition\_\allowbreak{}dots/\allowbreak{}baseline}}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endhead
+\texttt{mad\_\allowbreak{}mu\_\allowbreak{}beat} & ndarray (float) \\ \hline
+\texttt{mu\_\allowbreak{}acq} & ndarray (float) \\ \hline
+\texttt{sigma\_\allowbreak{}mu\_\allowbreak{}beat} & ndarray (float) \\ \hline
+\end{longtable}
+
+\subsubsection*{2) \texttt{\{rep\_\allowbreak{}name\}/\allowbreak{}acquisition\_\allowbreak{}dots/\allowbreak{}beat\_\allowbreak{}period}}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endhead
+\texttt{mean} & ndarray (float) \\ \hline
+\texttt{median} & ndarray (float) \\ \hline
+\texttt{std} & ndarray (float) \\ \hline
+\end{longtable}
+
+\subsubsection*{3) \texttt{\{rep\_\allowbreak{}name\}/\allowbreak{}acquisition\_\allowbreak{}dots/\allowbreak{}heterogeneity}}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endhead
+\texttt{spatial\_\allowbreak{}mad\_\allowbreak{}mu\_\allowbreak{}median\_\allowbreak{}over\_\allowbreak{}beats} & ndarray (float) \\ \hline
+\end{longtable}
+
+\subsubsection*{4) \texttt{\{rep\_\allowbreak{}name\}/\allowbreak{}acquisition\_\allowbreak{}dots/\allowbreak{}heterogeneity/\allowbreak{}after\_\allowbreak{}\{mode\_\allowbreak{}key\}}}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endhead
+\texttt{spatial\_\allowbreak{}mad\_\allowbreak{}R\{m\}\_\allowbreak{}median\_\allowbreak{}over\_\allowbreak{}beats} & ndarray (float) \\ \hline
+\end{longtable}
+
+\subsubsection*{5) \texttt{\{rep\_\allowbreak{}name\}/\allowbreak{}acquisition\_\allowbreak{}dots/\allowbreak{}heterogeneity/\allowbreak{}\{mode\_\allowbreak{}key\}}}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endhead
+\texttt{spatial\_\allowbreak{}mad\_\allowbreak{}A\{m\}\_\allowbreak{}median\_\allowbreak{}over\_\allowbreak{}beats} & ndarray (float) \\ \hline
+\texttt{spatial\_\allowbreak{}mad\_\allowbreak{}abs\_\allowbreak{}a\{m\}\_\allowbreak{}median\_\allowbreak{}over\_\allowbreak{}beats} & ndarray (float) \\ \hline
+\end{longtable}
+
+\subsubsection*{6) \texttt{\{rep\_\allowbreak{}name\}/\allowbreak{}acquisition\_\allowbreak{}dots/\allowbreak{}mode\_\allowbreak{}panel/\allowbreak{}\{mode\_\allowbreak{}key\}}}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endhead
+\texttt{A\{m\}} & ndarray (float) \\ \hline
+\texttt{cv\_\allowbreak{}A\{m\}\_\allowbreak{}beat} & ndarray (float) \\ \hline
+\texttt{mad\_\allowbreak{}A\{m\}\_\allowbreak{}beat} & ndarray (float) \\ \hline
+\texttt{median\_\allowbreak{}abs\_\allowbreak{}a\{m\}} & ndarray (float) \\ \hline
+\texttt{sigma\_\allowbreak{}A\{m\}\_\allowbreak{}beat} & ndarray (float) \\ \hline
+\end{longtable}
+
+\subsubsection*{7) \texttt{\{rep\_\allowbreak{}name\}/\allowbreak{}acquisition\_\allowbreak{}dots/\allowbreak{}residuals/\allowbreak{}after\_\allowbreak{}\{mode\_\allowbreak{}key\}}}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endhead
+\texttt{R\{m\}} & ndarray (float) \\ \hline
+\texttt{cv\_\allowbreak{}R\{m\}\_\allowbreak{}beat} & ndarray (float) \\ \hline
+\texttt{cv\_\allowbreak{}rho\{m\}\_\allowbreak{}beat} & ndarray (float) \\ \hline
+\texttt{mad\_\allowbreak{}R\{m\}\_\allowbreak{}beat} & ndarray (float) \\ \hline
+\texttt{mad\_\allowbreak{}rho\{m\}\_\allowbreak{}beat} & ndarray (float) \\ \hline
+\texttt{rho\{m\}} & ndarray (float) \\ \hline
+\texttt{sigma\_\allowbreak{}R\{m\}\_\allowbreak{}beat} & ndarray (float) \\ \hline
+\texttt{sigma\_\allowbreak{}rho\{m\}\_\allowbreak{}beat} & ndarray (float) \\ \hline
+\end{longtable}
+
+\subsubsection*{8) \texttt{\{rep\_\allowbreak{}name\}/\allowbreak{}acquisition\_\allowbreak{}dots/\allowbreak{}singular\_\allowbreak{}spectrum}}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endhead
+\texttt{effective\_\allowbreak{}rank} & ndarray (float) \\ \hline
+\texttt{eta1} & ndarray (float) \\ \hline
+\texttt{eta2} & ndarray (float) \\ \hline
+\texttt{eta23} & ndarray (float) \\ \hline
+\texttt{eta3} & ndarray (float) \\ \hline
+\texttt{participation\_\allowbreak{}ratio} & ndarray (float) \\ \hline
+\end{longtable}
+
+\subsubsection*{9) \texttt{\{rep\_\allowbreak{}name\}/\allowbreak{}beatwise}}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endhead
+\texttt{\{key\}} & ndarray (float) \\ \hline
+\end{longtable}
+
+\subsubsection*{10) \texttt{\{rep\_\allowbreak{}name\}/\allowbreak{}decomposition}}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endhead
+\texttt{effective\_\allowbreak{}rank} & ndarray (float) \\ \hline
+\texttt{mu} & unknown \\ \hline
+\texttt{participation\_\allowbreak{}ratio} & ndarray (float) \\ \hline
+\texttt{residual\_\allowbreak{}rms\_\allowbreak{}panel\_\allowbreak{}bkr\_\allowbreak{}after\_\allowbreak{}mode1to3} & unknown \\ \hline
+\texttt{rho\_\allowbreak{}panel\_\allowbreak{}after\_\allowbreak{}mode1to3} & unknown \\ \hline
+\texttt{rms\_\allowbreak{}mode\_\allowbreak{}panel\_\allowbreak{}bkr\_\allowbreak{}mode1to3} & unknown \\ \hline
+\texttt{score\_\allowbreak{}panel\_\allowbreak{}bkr\_\allowbreak{}mode1to3} & unknown \\ \hline
+\texttt{score\_\allowbreak{}panel\_\allowbreak{}flat\_\allowbreak{}mode1to3} & unknown \\ \hline
+\texttt{singular\_\allowbreak{}energy} & unknown \\ \hline
+\texttt{singular\_\allowbreak{}energy\_\allowbreak{}fraction} & unknown \\ \hline
+\texttt{singular\_\allowbreak{}values} & unknown \\ \hline
+\texttt{total\_\allowbreak{}rms\_\allowbreak{}bkr} & unknown \\ \hline
+\texttt{u\_\allowbreak{}panel\_\allowbreak{}mode1to3} & unknown \\ \hline
+\texttt{x\_\allowbreak{}rms} & unknown \\ \hline
+\end{longtable}
+
+\subsubsection*{11) \texttt{\{rep\_\allowbreak{}name\}/\allowbreak{}inputs\_\allowbreak{}summary}}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endhead
+\texttt{beat\_\allowbreak{}period\_\allowbreak{}valid} & ndarray (uint8) \\ \hline
+\texttt{finite\_\allowbreak{}fraction\_\allowbreak{}per\_\allowbreak{}column} & unknown \\ \hline
+\texttt{min\_\allowbreak{}valid\_\allowbreak{}samples\_\allowbreak{}fraction} & ndarray (float) \\ \hline
+\texttt{n\_\allowbreak{}beats} & ndarray (int) \\ \hline
+\texttt{n\_\allowbreak{}branches} & ndarray (int) \\ \hline
+\texttt{n\_\allowbreak{}radii} & ndarray (int) \\ \hline
+\texttt{n\_\allowbreak{}t} & ndarray (int) \\ \hline
+\texttt{n\_\allowbreak{}total\_\allowbreak{}columns} & ndarray (int) \\ \hline
+\texttt{n\_\allowbreak{}valid\_\allowbreak{}columns} & ndarray (int) \\ \hline
+\texttt{valid\_\allowbreak{}column\_\allowbreak{}mask} & ndarray (uint8) \\ \hline
+\texttt{valid\_\allowbreak{}columns\_\allowbreak{}per\_\allowbreak{}beat} & unknown \\ \hline
+\texttt{valid\_\allowbreak{}fraction\_\allowbreak{}columns} & ndarray (float) \\ \hline
+\texttt{valid\_\allowbreak{}fraction\_\allowbreak{}columns\_\allowbreak{}per\_\allowbreak{}beat} & unknown \\ \hline
+\end{longtable}
+
+\subsubsection*{12) \texttt{\{rep\_\allowbreak{}name\}/\allowbreak{}qc}}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endhead
+\texttt{denominator\_\allowbreak{}floor\_\allowbreak{}rho1} & ndarray (uint8) \\ \hline
+\texttt{denominator\_\allowbreak{}floor\_\allowbreak{}rho2} & ndarray (uint8) \\ \hline
+\texttt{denominator\_\allowbreak{}floor\_\allowbreak{}rho3} & ndarray (uint8) \\ \hline
+\texttt{input\_\allowbreak{}available} & ndarray (uint8) \\ \hline
+\texttt{n\_\allowbreak{}modes\_\allowbreak{}panel} & ndarray (int) \\ \hline
+\texttt{sign\_\allowbreak{}flips\_\allowbreak{}mode1to3} & unknown \\ \hline
+\texttt{svd\_\allowbreak{}available} & ndarray (uint8) \\ \hline
+\texttt{svd\_\allowbreak{}reason} & str \\ \hline
+\end{longtable}
+
+\end{document}

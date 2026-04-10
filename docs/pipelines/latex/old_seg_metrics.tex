@@ -1,0 +1,74 @@
+\documentclass[11pt]{article}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{hyperref}
+\usepackage{longtable}
+\setlength{\parindent}{0pt}
+\begin{document}
+\begin{center}
+\LARGE\textbf{old\_waveform\_shape\_metrics}
+\end{center}
+\textbf{Source:} \texttt{src/\allowbreak{}pipelines/\allowbreak{}old\_\allowbreak{}seg\_\allowbreak{}metrics.py}\\
+\textbf{Description:} Waveform-shape metrics on per-beat, per-branch, per-radius velocity waveforms.
+
+\subsection*{Inputs}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Input} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Input} & \textbf{Type} \\ \hline
+\endhead
+{\scriptsize \texttt{/\allowbreak{}Artery/\allowbreak{}VelocityPerBeat/\allowbreak{}Segments/\allowbreak{}VelocitySignalPerBeatPerSegment/\allowbreak{}value}} & ndarray \\ \hline
+{\scriptsize \texttt{/\allowbreak{}Artery/\allowbreak{}VelocityPerBeat/\allowbreak{}Segments/\allowbreak{}VelocitySignalPerBeatPerSegmentBandLimited/\allowbreak{}value}} & ndarray \\ \hline
+{\scriptsize \texttt{/\allowbreak{}Artery/\allowbreak{}VelocityPerBeat/\allowbreak{}VelocitySignalPerBeat/\allowbreak{}value}} & ndarray \\ \hline
+{\scriptsize \texttt{/\allowbreak{}Artery/\allowbreak{}VelocityPerBeat/\allowbreak{}VelocitySignalPerBeatBandLimited/\allowbreak{}value}} & ndarray \\ \hline
+{\scriptsize \texttt{/\allowbreak{}Artery/\allowbreak{}VelocityPerBeat/\allowbreak{}VmaxPerBeatBandLimited/\allowbreak{}value}} & ndarray \\ \hline
+{\scriptsize \texttt{/\allowbreak{}Artery/\allowbreak{}VelocityPerBeat/\allowbreak{}VminPerBeatBandLimited/\allowbreak{}value}} & ndarray \\ \hline
+{\scriptsize \texttt{/\allowbreak{}Artery/\allowbreak{}VelocityPerBeat/\allowbreak{}beatPeriodSeconds/\allowbreak{}value}} & ndarray \\ \hline
+\end{longtable}
+
+\subsection*{Metrics}
+\subsubsection*{1) \texttt{by\_\allowbreak{}segment}}
+\begin{longtable}{|p{0.70\textwidth}|p{0.24\textwidth}|}
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endfirsthead
+\hline
+\textbf{Key} & \textbf{Type} \\ \hline
+\endhead
+\texttt{PI\_\allowbreak{}bandlimited\_\allowbreak{}branch} & unknown \\ \hline
+\texttt{PI\_\allowbreak{}bandlimited\_\allowbreak{}global} & unknown \\ \hline
+\texttt{PI\_\allowbreak{}bandlimited\_\allowbreak{}segment} & unknown \\ \hline
+\texttt{PI\_\allowbreak{}raw\_\allowbreak{}branch} & unknown \\ \hline
+\texttt{PI\_\allowbreak{}raw\_\allowbreak{}global} & unknown \\ \hline
+\texttt{PI\_\allowbreak{}raw\_\allowbreak{}segment} & unknown \\ \hline
+\texttt{RI\_\allowbreak{}bandlimited\_\allowbreak{}branch} & unknown \\ \hline
+\texttt{RI\_\allowbreak{}bandlimited\_\allowbreak{}global} & unknown \\ \hline
+\texttt{RI\_\allowbreak{}bandlimited\_\allowbreak{}segment} & unknown \\ \hline
+\texttt{RI\_\allowbreak{}raw\_\allowbreak{}branch} & unknown \\ \hline
+\texttt{RI\_\allowbreak{}raw\_\allowbreak{}global} & unknown \\ \hline
+\texttt{RI\_\allowbreak{}raw\_\allowbreak{}segment} & unknown \\ \hline
+\texttt{R\_\allowbreak{}VTI\_\allowbreak{}bandlimited\_\allowbreak{}branch} & unknown \\ \hline
+\texttt{R\_\allowbreak{}VTI\_\allowbreak{}bandlimited\_\allowbreak{}global} & unknown \\ \hline
+\texttt{R\_\allowbreak{}VTI\_\allowbreak{}bandlimited\_\allowbreak{}segment} & unknown \\ \hline
+\texttt{R\_\allowbreak{}VTI\_\allowbreak{}raw\_\allowbreak{}branch} & unknown \\ \hline
+\texttt{R\_\allowbreak{}VTI\_\allowbreak{}raw\_\allowbreak{}global} & unknown \\ \hline
+\texttt{R\_\allowbreak{}VTI\_\allowbreak{}raw\_\allowbreak{}segment} & unknown \\ \hline
+\texttt{ratio\_\allowbreak{}systole\_\allowbreak{}diastole\_\allowbreak{}R\_\allowbreak{}VTI} & ndarray (float) \\ \hline
+\texttt{tau\_\allowbreak{}M1\_\allowbreak{}bandlimited\_\allowbreak{}branch} & unknown \\ \hline
+\texttt{tau\_\allowbreak{}M1\_\allowbreak{}bandlimited\_\allowbreak{}global} & unknown \\ \hline
+\texttt{tau\_\allowbreak{}M1\_\allowbreak{}bandlimited\_\allowbreak{}segment} & unknown \\ \hline
+\texttt{tau\_\allowbreak{}M1\_\allowbreak{}over\_\allowbreak{}T\_\allowbreak{}bandlimited\_\allowbreak{}branch} & unknown \\ \hline
+\texttt{tau\_\allowbreak{}M1\_\allowbreak{}over\_\allowbreak{}T\_\allowbreak{}bandlimited\_\allowbreak{}global} & unknown \\ \hline
+\texttt{tau\_\allowbreak{}M1\_\allowbreak{}over\_\allowbreak{}T\_\allowbreak{}bandlimited\_\allowbreak{}segment} & unknown \\ \hline
+\texttt{tau\_\allowbreak{}M1\_\allowbreak{}over\_\allowbreak{}T\_\allowbreak{}raw\_\allowbreak{}branch} & unknown \\ \hline
+\texttt{tau\_\allowbreak{}M1\_\allowbreak{}over\_\allowbreak{}T\_\allowbreak{}raw\_\allowbreak{}global} & unknown \\ \hline
+\texttt{tau\_\allowbreak{}M1\_\allowbreak{}over\_\allowbreak{}T\_\allowbreak{}raw\_\allowbreak{}segment} & unknown \\ \hline
+\texttt{tau\_\allowbreak{}M1\_\allowbreak{}raw\_\allowbreak{}branch} & unknown \\ \hline
+\texttt{tau\_\allowbreak{}M1\_\allowbreak{}raw\_\allowbreak{}global} & unknown \\ \hline
+\texttt{tau\_\allowbreak{}M1\_\allowbreak{}raw\_\allowbreak{}segment} & unknown \\ \hline
+\end{longtable}
+
+\end{document}
