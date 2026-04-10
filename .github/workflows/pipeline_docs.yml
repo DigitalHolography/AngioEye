@@ -47,6 +47,12 @@ jobs:
         shell: bash
         run: |
           grep '^src/pipelines/.*\.py$' modified_files.txt > pipeline_scripts.txt || true
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]] || ! ls docs/pipelines/*.pdf > /dev/null 2>&1; then
+            echo "No existing docs found or manual trigger - processing all pipeline scripts"
+            git ls-files 'src/pipelines/*.py' 'src/pipelines/**/*.py' > pipeline_scripts.txt
+          fi
+
           if [ -s pipeline_scripts.txt ]; then
             cat pipeline_scripts.txt
           else
@@ -95,7 +101,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@github.com"
         
-          git add docs/pipelines
+          git add -A docs/pipelines
 
           if git diff --cached --quiet; then
             echo "No changes to commit"
