@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from input_output import find_hdf5_inputs
+
 
 @dataclass(frozen=True)
 class HoloInputContext:
@@ -32,7 +34,7 @@ def find_ef_h5(holo_path: Path) -> Path | None:
     ef_dir_path = ef_dir(holo_path)
     if not ef_dir_path.is_dir():
         return None
-    candidates = sorted({*ef_dir_path.rglob("*.h5"), *ef_dir_path.rglob("*.hdf5")})
+    candidates = find_hdf5_inputs(ef_dir_path)
     if not candidates:
         return None
 

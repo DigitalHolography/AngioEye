@@ -1,4 +1,4 @@
-"""
+﻿"""
 Command-line interface to run AngioEye pipelines over a collection of HDF5 files.
 
 Usage example:
@@ -11,6 +11,7 @@ Inputs:
     --output / -o      Base directory where results will be written (input subfolder layout is preserved).
     --trim-source / -t When set, source HDF5 contents will not be copied into pipeline output files (reducing output size, but losing provenance).
     --zip / -z         When set, compress the outputs into a .zip archive after completion.
+                       Companion report folders such as png/ are kept next to it.
     --zip-name         Optional filename for the archive (default: outputs.zip).
 """
 
@@ -27,9 +28,12 @@ from pathlib import Path
 
 import h5py
 
-from angioeye_io import (
+from input_output import (
     ANGIOEYE_PROCESSING_ROOT,
     create_h5_file,
+    create_zip_from_tree,
+    find_hdf5_inputs,
+    relative_hdf5_parent,
     write_metrics_trees_to_h5,
 )
 from pipelines import (
@@ -44,6 +48,7 @@ from postprocess import (
     PostprocessDescriptor,
     load_postprocess_catalog,
 )
+from workflows import copy_zip_companion_output_folders
 
 
 def _build_pipeline_registry() -> dict[str, PipelineDescriptor]:
@@ -55,6 +60,15 @@ def _build_pipeline_registry() -> dict[str, PipelineDescriptor]:
 def _build_postprocess_registry() -> dict[str, PostprocessDescriptor]:
     available, _ = load_postprocess_catalog()
     return {p.name: p for p in available}
+
+
+def _postprocess_result_failures(result) -> list[str]:
+    failures = getattr(result, "metadata", {}).get("failures", [])
+    if isinstance(failures, str):
+        return [failures]
+    if not isinstance(failures, Sequence):
+        return []
+    return [str(failure) for failure in failures if str(failure).strip()]
 
 
 def _load_pipeline_list(
@@ -127,14 +141,7 @@ def _validate_postprocess_selection(
 
 
 def _find_h5_inputs(path: Path) -> list[Path]:
-    if path.is_file():
-        if path.suffix.lower() in {".h5", ".hdf5"}:
-            return [path]
-        raise ValueError(f"File is not an HDF5 file: {path}")
-    if path.is_dir():
-        files = sorted({*path.rglob("*.h5"), *path.rglob("*.hdf5")})
-        return files
-    raise FileNotFoundError(f"Input path does not exist: {path}")
+    return find_hdf5_inputs(path)
 
 
 def _safe_pipeline_suffix(name: str) -> str:
@@ -198,12 +205,7 @@ def _run_pipelines_on_file(
 
 
 def _relative_input_parent(h5_path: Path, input_root: Path) -> Path:
-    if input_root.is_dir():
-        try:
-            return h5_path.resolve().relative_to(input_root.resolve()).parent
-        except ValueError:
-            pass
-    return Path(".")
+    return relative_hdf5_parent(h5_path, input_root)
 
 
 def _zip_output_dir(
@@ -221,25 +223,12 @@ def _zip_output_dir(
         zip_path = target_path.expanduser().resolve()
     if zip_path.exists():
         zip_path.unlink()
-    files = sorted(
-        (file_path for file_path in folder.rglob("*") if file_path.is_file()),
-        key=lambda path: str(path.relative_to(folder)),
-    )
-    total_files = len(files)
-    if progress_callback is not None:
-        progress_callback(0, total_files, Path("."))
-    with zipfile.ZipFile(
+    return create_zip_from_tree(
+        folder,
         zip_path,
-        "w",
-        compression=zipfile.ZIP_DEFLATED,
         compresslevel=1,
-    ) as zf:
-        for idx, file_path in enumerate(files, start=1):
-            rel_path = file_path.relative_to(folder)
-            zf.write(file_path, rel_path)
-            if progress_callback is not None:
-                progress_callback(idx, total_files, rel_path)
-    return zip_path
+        progress_callback=progress_callback,
+    )
 
 
 def run_cli(
@@ -323,6 +312,9 @@ def run_cli(
                     print(f"[POST OK] {descriptor.name}: {result.summary}")
                 else:
                     print(f"[POST OK] {descriptor.name}")
+                for warning in _postprocess_result_failures(result):
+                    failures.append(warning)
+                    print(f"[POST WARN] {warning}", file=sys.stderr)
         elif postprocesses:
             print(
                 "[POST SKIP] No successful pipeline outputs were generated, "
@@ -351,8 +343,19 @@ def run_cli(
                     target_path=output_root / final_name,
                     progress_callback=_zip_progress,
                 )
+                companion_paths = copy_zip_companion_output_folders(
+                    work_root,
+                    output_root,
+                )
                 print(f"[ZIP] Archive created: {zip_path}")
-                summary_msg = f"ZIP archive: {zip_path}"
+                summary_parts = [f"ZIP archive: {zip_path}"]
+                if companion_paths:
+                    companion_summary = ", ".join(
+                        str(path) for path in companion_paths
+                    )
+                    print(f"[ZIP] Companion outputs copied: {companion_summary}")
+                    summary_parts.append(f"Companion outputs: {companion_summary}")
+                summary_msg = "; ".join(summary_parts)
                 clean_work_output = True
             except Exception as exc:  # noqa: BLE001
                 print(
@@ -418,7 +421,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "-z",
         "--zip",
         action="store_true",
-        help="Zip the outputs after processing (only the archive is kept).",
+        help=(
+            "Zip the outputs after processing, keeping companion report folders "
+            "such as png/ next to the archive."
+        ),
     )
     parser.add_argument(
         "--zip-name",
@@ -445,3 +451,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

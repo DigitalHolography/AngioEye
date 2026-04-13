@@ -1,28 +1,29 @@
-import os
+﻿import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import threading
 import tkinter as tk
 import tkinter.font as tkfont
-import zipfile
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 import h5py
 
-from angioeye_io import (
-    ANGIOEYE_PROCESSING_ROOT,
-    create_h5_file,
-    write_metrics_trees_to_h5,
-)
 from app_settings import (
     LAST_BATCH_LOG_FILENAME,
     AppSettingsStore,
     normalize_pipeline_visibility,
     normalize_postprocess_visibility,
+)
+from input_output import (
+    ANGIOEYE_PROCESSING_ROOT,
+    create_h5_file,
+    create_zip_from_tree,
+    is_hdf5_path,
+    relative_hdf5_parent,
+    write_metrics_trees_to_h5,
 )
 
 try:
@@ -48,8 +49,18 @@ from postprocess import (
     PostprocessDescriptor,
     load_postprocess_catalog,
 )
-from ui import batch_runner, holo
+from ui import holo, run_controller
 from ui.holo import HoloInputContext
+
+
+def _postprocess_result_failures(result) -> list[str]:
+    failures = getattr(result, "metadata", {}).get("failures", [])
+    if isinstance(failures, str):
+        return [failures]
+    if not isinstance(failures, Sequence):
+        return []
+    return [str(failure) for failure in failures if str(failure).strip()]
+
 
 _BaseAppTk = TkinterDnD.Tk if TkinterDnD is not None else tk.Tk
 
@@ -737,11 +748,9 @@ class ProcessApp(_BaseAppTk):
             return True
 
         for dropped_path in dropped_paths:
-            if dropped_path.is_file() and dropped_path.suffix.lower() in {
-                ".h5",
-                ".hdf5",
-                ".zip",
-            }:
+            if dropped_path.is_file() and (
+                is_hdf5_path(dropped_path) or dropped_path.suffix.lower() == ".zip"
+            ):
                 self.input_convention_var.set("legacy")
                 self.batch_input_var.set(str(dropped_path))
                 self._apply_input_defaults(dropped_path)
@@ -948,7 +957,10 @@ class ProcessApp(_BaseAppTk):
         self.input_convention_var.set("legacy")
         self.holo_input_paths = []
         self.holo_input_var.set("")
-        output_dir = input_path if input_path.is_dir() else input_path.parent
+        if input_path.is_file() and input_path.suffix.lower() == ".zip":
+            output_dir = input_path.parent / self._default_output_stem(input_path)
+        else:
+            output_dir = input_path if input_path.is_dir() else input_path.parent
 
         self.batch_output_var.set(str(output_dir))
         self.batch_zip_name_var.set(self._default_archive_name(input_path))
@@ -972,7 +984,7 @@ class ProcessApp(_BaseAppTk):
             return None
         if not data_path.is_file():
             return None
-        if data_path.suffix.lower() not in {".h5", ".hdf5"}:
+        if not is_hdf5_path(data_path):
             return None
         return self._default_output_artifact_name(data_path)
 
@@ -1639,7 +1651,7 @@ class ProcessApp(_BaseAppTk):
         output_dir.mkdir(parents=True, exist_ok=True)
 
     def run_batch(self) -> None:
-        batch_runner.run_batch(self)
+        run_controller.run(self)
 
     def _validate_postprocess_selection(
         self,
@@ -1699,35 +1711,13 @@ class ProcessApp(_BaseAppTk):
                 self._log_batch(f"[POST OK] {descriptor.name}: {summary}")
             else:
                 self._log_batch(f"[POST OK] {descriptor.name}")
+            for warning in _postprocess_result_failures(result):
+                failures.append(warning)
+                self._log_batch(f"[POST WARN] {warning}")
             self._advance_progress()
 
-    def _prepare_data_root(
-        self, data_path: Path
-    ) -> tuple[Path, tempfile.TemporaryDirectory | None]:
-        if data_path.is_file() and data_path.suffix.lower() == ".zip":
-            tempdir = tempfile.TemporaryDirectory()
-            with zipfile.ZipFile(data_path, "r") as zf:
-                zf.extractall(tempdir.name)
-            return Path(tempdir.name), tempdir
-        return data_path, None
-
-    def _find_h5_inputs(self, path: Path) -> list[Path]:
-        if path.is_file():
-            if path.suffix.lower() in {".h5", ".hdf5"}:
-                return [path]
-            raise ValueError(f"File is not an HDF5 file: {path}")
-        if path.is_dir():
-            files = sorted({*path.rglob("*.h5"), *path.rglob("*.hdf5")})
-            return files
-        raise FileNotFoundError(f"Input path does not exist: {path}")
-
     def _relative_input_parent(self, h5_path: Path, input_root: Path) -> Path:
-        if input_root.is_dir():
-            try:
-                return h5_path.resolve().relative_to(input_root.resolve()).parent
-            except ValueError:
-                pass
-        return Path(".")
+        return relative_hdf5_parent(h5_path, input_root)
 
     def _run_pipelines_on_file(
         self,
@@ -1779,6 +1769,62 @@ class ProcessApp(_BaseAppTk):
         for _, result in pipeline_results:
             result.output_h5_path = str(combined_h5_out)
         self._log_batch(f"[OK] {h5_path.name}: combined results -> {combined_h5_out}")
+        return combined_h5_out
+
+    def _run_zip_pipelines_on_file(
+        self,
+        h5_path: Path,
+        pipelines: Sequence[PipelineDescriptor],
+        output_root: Path,
+        output_relative_parent: Path = Path("."),
+        output_filename: str | None = None,
+    ) -> Path:
+        target_dir = output_root / output_relative_parent
+        target_dir.mkdir(parents=True, exist_ok=True)
+        if output_filename:
+            base_output_path = target_dir / output_filename
+            combined_h5_out = base_output_path
+        else:
+            combined_h5_out = target_dir / f"{h5_path.stem}_pipelines_result.h5"
+
+        suffix = 1
+        while combined_h5_out.exists():
+            if output_filename:
+                combined_h5_out = (
+                    target_dir
+                    / f"{base_output_path.stem}_{suffix}{base_output_path.suffix}"
+                )
+            else:
+                combined_h5_out = (
+                    target_dir / f"{h5_path.stem}_{suffix}_pipelines_result.h5"
+                )
+            suffix += 1
+
+        pipeline_results: list[tuple[str, ProcessResult]] = []
+        with h5py.File(h5_path, "r") as h5file:
+            for pipeline_desc in pipelines:
+                pipeline = pipeline_desc.instantiate()
+                try:
+                    result = pipeline.run(h5file)
+                except Exception as exc:  # noqa: BLE001
+                    raise RuntimeError(
+                        format_pipeline_exception(exc, pipeline)
+                    ) from exc
+                pipeline_results.append((pipeline.name, result))
+
+        create_h5_file(
+            combined_h5_out,
+            source_file=str(h5_path),
+            trim_source=not self._persist_eyeflow_data.get(),
+        )
+        write_metrics_trees_to_h5(
+            combined_h5_out,
+            ANGIOEYE_PROCESSING_ROOT,
+            process_results_to_metric_trees(pipeline_results),
+            overwrite=False,
+        )
+        for _, result in pipeline_results:
+            result.output_h5_path = str(combined_h5_out)
         return combined_h5_out
 
     def _write_combined_results_with_ui_pump(
@@ -1837,25 +1883,12 @@ class ProcessApp(_BaseAppTk):
             zip_path = target_path.expanduser().resolve()
         if zip_path.exists():
             zip_path.unlink()
-        files = sorted(
-            (file_path for file_path in folder.rglob("*") if file_path.is_file()),
-            key=lambda path: str(path.relative_to(folder)),
-        )
-        total_files = len(files)
-        if progress_callback is not None:
-            progress_callback(0, total_files, Path("."))
-        with zipfile.ZipFile(
+        return create_zip_from_tree(
+            folder,
             zip_path,
-            "w",
-            compression=zipfile.ZIP_DEFLATED,
             compresslevel=1,
-        ) as zf:
-            for idx, file_path in enumerate(files, start=1):
-                rel_path = file_path.relative_to(folder)
-                zf.write(file_path, rel_path)
-                if progress_callback is not None:
-                    progress_callback(idx, total_files, rel_path)
-        return zip_path
+            progress_callback=progress_callback,
+        )
 
 
 def main():
@@ -1865,3 +1898,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

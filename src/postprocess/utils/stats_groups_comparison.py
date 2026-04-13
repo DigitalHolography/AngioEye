@@ -1,4 +1,4 @@
-import os
+﻿import os
 from collections import defaultdict
 import shutil
 from pathlib import Path
@@ -8,14 +8,15 @@ import numpy as np
 import pandas as pd
 from matplotlib.ticker import FormatStrFormatter
 from tkinter import Tk, filedialog
-from angioeye_io.hdf5_io import find_first_existing_path
-from angioeye_io.hdf5_schema import pipeline_path_candidates
-from angioeye_io.archive_io import (
+from input_output.hdf5_io import find_first_existing_path
+from input_output.hdf5_schema import pipeline_path_candidates
+from input_output.archive_io import (
     replace_folder_in_zip,
     reset_output_dir,
 )
 from ..core.grouped_batch import (
     find_control_group_name,
+    iter_grouped_h5_files,
     iter_grouped_h5_files_in_zip,
 )
 
@@ -186,10 +187,10 @@ def extract_metrics(h5_path):
     return results
 
 
-def analyze_zip(zip_path):
+def analyze_grouped_h5_files(grouped_files):
     all_results = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
 
-    for grouped_file in iter_grouped_h5_files_in_zip(zip_path):
+    for grouped_file in grouped_files:
         metrics = extract_metrics(grouped_file.file_path)
 
         for mode, vessel_dict in metrics.items():
@@ -206,6 +207,14 @@ def analyze_zip(zip_path):
                     )
 
     return dict(all_results)
+
+
+def analyze_batch_root(batch_root):
+    return analyze_grouped_h5_files(iter_grouped_h5_files(batch_root))
+
+
+def analyze_zip(zip_path):
+    return analyze_grouped_h5_files(iter_grouped_h5_files_in_zip(zip_path))
 
 
 def plot_group_statistics(df, metric, vessel, out_path):
@@ -286,7 +295,7 @@ def export_group_statistics_figures(all_results, out_dir, formats=("png", "eps")
     os.makedirs(out_dir, exist_ok=True)
 
     if "bandlimited" not in all_results:
-        print("Aucune donnée bandlimited trouvée.")
+        print("Aucune donnÃ©e bandlimited trouvÃ©e.")
         return
 
     for vessel in VALID_VESSELS:
@@ -315,8 +324,11 @@ def choose_zip():
     root.withdraw()
     return filedialog.askopenfilename(filetypes=[("ZIP", "*.zip")])
 
-def save_dashboard(zip_path, export_png_dir="export_png", export_eps_dir="export_eps"):
-    all_results = analyze_zip(zip_path)
+def save_dashboard_outputs(
+    all_results,
+    export_png_dir="export_png",
+    export_eps_dir="export_eps",
+):
     reset_output_dir(export_png_dir)
     reset_output_dir(export_eps_dir)
     export_group_statistics_figures(
@@ -329,6 +341,22 @@ def save_dashboard(zip_path, export_png_dir="export_png", export_eps_dir="export
         all_results,
         out_dir=export_eps_dir,
         formats=("eps",),
+    )
+    generated = [
+        path
+        for export_dir in (Path(export_png_dir), Path(export_eps_dir))
+        for path in sorted(export_dir.rglob("*"))
+        if path.is_file()
+    ]
+    return generated
+
+
+def save_dashboard(zip_path, export_png_dir="export_png", export_eps_dir="export_eps"):
+    all_results = analyze_zip(zip_path)
+    save_dashboard_outputs(
+        all_results,
+        export_png_dir=export_png_dir,
+        export_eps_dir=export_eps_dir,
     )
 
     replace_folder_in_zip(zip_path, Path(export_png_dir), arc_folder="export_png")
@@ -346,3 +374,4 @@ if __name__ == "__main__":
     zip_path = choose_zip()
     
     save_dashboard(zip_path)
+
