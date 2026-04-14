@@ -123,6 +123,7 @@ class ProcessApp(_BaseAppTk):
         self._window_icon_image: tk.PhotoImage | None = None
         self._minimal_logo_image: tk.PhotoImage | None = None
         self._minimal_title_font: tkfont.Font | None = None
+        self._trim_h5source = tk.BooleanVar(value=True)
 
         self._set_initial_window_size()
         self._apply_theme()
@@ -414,6 +415,9 @@ class ProcessApp(_BaseAppTk):
 
         run_btn = ttk.Button(controls, text="Run", command=self.run_batch)
         run_btn.grid(row=0, column=0, sticky="w")
+
+        trim_h5source_btn = ttk.Checkbutton(controls, text="Trim h5 file(s)", variable=self._trim_h5source)
+        trim_h5source_btn.grid(row=0, column=1, sticky="w", padx=(8, 0))
 
         ttk.Label(parent, text="BatchLog").grid(
             row=3, column=0, sticky="nw", pady=(8, 2)
@@ -1739,6 +1743,7 @@ class ProcessApp(_BaseAppTk):
                     pipeline_results,
                     combined_h5_out,
                     source_file=source_file,
+                    trim_source=self._trim_h5source.get(),
                 )
             except Exception as exc:  # noqa: BLE001
                 errors.append(exc)

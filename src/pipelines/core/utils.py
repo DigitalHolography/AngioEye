@@ -33,9 +33,9 @@ def _copy_input_contents(source_file: str | Path | None, dest: h5py.File) -> Non
 def _ensure_pipelines_group(h5file: h5py.File) -> h5py.Group:
     """Return a pipelines group, creating it when missing."""
     return (
-        h5file["Pipelines"]
-        if "Pipelines" in h5file
-        else h5file.create_group("Pipelines")
+        h5file["AngioEye"]
+        if "AngioEye" in h5file
+        else h5file.create_group("AngioEye")
     )
 
 
@@ -177,16 +177,18 @@ def write_combined_results_h5(
     results: Sequence[tuple[str, ProcessResult]],
     path: Path | str,
     source_file: str | None = None,
+    trim_source: bool = False,
 ) -> str:
     """
     Write multiple pipeline results into a single HDF5 file.
 
-    The file groups results under /Pipelines/<safe_pipeline_name>/<metric_name>.
+    The file groups results under /AngioEye/<safe_pipeline_name>/<metric_name>.
     """
     out_path = Path(path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with h5py.File(out_path, "w") as f:
-        _copy_input_contents(source_file, f)
+        if not trim_source:
+            _copy_input_contents(source_file, f)
         if source_file:
             f.attrs["source_file"] = source_file
         pipelines_grp = _ensure_pipelines_group(f)
