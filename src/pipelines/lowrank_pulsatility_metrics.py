@@ -141,7 +141,9 @@ class LowRankPulsatilityMetrics(ProcessPipeline):
             out[b] = float(np.nanmedian(np.abs(x - med)))
         return out
 
-    def _median_per_beat(self, arr_bkr: np.ndarray, valid_mask: np.ndarray) -> np.ndarray:
+    def _median_per_beat(
+        self, arr_bkr: np.ndarray, valid_mask: np.ndarray
+    ) -> np.ndarray:
         n_beats = int(arr_bkr.shape[0])
         out = np.full((n_beats,), np.nan, dtype=float)
         for b in range(n_beats):
@@ -207,7 +209,9 @@ class LowRankPulsatilityMetrics(ProcessPipeline):
         out["rms_x"] = rms_x
 
         valid_counts_per_beat = np.sum(valid_column_mask, axis=(1, 2))
-        valid_fraction_per_beat = valid_counts_per_beat / float(max(1, n_branches * n_radii))
+        valid_fraction_per_beat = valid_counts_per_beat / float(
+            max(1, n_branches * n_radii)
+        )
         out["valid_counts_per_beat"] = valid_counts_per_beat
         out["valid_fraction_per_beat"] = valid_fraction_per_beat
 
@@ -241,7 +245,9 @@ class LowRankPulsatilityMetrics(ProcessPipeline):
         score_list = []
         sign_flips = np.zeros((n_modes,), dtype=int)
         u_panel = np.full((n_t, self.max_modes_panel), np.nan, dtype=float)
-        score_panel_flat = np.full((self.max_modes_panel, n_valid_columns), np.nan, dtype=float)
+        score_panel_flat = np.full(
+            (self.max_modes_panel, n_valid_columns), np.nan, dtype=float
+        )
 
         for m in range(n_modes):
             scores = s[m] * Vt[m, :]
@@ -288,7 +294,9 @@ class LowRankPulsatilityMetrics(ProcessPipeline):
             X_recon_m = self._reconstruct_mode_sum(U[:, :m], np.vstack(score_list[:m]))
             X_res_m = X - X_recon_m
             res_rms_valid = np.sqrt(np.mean(X_res_m**2, axis=0))
-            residual_rms_bkr = np.full((n_beats, n_branches, n_radii), np.nan, dtype=float)
+            residual_rms_bkr = np.full(
+                (n_beats, n_branches, n_radii), np.nan, dtype=float
+            )
             residual_rms_bkr[valid_column_mask] = res_rms_valid
             residual_rms_panel[m - 1] = residual_rms_bkr
 
@@ -307,16 +315,26 @@ class LowRankPulsatilityMetrics(ProcessPipeline):
         beatwise = {
             "median_kr_mu": self._median_per_beat(mu, valid_column_mask),
             "spatial_mad_mu": self._spatial_mad_per_beat(mu, valid_column_mask),
-            "median_kr_total_rms": self._median_per_beat(total_rms_bkr, valid_column_mask),
+            "median_kr_total_rms": self._median_per_beat(
+                total_rms_bkr, valid_column_mask
+            ),
         }
 
         for m in range(1, n_modes + 1):
             mode_rms = rms_mode_panel[m - 1]
             res_rms = residual_rms_panel[m - 1]
-            beatwise[f"median_kr_A{m}"] = self._median_per_beat(mode_rms, valid_column_mask)
-            beatwise[f"spatial_mad_A{m}"] = self._spatial_mad_per_beat(mode_rms, valid_column_mask)
-            beatwise[f"median_kr_R{m}"] = self._median_per_beat(res_rms, valid_column_mask)
-            beatwise[f"spatial_mad_R{m}"] = self._spatial_mad_per_beat(res_rms, valid_column_mask)
+            beatwise[f"median_kr_A{m}"] = self._median_per_beat(
+                mode_rms, valid_column_mask
+            )
+            beatwise[f"spatial_mad_A{m}"] = self._spatial_mad_per_beat(
+                mode_rms, valid_column_mask
+            )
+            beatwise[f"median_kr_R{m}"] = self._median_per_beat(
+                res_rms, valid_column_mask
+            )
+            beatwise[f"spatial_mad_R{m}"] = self._spatial_mad_per_beat(
+                res_rms, valid_column_mask
+            )
             beatwise[f"median_kr_abs_a{m}"] = self._median_per_beat(
                 np.abs(score_panel_bkr[m - 1]), valid_column_mask
             )
@@ -385,16 +403,22 @@ class LowRankPulsatilityMetrics(ProcessPipeline):
         out["acq"] = acq
         return out
 
-    def _append_representation_metrics(self, metrics: dict, rep_name: str, rep: dict) -> None:
+    def _append_representation_metrics(
+        self, metrics: dict, rep_name: str, rep: dict
+    ) -> None:
         prefix = rep_name
         sh = rep["shape"]
 
         metrics[f"{prefix}/inputs_summary/n_t"] = np.asarray(sh["n_t"], dtype=int)
-        metrics[f"{prefix}/inputs_summary/n_beats"] = np.asarray(sh["n_beats"], dtype=int)
+        metrics[f"{prefix}/inputs_summary/n_beats"] = np.asarray(
+            sh["n_beats"], dtype=int
+        )
         metrics[f"{prefix}/inputs_summary/n_branches"] = np.asarray(
             sh["n_branches"], dtype=int
         )
-        metrics[f"{prefix}/inputs_summary/n_radii"] = np.asarray(sh["n_radii"], dtype=int)
+        metrics[f"{prefix}/inputs_summary/n_radii"] = np.asarray(
+            sh["n_radii"], dtype=int
+        )
         metrics[f"{prefix}/inputs_summary/n_total_columns"] = np.asarray(
             sh["n_total_columns"], dtype=int
         )
@@ -434,7 +458,9 @@ class LowRankPulsatilityMetrics(ProcessPipeline):
         metrics[f"{prefix}/qc/svd_available"] = np.asarray(1, dtype=np.uint8)
         metrics[f"{prefix}/qc/svd_reason"] = str(rep.get("svd_reason", "ok"))
         metrics[f"{prefix}/qc/sign_flips_mode1to3"] = rep["sign_flips"]
-        metrics[f"{prefix}/qc/n_modes_panel"] = np.asarray(rep["n_modes_panel"], dtype=int)
+        metrics[f"{prefix}/qc/n_modes_panel"] = np.asarray(
+            rep["n_modes_panel"], dtype=int
+        )
         metrics[f"{prefix}/qc/denominator_floor_rho1"] = np.asarray(
             int(not np.isfinite(rep["acq"].get("rho1", np.nan))), dtype=np.uint8
         )
@@ -447,7 +473,9 @@ class LowRankPulsatilityMetrics(ProcessPipeline):
 
         metrics[f"{prefix}/decomposition/singular_values"] = rep["s"]
         metrics[f"{prefix}/decomposition/singular_energy"] = rep["energy"]
-        metrics[f"{prefix}/decomposition/singular_energy_fraction"] = rep["energy_fraction"]
+        metrics[f"{prefix}/decomposition/singular_energy_fraction"] = rep[
+            "energy_fraction"
+        ]
         metrics[f"{prefix}/decomposition/effective_rank"] = np.asarray(
             rep["acq"]["effective_rank"], dtype=float
         )
@@ -506,17 +534,17 @@ class LowRankPulsatilityMetrics(ProcessPipeline):
         metrics[f"{prefix}/acquisition_dots/singular_spectrum/eta23"] = np.asarray(
             acq["eta23"], dtype=float
         )
-        metrics[f"{prefix}/acquisition_dots/singular_spectrum/effective_rank"] = np.asarray(
-            acq["effective_rank"], dtype=float
+        metrics[f"{prefix}/acquisition_dots/singular_spectrum/effective_rank"] = (
+            np.asarray(acq["effective_rank"], dtype=float)
         )
-        metrics[f"{prefix}/acquisition_dots/singular_spectrum/participation_ratio"] = np.asarray(
-            acq["participation_ratio"], dtype=float
+        metrics[f"{prefix}/acquisition_dots/singular_spectrum/participation_ratio"] = (
+            np.asarray(acq["participation_ratio"], dtype=float)
         )
 
         for m in range(1, rep["n_modes_panel"] + 1):
             mode_key = self._mode_label(m)
-            metrics[f"{prefix}/acquisition_dots/mode_panel/{mode_key}/A{m}"] = np.asarray(
-                acq[f"A{m}"], dtype=float
+            metrics[f"{prefix}/acquisition_dots/mode_panel/{mode_key}/A{m}"] = (
+                np.asarray(acq[f"A{m}"], dtype=float)
             )
             metrics[
                 f"{prefix}/acquisition_dots/mode_panel/{mode_key}/median_abs_a{m}"
@@ -527,21 +555,21 @@ class LowRankPulsatilityMetrics(ProcessPipeline):
             metrics[
                 f"{prefix}/acquisition_dots/mode_panel/{mode_key}/mad_A{m}_beat"
             ] = np.asarray(acq[f"mad_A{m}_beat"], dtype=float)
-            metrics[
-                f"{prefix}/acquisition_dots/mode_panel/{mode_key}/cv_A{m}_beat"
-            ] = np.asarray(acq[f"cv_A{m}_beat"], dtype=float)
+            metrics[f"{prefix}/acquisition_dots/mode_panel/{mode_key}/cv_A{m}_beat"] = (
+                np.asarray(acq[f"cv_A{m}_beat"], dtype=float)
+            )
             metrics[
                 f"{prefix}/acquisition_dots/heterogeneity/{mode_key}/spatial_mad_A{m}_median_over_beats"
             ] = np.asarray(acq[f"spatial_mad_A{m}_median_over_beats"], dtype=float)
             metrics[
                 f"{prefix}/acquisition_dots/heterogeneity/{mode_key}/spatial_mad_abs_a{m}_median_over_beats"
             ] = np.asarray(acq[f"spatial_mad_abs_a{m}_median_over_beats"], dtype=float)
-            metrics[
-                f"{prefix}/acquisition_dots/residuals/after_{mode_key}/R{m}"
-            ] = np.asarray(acq[f"R{m}"], dtype=float)
-            metrics[
-                f"{prefix}/acquisition_dots/residuals/after_{mode_key}/rho{m}"
-            ] = np.asarray(acq[f"rho{m}"], dtype=float)
+            metrics[f"{prefix}/acquisition_dots/residuals/after_{mode_key}/R{m}"] = (
+                np.asarray(acq[f"R{m}"], dtype=float)
+            )
+            metrics[f"{prefix}/acquisition_dots/residuals/after_{mode_key}/rho{m}"] = (
+                np.asarray(acq[f"rho{m}"], dtype=float)
+            )
             metrics[
                 f"{prefix}/acquisition_dots/residuals/after_{mode_key}/sigma_R{m}_beat"
             ] = np.asarray(acq[f"sigma_R{m}_beat"], dtype=float)
@@ -579,13 +607,17 @@ class LowRankPulsatilityMetrics(ProcessPipeline):
 
         for rep_name, dataset_path in rep_map.items():
             if dataset_path not in h5file:
-                metrics[f"{rep_name}/qc/input_available"] = np.asarray(0, dtype=np.uint8)
+                metrics[f"{rep_name}/qc/input_available"] = np.asarray(
+                    0, dtype=np.uint8
+                )
                 continue
 
             metrics[f"{rep_name}/qc/input_available"] = np.asarray(1, dtype=np.uint8)
             v_block = np.asarray(h5file[dataset_path], dtype=float)
             rep = self._compute_representation(v_block=v_block, T=T)
-            self._append_representation_metrics(metrics=metrics, rep_name=rep_name, rep=rep)
+            self._append_representation_metrics(
+                metrics=metrics, rep_name=rep_name, rep=rep
+            )
 
         attrs = {
             "pipeline_family": "low_rank_pulsatility",
