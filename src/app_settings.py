@@ -178,3 +178,20 @@ class AppSettingsStore:
         settings = self.load()
         settings["ui_mode"] = "advanced" if mode == "advanced" else "minimal"
         self.save(settings)
+
+    def load_trim_h5source(self) -> bool:
+        trim_h5source = self.load().get("trim_h5source")
+        if isinstance(trim_h5source, bool):
+            return trim_h5source
+
+        default_trim_h5source = self.load_defaults().get("trim_h5source")
+        return (
+            default_trim_h5source
+            if isinstance(default_trim_h5source, bool)
+            else True
+        )
+
+    def save_trim_h5source(self, trim_h5source: bool) -> None:
+        settings = self.load()
+        settings["trim_h5source"] = bool(trim_h5source)
+        self.save(settings)

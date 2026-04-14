@@ -123,7 +123,9 @@ class ProcessApp(_BaseAppTk):
         self._window_icon_image: tk.PhotoImage | None = None
         self._minimal_logo_image: tk.PhotoImage | None = None
         self._minimal_title_font: tkfont.Font | None = None
-        self._trim_h5source = tk.BooleanVar(value=True)
+        self._trim_h5source = tk.BooleanVar(
+            value=self.settings_store.load_trim_h5source()
+        )
 
         self._set_initial_window_size()
         self._apply_theme()
@@ -416,7 +418,12 @@ class ProcessApp(_BaseAppTk):
         run_btn = ttk.Button(controls, text="Run", command=self.run_batch)
         run_btn.grid(row=0, column=0, sticky="w")
 
-        trim_h5source_btn = ttk.Checkbutton(controls, text="Trim h5 file(s)", variable=self._trim_h5source)
+        trim_h5source_btn = ttk.Checkbutton(
+            controls,
+            text="Trim h5 file(s)",
+            variable=self._trim_h5source,
+            command=self._persist_trim_h5source,
+        )
         trim_h5source_btn.grid(row=0, column=1, sticky="w", padx=(8, 0))
 
         ttk.Label(parent, text="BatchLog").grid(
@@ -517,6 +524,15 @@ class ProcessApp(_BaseAppTk):
                 f"Could not save UI mode preference:\n{exc}",
             )
 
+    def _persist_trim_h5source(self) -> None:
+        try:
+            self.settings_store.save_trim_h5source(self._trim_h5source.get())
+        except OSError as exc:
+            self._show_settings_warning(
+                "Settings not saved",
+                f"Could not save trim preference:\n{exc}",
+            )
+
     def _window_size_for_mode(self, mode: str) -> tuple[int, int, int, int]:
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
@@ -609,6 +625,7 @@ class ProcessApp(_BaseAppTk):
 
     def _on_close(self) -> None:
         self._persist_ui_mode()
+        self._persist_trim_h5source()
         self.destroy()
 
     def _on_batch_paths_changed(self, *_args) -> None:

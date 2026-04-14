@@ -14,5 +14,6 @@
     "Variability and heterogeneity tables": false,
     "groups comparison dashboard": false
   },
+  "trim_h5source": true,
   "ui_mode": "minimal"
 }
