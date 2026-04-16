@@ -344,11 +344,16 @@ def save_dashboard(zip_path, export_png_dir="export_png", export_eps_dir="export
 
     replace_folder_in_zip(zip_path, export_png_dir, arc_folder="export_png")
     replace_folder_in_zip(zip_path, export_eps_dir, arc_folder="export_eps")
-    
-    shutil.rmtree(export_png_dir, ignore_errors=True)
-    shutil.rmtree(export_eps_dir, ignore_errors=True)
 
+    if os.path.isdir(export_png_dir):
+        shutil.rmtree(export_png_dir)
+    
+    if os.path.isdir(export_eps_dir):
+        shutil.rmtree(export_eps_dir)
+    
+    
+    
 if __name__ == "__main__":
     zip_path = choose_zip()
-
+    
     save_dashboard(zip_path)
