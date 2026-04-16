@@ -368,12 +368,17 @@ METRIC_GROUPS = {
         "w_h",
         "N_h_over_H_minus_1",
         "eta_h",
-        "N_t_over_T",
-        "N_eff_over_T",
+        
         
     },
+    
     "Derivative - energy metrics": {
         "E_slope",
+        
+    },
+    "Temporal support and concentration metrics": {
+        "N_t_over_T",
+        "N_eff_over_T",
         
     },
 }
