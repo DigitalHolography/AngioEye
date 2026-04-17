@@ -35,7 +35,7 @@ SELECTED_METRICS_PNG = {
     "Delta_DTI",
     "gamma_t",
     "N_eff_over_T",
-    "N_H_over_T",
+    "N_t_over_T",
     "s_t",
     "w_t",
     "s_d",
@@ -96,7 +96,7 @@ LATEX_FORMULAS = {
     "phase_locking_residual": r"$E_{\phi}$",
     "W50_over_T": r"$W_{50}/T$",
     "W80_over_T": r"$W_{80}/T$",
-    "N_H_over_T": r"$N_H/T$",
+    "N_t_over_T": r"$N_t/T$",
     "t_phi_n_over_T": r"$t_{\Delta\phi_n}/T$",
     "t_phi_over_T": r"$t_{\phi}/T$",
     "D_phi": r"$D_{\phi}$",
@@ -345,8 +345,15 @@ def save_dashboard(zip_path, export_png_dir="export_png", export_eps_dir="export
     replace_folder_in_zip(zip_path, export_png_dir, arc_folder="export_png")
     replace_folder_in_zip(zip_path, export_eps_dir, arc_folder="export_eps")
 
-
+    if os.path.isdir(export_png_dir):
+        shutil.rmtree(export_png_dir)
+    
+    if os.path.isdir(export_eps_dir):
+        shutil.rmtree(export_eps_dir)
+    
+    
+    
 if __name__ == "__main__":
     zip_path = choose_zip()
-
+    
     save_dashboard(zip_path)
