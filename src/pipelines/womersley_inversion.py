@@ -3,8 +3,8 @@ import numpy as np
 from .core.base import ProcessPipeline, ProcessResult, registerPipeline, with_attrs
 
 
-@registerPipeline(name="local_transfer")
-class LocalTransfer(ProcessPipeline):
+@registerPipeline(name="womersley inversion")
+class WomersleyInversion(ProcessPipeline):
     """
     Direct harmonic-organization metrics on beat-resolved segment waveforms.
 
@@ -234,7 +234,9 @@ class LocalTransfer(ProcessPipeline):
             c_hbkr = self._complex_nan((0, n_beats, n_branches, n_radii))
             valid_c_hbkr_mask = np.zeros((0, n_beats, n_branches, n_radii), dtype=bool)
             harmonics = np.asarray([], dtype=int)
-            rel_amp_hbkr = np.full((0, n_beats, n_branches, n_radii), np.nan, dtype=float)
+            rel_amp_hbkr = np.full(
+                (0, n_beats, n_branches, n_radii), np.nan, dtype=float
+            )
             return {
                 "c_hbkr": c_hbkr,
                 "valid_c_hbkr_mask": valid_c_hbkr_mask,
@@ -247,19 +249,27 @@ class LocalTransfer(ProcessPipeline):
 
         c_hbkr = self._complex_nan((H - 1, n_beats, n_branches, n_radii))
         valid_c_hbkr_mask = np.zeros((H - 1, n_beats, n_branches, n_radii), dtype=bool)
-        rel_amp_hbkr = np.full((H - 1, n_beats, n_branches, n_radii), np.nan, dtype=float)
+        rel_amp_hbkr = np.full(
+            (H - 1, n_beats, n_branches, n_radii), np.nan, dtype=float
+        )
 
         for hi, h in enumerate(range(2, H + 1)):
             Vh_bkr = V_hbkr[h]
-            finite_h_bkr = self._isfinite_complex(Vh_bkr) & self._isfinite_complex(V1_bkr)
+            finite_h_bkr = self._isfinite_complex(Vh_bkr) & self._isfinite_complex(
+                V1_bkr
+            )
 
             rel = np.full((n_beats, n_branches, n_radii), np.nan, dtype=float)
-            rel[finite_h_bkr] = (
-                np.abs(Vh_bkr[finite_h_bkr]) / (np.abs(V1_bkr[finite_h_bkr]) + self.eps)
+            rel[finite_h_bkr] = np.abs(Vh_bkr[finite_h_bkr]) / (
+                np.abs(V1_bkr[finite_h_bkr]) + self.eps
             )
             rel_amp_hbkr[hi] = rel
 
-            ok = finite_h_bkr & valid_den_bkr & (rel > float(self.higher_harmonic_rel_threshold))
+            ok = (
+                finite_h_bkr
+                & valid_den_bkr
+                & (rel > float(self.higher_harmonic_rel_threshold))
+            )
             valid_c_hbkr_mask[hi] = ok
 
             c_h = self._complex_nan((n_beats, n_branches, n_radii))
@@ -277,12 +287,14 @@ class LocalTransfer(ProcessPipeline):
     # ----------------------------
     # Direct metrics
     # ----------------------------
-    def _beat_and_location_means(self, c_hbkr: np.ndarray, valid_c_hbkr_mask: np.ndarray) -> dict:
+    def _beat_and_location_means(
+        self, c_hbkr: np.ndarray, valid_c_hbkr_mask: np.ndarray
+    ) -> dict:
         """
         c_hbkr shape: (H-1, B, K, R)
         """
-        cbar_b_over_hkr = self._complex_mean(c_hbkr, axis=1)      # (H-1, K, R)
-        cbar_kr_over_hb = self._complex_mean(c_hbkr, axis=(2, 3)) # (H-1, B)
+        cbar_b_over_hkr = self._complex_mean(c_hbkr, axis=1)  # (H-1, K, R)
+        cbar_kr_over_hb = self._complex_mean(c_hbkr, axis=(2, 3))  # (H-1, B)
 
         valid_b_count_over_hkr = self._count_true(valid_c_hbkr_mask, axis=1)
         valid_kr_count_over_hb = self._count_true(valid_c_hbkr_mask, axis=(2, 3))
@@ -325,13 +337,23 @@ class LocalTransfer(ProcessPipeline):
         if n_low == 0:
             return {
                 "low_harmonics": low_harmonics,
-                "delta_phi_low_hbkr": np.full((0,) + c_hbkr.shape[1:], np.nan, dtype=float),
-                "Z_b_over_hkr": self._complex_nan((0, c_hbkr.shape[2], c_hbkr.shape[3])),
-                "PLV_b_over_hkr": np.full((0, c_hbkr.shape[2], c_hbkr.shape[3]), np.nan, dtype=float),
+                "delta_phi_low_hbkr": np.full(
+                    (0,) + c_hbkr.shape[1:], np.nan, dtype=float
+                ),
+                "Z_b_over_hkr": self._complex_nan(
+                    (0, c_hbkr.shape[2], c_hbkr.shape[3])
+                ),
+                "PLV_b_over_hkr": np.full(
+                    (0, c_hbkr.shape[2], c_hbkr.shape[3]), np.nan, dtype=float
+                ),
                 "Z_kr_over_hb": self._complex_nan((0, c_hbkr.shape[1])),
                 "PLV_kr_over_hb": np.full((0, c_hbkr.shape[1]), np.nan, dtype=float),
-                "valid_b_count_over_hkr": np.zeros((0, c_hbkr.shape[2], c_hbkr.shape[3]), dtype=np.int32),
-                "valid_kr_count_over_hb": np.zeros((0, c_hbkr.shape[1]), dtype=np.int32),
+                "valid_b_count_over_hkr": np.zeros(
+                    (0, c_hbkr.shape[2], c_hbkr.shape[3]), dtype=np.int32
+                ),
+                "valid_kr_count_over_hb": np.zeros(
+                    (0, c_hbkr.shape[1]), dtype=np.int32
+                ),
             }
 
         c_low_hbkr = c_hbkr[keep_mask]
@@ -339,7 +361,9 @@ class LocalTransfer(ProcessPipeline):
         delta_phi_low_hbkr = np.angle(c_low_hbkr)
 
         Z_b_over_hkr = self._complex_nan((n_low, c_hbkr.shape[2], c_hbkr.shape[3]))
-        PLV_b_over_hkr = np.full((n_low, c_hbkr.shape[2], c_hbkr.shape[3]), np.nan, dtype=float)
+        PLV_b_over_hkr = np.full(
+            (n_low, c_hbkr.shape[2], c_hbkr.shape[3]), np.nan, dtype=float
+        )
         Z_kr_over_hb = self._complex_nan((n_low, c_hbkr.shape[1]))
         PLV_kr_over_hb = np.full((n_low, c_hbkr.shape[1]), np.nan, dtype=float)
 
@@ -418,9 +442,9 @@ class LocalTransfer(ProcessPipeline):
         )
         N_kr_over_h_norm = np.full_like(N_kr_over_h, np.nan, dtype=float)
         ok_kr = valid_kr_count_over_h > 0
-        N_kr_over_h_norm[ok_kr] = (
-            N_kr_over_h[ok_kr] / valid_kr_count_over_h[ok_kr].astype(float)
-        )
+        N_kr_over_h_norm[ok_kr] = N_kr_over_h[ok_kr] / valid_kr_count_over_h[
+            ok_kr
+        ].astype(float)
 
         A_kr_over_hb = self._safe_nanmedian(
             abs_c_hbkr.reshape(abs_c_hbkr.shape[0], abs_c_hbkr.shape[1], -1), axis=2
@@ -431,8 +455,8 @@ class LocalTransfer(ProcessPipeline):
         valid_b_count_over_h = self._count_true(valid_A_kr_over_hb_mask, axis=1)
         N_b_over_h_norm = np.full_like(N_b_over_h, np.nan, dtype=float)
         ok_b = valid_b_count_over_h > 0
-        N_b_over_h_norm[ok_b] = (
-            N_b_over_h[ok_b] / valid_b_count_over_h[ok_b].astype(float)
+        N_b_over_h_norm[ok_b] = N_b_over_h[ok_b] / valid_b_count_over_h[ok_b].astype(
+            float
         )
 
         return {
@@ -527,12 +551,8 @@ class LocalTransfer(ProcessPipeline):
                 coherence["Gamma_b_over_hkr"]
             ),
             "S_b_over_kr": self._summary_over_locations(spread["S_b_over_hkr"]),
-            "abs_cbar_kr_over_b": self._summary_over_beats(
-                means["cbar_kr_over_hb"]
-            ),
-            "Gamma_kr_over_b": self._summary_over_beats(
-                coherence["Gamma_kr_over_hb"]
-            ),
+            "abs_cbar_kr_over_b": self._summary_over_beats(means["cbar_kr_over_hb"]),
+            "Gamma_kr_over_b": self._summary_over_beats(coherence["Gamma_kr_over_hb"]),
             "S_kr_over_b": self._summary_over_beats(spread["S_kr_over_hb"]),
         }
 
@@ -540,9 +560,7 @@ class LocalTransfer(ProcessPipeline):
             summary["PLV_b_over_kr"] = self._summary_over_locations(
                 phase["PLV_b_over_hkr"]
             )
-            summary["PLV_kr_over_b"] = self._summary_over_beats(
-                phase["PLV_kr_over_hb"]
-            )
+            summary["PLV_kr_over_b"] = self._summary_over_beats(phase["PLV_kr_over_hb"])
 
         return {
             "H": int(H),
@@ -570,8 +588,12 @@ class LocalTransfer(ProcessPipeline):
             "S_kr_over_hb": spread["S_kr_over_hb"],
             "A_b_over_hkr": occupancy["A_b_over_hkr"],
             "A_kr_over_hb": occupancy["A_kr_over_hb"],
-            "valid_A_b_over_hkr_mask": occupancy["valid_A_b_over_hkr_mask"].astype(np.uint8),
-            "valid_A_kr_over_hb_mask": occupancy["valid_A_kr_over_hb_mask"].astype(np.uint8),
+            "valid_A_b_over_hkr_mask": occupancy["valid_A_b_over_hkr_mask"].astype(
+                np.uint8
+            ),
+            "valid_A_kr_over_hb_mask": occupancy["valid_A_kr_over_hb_mask"].astype(
+                np.uint8
+            ),
             "N_kr_over_h": occupancy["N_kr_over_h"],
             "N_kr_over_h_norm": occupancy["N_kr_over_h_norm"],
             "N_b_over_h": occupancy["N_b_over_h"],
@@ -624,7 +646,9 @@ class LocalTransfer(ProcessPipeline):
         metrics[f"{base}/axes/low_harmonics"] = with_attrs(
             np.asarray(out["low_harmonics"], dtype=np.int32),
             {
-                "definition": ["Low-order harmonic index array restricted to h in {2,3}."]
+                "definition": [
+                    "Low-order harmonic index array restricted to h in {2,3}."
+                ]
             },
         )
 
@@ -646,19 +670,11 @@ class LocalTransfer(ProcessPipeline):
         )
         metrics[f"{base}/masks/valid_A_b_over_hkr_mask"] = with_attrs(
             np.asarray(out["valid_A_b_over_hkr_mask"], dtype=np.uint8),
-            {
-                "definition": [
-                    "1 where A_b_over_hkr = median_b |c_hbkr| is finite."
-                ]
-            },
+            {"definition": ["1 where A_b_over_hkr = median_b |c_hbkr| is finite."]},
         )
         metrics[f"{base}/masks/valid_A_kr_over_hb_mask"] = with_attrs(
             np.asarray(out["valid_A_kr_over_hb_mask"], dtype=np.uint8),
-            {
-                "definition": [
-                    "1 where A_kr_over_hb = median_{k,r} |c_hbkr| is finite."
-                ]
-            },
+            {"definition": ["1 where A_kr_over_hb = median_{k,r} |c_hbkr| is finite."]},
         )
 
         self._pack_split_complex(
@@ -666,7 +682,9 @@ class LocalTransfer(ProcessPipeline):
             f"{base}/harmonics/V_hbkr",
             out["V_hbkr"],
             {
-                "definition": ["Complex Fourier coefficients V_hbkr for harmonics h=0..H."],
+                "definition": [
+                    "Complex Fourier coefficients V_hbkr for harmonics h=0..H."
+                ],
                 "layout": ["(harmonic, beat, branch, radius)"],
             },
         )
@@ -676,14 +694,18 @@ class LocalTransfer(ProcessPipeline):
             f"{base}/normalized/c_hbkr",
             out["c_hbkr"],
             {
-                "definition": [r"Normalized higher harmonics c_hbkr = V_hbkr / V_1bkr for h=2..H."],
+                "definition": [
+                    r"Normalized higher harmonics c_hbkr = V_hbkr / V_1bkr for h=2..H."
+                ],
                 "layout": ["(higher_harmonic, beat, branch, radius)"],
             },
         )
         metrics[f"{base}/normalized/rel_amp_hbkr"] = with_attrs(
             np.asarray(out["rel_amp_hbkr"], dtype=np.float32),
             {
-                "definition": [r"Relative higher-harmonic amplitude |V_hbkr| / |V_1bkr| used in the validity rule."],
+                "definition": [
+                    r"Relative higher-harmonic amplitude |V_hbkr| / |V_1bkr| used in the validity rule."
+                ],
                 "layout": ["(higher_harmonic, beat, branch, radius)"],
             },
         )
@@ -693,7 +715,9 @@ class LocalTransfer(ProcessPipeline):
             f"{base}/beat_aggregated/cbar_b_over_hkr",
             out["cbar_b_over_hkr"],
             {
-                "definition": [r"Beat-aggregated local mean \bar c^{(b)}_{hkr} = mean_b(c_hbkr)."],
+                "definition": [
+                    r"Beat-aggregated local mean \bar c^{(b)}_{hkr} = mean_b(c_hbkr)."
+                ],
                 "layout": ["(higher_harmonic, branch, radius)"],
             },
         )
@@ -730,7 +754,9 @@ class LocalTransfer(ProcessPipeline):
             f"{base}/location_aggregated/cbar_kr_over_hb",
             out["cbar_kr_over_hb"],
             {
-                "definition": [r"Location-aggregated beat mean \bar c^{(kr)}_{hb} = mean_{k,r}(c_hbkr)."],
+                "definition": [
+                    r"Location-aggregated beat mean \bar c^{(kr)}_{hb} = mean_{k,r}(c_hbkr)."
+                ],
                 "layout": ["(higher_harmonic, beat)"],
             },
         )
@@ -765,7 +791,9 @@ class LocalTransfer(ProcessPipeline):
         metrics[f"{base}/low_order_phase/delta_phi_low_hbkr"] = with_attrs(
             np.asarray(out["delta_phi_low_hbkr"], dtype=np.float32),
             {
-                "definition": [r"Low-order relative phases \Delta\phi_{hbkr} = arg(c_hbkr) for h in {2,3}."],
+                "definition": [
+                    r"Low-order relative phases \Delta\phi_{hbkr} = arg(c_hbkr) for h in {2,3}."
+                ],
                 "layout": ["(low_harmonic, beat, branch, radius)"],
             },
         )
@@ -774,14 +802,18 @@ class LocalTransfer(ProcessPipeline):
             f"{base}/low_order_phase/Z_b_over_hkr",
             out["Z_b_over_hkr"],
             {
-                "definition": [r"Beat-aggregated circular resultant Z^{(b)}_{hkr} for h in {2,3}."],
+                "definition": [
+                    r"Beat-aggregated circular resultant Z^{(b)}_{hkr} for h in {2,3}."
+                ],
                 "layout": ["(low_harmonic, branch, radius)"],
             },
         )
         metrics[f"{base}/low_order_phase/PLV_b_over_hkr"] = with_attrs(
             np.asarray(out["PLV_b_over_hkr"], dtype=np.float32),
             {
-                "definition": [r"Beat phase-locking value PLV^{(b)}_{hkr} = |Z^{(b)}_{hkr}| for h in {2,3}."],
+                "definition": [
+                    r"Beat phase-locking value PLV^{(b)}_{hkr} = |Z^{(b)}_{hkr}| for h in {2,3}."
+                ],
                 "layout": ["(low_harmonic, branch, radius)"],
             },
         )
@@ -790,14 +822,18 @@ class LocalTransfer(ProcessPipeline):
             f"{base}/low_order_phase/Z_kr_over_hb",
             out["Z_kr_over_hb"],
             {
-                "definition": [r"Location-aggregated circular resultant Z^{(kr)}_{hb} for h in {2,3}."],
+                "definition": [
+                    r"Location-aggregated circular resultant Z^{(kr)}_{hb} for h in {2,3}."
+                ],
                 "layout": ["(low_harmonic, beat)"],
             },
         )
         metrics[f"{base}/low_order_phase/PLV_kr_over_hb"] = with_attrs(
             np.asarray(out["PLV_kr_over_hb"], dtype=np.float32),
             {
-                "definition": [r"Location phase-locking value PLV^{(kr)}_{hb} = |Z^{(kr)}_{hb}| for h in {2,3}."],
+                "definition": [
+                    r"Location phase-locking value PLV^{(kr)}_{hb} = |Z^{(kr)}_{hb}| for h in {2,3}."
+                ],
                 "layout": ["(low_harmonic, beat)"],
             },
         )
@@ -837,28 +873,36 @@ class LocalTransfer(ProcessPipeline):
         metrics[f"{base}/occupancy/N_kr_over_h"] = with_attrs(
             np.asarray(out["N_kr_over_h"], dtype=np.float32),
             {
-                "definition": [r"Effective spatial occupancy N^{(kr)}_h = exp(-sum_{k,r} p log p)."],
+                "definition": [
+                    r"Effective spatial occupancy N^{(kr)}_h = exp(-sum_{k,r} p log p)."
+                ],
                 "layout": ["(higher_harmonic,)"],
             },
         )
         metrics[f"{base}/occupancy/N_kr_over_h_norm"] = with_attrs(
             np.asarray(out["N_kr_over_h_norm"], dtype=np.float32),
             {
-                "definition": [r"Normalized spatial occupancy N^{(kr)}_h divided by the number of valid locations for harmonic h."],
+                "definition": [
+                    r"Normalized spatial occupancy N^{(kr)}_h divided by the number of valid locations for harmonic h."
+                ],
                 "layout": ["(higher_harmonic,)"],
             },
         )
         metrics[f"{base}/occupancy/N_b_over_h"] = with_attrs(
             np.asarray(out["N_b_over_h"], dtype=np.float32),
             {
-                "definition": [r"Effective beat occupancy N^{(b)}_h = exp(-sum_b p log p)."],
+                "definition": [
+                    r"Effective beat occupancy N^{(b)}_h = exp(-sum_b p log p)."
+                ],
                 "layout": ["(higher_harmonic,)"],
             },
         )
         metrics[f"{base}/occupancy/N_b_over_h_norm"] = with_attrs(
             np.asarray(out["N_b_over_h_norm"], dtype=np.float32),
             {
-                "definition": [r"Normalized beat occupancy N^{(b)}_h divided by the number of valid beats for harmonic h."],
+                "definition": [
+                    r"Normalized beat occupancy N^{(b)}_h divided by the number of valid beats for harmonic h."
+                ],
                 "layout": ["(higher_harmonic,)"],
             },
         )
@@ -894,7 +938,9 @@ class LocalTransfer(ProcessPipeline):
             metrics[f"{base}/summary/{key}/std"] = with_attrs(
                 np.asarray(summ["std"], dtype=np.float32),
                 {
-                    "definition": [f"Standard deviation summary of {desc} over (branch, radius)."],
+                    "definition": [
+                        f"Standard deviation summary of {desc} over (branch, radius)."
+                    ],
                     "layout": ["(harmonic,)"],
                 },
             )
