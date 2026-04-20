@@ -12,8 +12,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SPEC_FILE = PROJECT_ROOT / "AngioEye.spec"
 ISS_FILE = PROJECT_ROOT / "installer" / "AngioEye.iss"
 DIST_DIR = PROJECT_ROOT / "dist"
+GUI_EXE_NAME = "AngioEye.exe"
+CLI_EXE_NAME = "AngioEyeCLI.exe"
 ONEDIR_BUILD = DIST_DIR / "AngioEye"
-ONEFILE_BUILD = DIST_DIR / "AngioEye.exe"
 PAYLOAD_DIR = PROJECT_ROOT / "build" / "installer_payload"
 INSTALLER_OUTPUT_DIR = DIST_DIR
 VERSION_PATTERN = re.compile(r'^version\s*=\s*"([^"]+)"\s*$')
@@ -101,8 +102,16 @@ def _run_command(command: list[str | Path]) -> None:
     subprocess.run(cmd, cwd=PROJECT_ROOT, check=True)
 
 
+def _onedir_build_targets() -> tuple[Path, Path]:
+    return (ONEDIR_BUILD / GUI_EXE_NAME, ONEDIR_BUILD / CLI_EXE_NAME)
+
+
+def _onefile_build_targets() -> tuple[Path, Path]:
+    return (DIST_DIR / GUI_EXE_NAME, DIST_DIR / CLI_EXE_NAME)
+
+
 def _clean_pyinstaller_outputs() -> None:
-    for path in (ONEDIR_BUILD, ONEFILE_BUILD):
+    for path in (ONEDIR_BUILD, *_onefile_build_targets()):
         if path.is_dir():
             shutil.rmtree(path)
         elif path.exists():
@@ -133,27 +142,53 @@ def _copy_editable_package_modules(package_name: str) -> None:
         shutil.copy2(source_file, destination_dir / source_file.name)
 
 
+def _select_release_mode() -> str:
+    build_modes = {
+        "onedir": _onedir_build_targets(),
+        "onefile": _onefile_build_targets(),
+    }
+    complete_modes: list[tuple[str, float]] = []
+    partial_modes: list[tuple[str, list[Path]]] = []
+
+    for mode_name, targets in build_modes.items():
+        existing = [path for path in targets if path.is_file()]
+        if len(existing) == len(targets):
+            newest_target = max(path.stat().st_mtime for path in targets)
+            complete_modes.append((mode_name, newest_target))
+        elif existing:
+            missing = [path for path in targets if not path.is_file()]
+            partial_modes.append((mode_name, missing))
+
+    if complete_modes:
+        return max(complete_modes, key=lambda item: item[1])[0]
+
+    if partial_modes:
+        details = "; ".join(
+            f"{mode_name} missing: {', '.join(str(path) for path in missing)}"
+            for mode_name, missing in partial_modes
+        )
+        raise FileNotFoundError(f"Incomplete PyInstaller output. {details}")
+
+    expected_modes = (
+        ", ".join(str(path) for path in _onedir_build_targets()),
+        ", ".join(str(path) for path in _onefile_build_targets()),
+    )
+    raise FileNotFoundError(
+        "PyInstaller output not found. Expected either "
+        f"one-dir files ({expected_modes[0]}) or one-file binaries "
+        f"({expected_modes[1]})."
+    )
+
+
 def _prepare_payload() -> None:
     if PAYLOAD_DIR.exists():
         shutil.rmtree(PAYLOAD_DIR)
     PAYLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-    build_targets: list[Path] = []
-    onedir_exe = ONEDIR_BUILD / "AngioEye.exe"
-    if onedir_exe.is_file():
-        build_targets.append(onedir_exe)
-    if ONEFILE_BUILD.is_file():
-        build_targets.append(ONEFILE_BUILD)
-
-    if not build_targets:
-        raise FileNotFoundError(
-            "PyInstaller output not found. Expected either "
-            f"{ONEDIR_BUILD} or {ONEFILE_BUILD}."
-        )
-
-    selected_target = max(build_targets, key=lambda path: path.stat().st_mtime)
-    if selected_target == ONEFILE_BUILD:
-        shutil.copy2(selected_target, PAYLOAD_DIR / "AngioEye.exe")
+    release_mode = _select_release_mode()
+    if release_mode == "onefile":
+        for build_target in _onefile_build_targets():
+            shutil.copy2(build_target, PAYLOAD_DIR / build_target.name)
     else:
         _copy_tree_contents(ONEDIR_BUILD, PAYLOAD_DIR)
 
