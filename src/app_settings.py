@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
+from importlib import metadata as importlib_metadata
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
@@ -11,6 +13,47 @@ APP_NAME = "AngioEye"
 SETTINGS_FILENAME = "settings.json"
 DEFAULT_SETTINGS_FILENAME = "default_settings.json"
 LAST_BATCH_LOG_FILENAME = "last_batch_log.txt"
+VERSION_PATTERN = re.compile(r'^version\s*=\s*"([^"]+)"\s*$')
+INVALID_PATH_CHARS_PATTERN = re.compile(r'[<>:"/\\|?*]+')
+
+
+def _read_version_from_pyproject(pyproject_path: Path) -> str | None:
+    try:
+        lines = pyproject_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+
+    for line in lines:
+        match = VERSION_PATTERN.match(line)
+        if match:
+            return match.group(1)
+    return None
+
+
+def app_version() -> str | None:
+    env_version = os.getenv("ANGIOEYE_VERSION", "").strip()
+    if env_version:
+        return env_version
+
+    try:
+        return importlib_metadata.version(APP_NAME)
+    except importlib_metadata.PackageNotFoundError:
+        pass
+
+    for root in _resource_roots():
+        version = _read_version_from_pyproject(root / "pyproject.toml")
+        if version:
+            return version
+    return None
+
+
+def _settings_subdir_name() -> str:
+    version = app_version()
+    if not version:
+        return APP_NAME
+
+    safe_version = INVALID_PATH_CHARS_PATTERN.sub("-", version).rstrip(" .")
+    return safe_version or APP_NAME
 
 
 def default_settings_path() -> Path:
@@ -20,7 +63,7 @@ def default_settings_path() -> Path:
     else:
         xdg_config = os.getenv("XDG_CONFIG_HOME")
         base_dir = Path(xdg_config) if xdg_config else Path.home() / ".config"
-    return base_dir / APP_NAME / SETTINGS_FILENAME
+    return base_dir / APP_NAME / _settings_subdir_name() / SETTINGS_FILENAME
 
 
 def default_batch_log_path() -> Path:

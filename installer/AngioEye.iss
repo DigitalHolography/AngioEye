@@ -4,6 +4,9 @@
   #define AppVersion "0.1.0"
 #endif
 
+#define MyAppId MyAppName + "-" + AppVersion
+#define MyAppVersionedName MyAppName + " " + AppVersion
+
 #ifndef PayloadDir
   #error PayloadDir must be provided on the ISCC command line.
 #endif
@@ -13,12 +16,12 @@
 #endif
 
 [Setup]
-AppId={{08E860C9-5027-4E3E-99C5-E7D9F4A58216}
+AppId={#MyAppId}
 AppName={#MyAppName}
 AppVersion={#AppVersion}
-AppVerName={#MyAppName} {#AppVersion}
-DefaultDirName={autopf}\{#MyAppName}
-DefaultGroupName={#MyAppName}
+AppVerName={#MyAppVersionedName}
+DefaultDirName={autopf}\{#MyAppName}\{#AppVersion}
+DefaultGroupName={#MyAppVersionedName}
 DisableProgramGroupPage=yes
 LicenseFile={#PayloadDir}\LICENSE
 ArchitecturesAllowed=x64compatible
@@ -30,7 +33,11 @@ SolidCompression=yes
 WizardStyle=modern
 PrivilegesRequired=admin
 SetupIconFile={#PayloadDir}\AngioEye.ico
+UninstallDisplayName={#MyAppVersionedName}
 UninstallDisplayIcon={app}\AngioEye.exe
+UsePreviousAppDir=no
+UsePreviousGroup=no
+UsePreviousTasks=no
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"
@@ -39,8 +46,8 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\AngioEye.exe"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\AngioEye.exe"; Tasks: desktopicon
+Name: "{autoprograms}\{#MyAppVersionedName}"; Filename: "{app}\AngioEye.exe"
+Name: "{autodesktop}\{#MyAppVersionedName}"; Filename: "{app}\AngioEye.exe"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\AngioEye.exe"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\AngioEye.exe"; Description: "Launch {#MyAppVersionedName}"; Flags: nowait postinstall skipifsilent
