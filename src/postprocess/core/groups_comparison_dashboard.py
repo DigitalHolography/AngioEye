@@ -15,7 +15,7 @@ import plotly.graph_objects as go
 from matplotlib import gridspec
 from matplotlib.ticker import FormatStrFormatter
 
-PIPELINE_ROOT = "/Pipelines/waveform_shape_metrics"
+PIPELINE_ROOT = "/AngioEye/waveform_shape_metrics"
 VALID_METRIC_FOLDERS = ["raw", "bandlimited"]
 VALID_VESSELS = ["artery", "vein"]
 PIPELINE_BASE_CANDIDATES_WINDKESSEL = [
