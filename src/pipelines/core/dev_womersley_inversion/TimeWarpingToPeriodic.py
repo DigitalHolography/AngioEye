@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .core.base import ProcessPipeline, ProcessResult, registerPipeline
+from ..base import ProcessPipeline, ProcessResult, registerPipeline
 
 
 @registerPipeline(name="womersley inversion")
