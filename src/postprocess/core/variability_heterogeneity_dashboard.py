@@ -9,7 +9,7 @@ import h5py
 import numpy as np
 import pandas as pd
 
-SEGMENT_METRIC_FOLDER = "/Pipelines/waveform_shape_metrics/artery/by_segment/"
+SEGMENT_METRIC_FOLDER = "/AngioEye/waveform_shape_metrics/artery/by_segment/"
 SEGMENT_MODE = "bandlimited_segment"
 EPS = 1e-12
 
@@ -21,6 +21,7 @@ INPUT_METRICS = [
     "SF_VTI",
     "sigma_t_over_T",
     "W50_over_T",
+    "W80_over_T",
     "E_low_over_E_total",
     "t_max_over_T",
     "t_min_over_T",
@@ -29,28 +30,25 @@ INPUT_METRICS = [
     "slope_fall_normalized",
     "t_up_over_T",
     "t_down_over_T",
-    "S_decay",
     "crest_factor",
-    "R_SD",
     "Delta_DTI",
     "gamma_t",
-    "spectral_entropy",
-    "delta_phi2",
-    "rho_h_90",
-    "mu_h",
-    "sigma_h",
     "N_eff_over_T",
-    "N_H_over_T",
-    "phase_locking_residual",
-    "E_recon_H_MAX",
-    "Q_t_skew",
-    "Q_t_width",
-    "R_Q_t",
-    "Q_d_skew",
-    "Q_d_width",
-    "R_Q_d",
+    "N_t_over_T",
+    "s_t",
+    "w_t",
+    "s_d",
+    "w_d",
     "v_end_over_v_mean",
     "E_slope",
+    "t50_over_T",
+    "t_phi_over_T",
+    "rho_h",
+    "w_h",
+    "N_h_over_H_minus_1",
+    "D_phi",
+    "s_phi_over_T",
+    "eta_h",
 ]
 METRIC_LABELS = {
     "mu_t_over_T": r"$\mu_t/T$",
