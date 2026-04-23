@@ -6,6 +6,9 @@ from typing import Any
 import h5py
 import numpy as np
 
+from angioeye_io.hdf5_io import MetricsTree, append_metrics_trees_to_h5, read_dataset
+from angioeye_io.hdf5_schema import ANGIOEYE_POSTPROCESS_ROOT, find_pipeline_group
+
 from .core.base import (
     BatchPostprocess,
     PostprocessContext,
@@ -18,7 +21,7 @@ from .core.base import (
     name="QC_Windkessel_RC",
     description=(
         "Append interpreted QC for Windkessel_RC directly into each processed HDF5 file "
-        "under /AngioEye/QC_Windkessel_RC."
+        "under /AngioEye/PostProcesses/QC_Windkessel_RC."
     ),
     required_pipelines=["Windkessel_RC"],
 )
@@ -41,7 +44,13 @@ class QCWindkesselRC(BatchPostprocess):
     def run(self, context: PostprocessContext) -> PostprocessResult:
         updated_paths: list[str] = []
         for file_path in context.processed_files:
-            self._append_qc_to_file(file_path)
+            tree = self._build_qc_tree(file_path)
+            append_metrics_trees_to_h5(
+                file_path,
+                ANGIOEYE_POSTPROCESS_ROOT,
+                [tree],
+                overwrite=True,
+            )
             updated_paths.append(str(file_path))
 
         return PostprocessResult(
@@ -51,100 +60,63 @@ class QCWindkesselRC(BatchPostprocess):
             generated_paths=updated_paths,
         )
 
-    def _append_qc_to_file(self, file_path: Path) -> None:
-        with h5py.File(file_path, "r+") as h5:
-            pipelines = (
-                h5["AngioEye"] if "AngioEye" in h5 else h5.create_group("AngioEye")
-            )
-            wind_group = self._find_windkessel_group(pipelines)
+    def _build_qc_tree(self, file_path: Path) -> MetricsTree:
+        with h5py.File(file_path, "r") as h5:
+            wind_group = find_pipeline_group(h5, "Windkessel_RC")
             if wind_group is None:
                 raise ValueError(
                     f"Windkessel_RC pipeline group not found in processed file: {file_path}"
                 )
 
-            if "QC_Windkessel_RC" in pipelines:
-                del pipelines["QC_Windkessel_RC"]
-            qc_group = pipelines.create_group("QC_Windkessel_RC")
-            qc_group.attrs["pipeline"] = "QC_Windkessel_RC"
-            qc_group.attrs["source_pipeline"] = str(wind_group.name)
-
             rep_statuses: list[str] = []
             available_reps = 0
+            metrics: dict[str, Any] = {}
             for representation in ("raw", "bandlimited"):
                 report = self._analyze_representation_group(wind_group, representation)
                 if report is None:
                     continue
                 available_reps += 1
                 rep_statuses.append(report["status"])
-                self._write_report_group(qc_group, representation, report)
+                metrics.update(self._report_metrics(representation, report))
 
             overall_status = self._overall_status(rep_statuses, available_reps)
-            self._write_value(qc_group, "status", overall_status)
-            self._write_value(
-                qc_group,
-                "available_representation_count",
-                np.asarray(available_reps, dtype=int),
+            metrics["status"] = overall_status
+            metrics["available_representation_count"] = np.asarray(
+                available_reps, dtype=int
             )
-            self._write_value(
-                qc_group,
-                "representation_statuses",
-                np.asarray(rep_statuses, dtype=h5py.string_dtype(encoding="utf-8")),
+            metrics["representation_statuses"] = rep_statuses
+            metrics["params/min_valid_beats_per_method"] = np.asarray(
+                self.min_valid_beats_per_method, dtype=int
             )
-            self._write_value(
-                qc_group,
-                "params/min_valid_beats_per_method",
-                np.asarray(self.min_valid_beats_per_method, dtype=int),
+            metrics["params/min_consensus_fraction"] = np.asarray(
+                self.min_consensus_fraction, dtype=float
             )
-            self._write_value(
-                qc_group,
-                "params/min_consensus_fraction",
-                np.asarray(self.min_consensus_fraction, dtype=float),
+            metrics["params/min_reasonable_fraction"] = np.asarray(
+                self.min_reasonable_fraction, dtype=float
             )
-            self._write_value(
-                qc_group,
-                "params/min_reasonable_fraction",
-                np.asarray(self.min_reasonable_fraction, dtype=float),
+            metrics["params/max_tau_intermethod_rel_range_median"] = np.asarray(
+                self.max_tau_intermethod_rel_range_median, dtype=float
             )
-            self._write_value(
-                qc_group,
-                "params/max_tau_intermethod_rel_range_median",
-                np.asarray(self.max_tau_intermethod_rel_range_median, dtype=float),
+            metrics["params/max_delay_intermethod_range_median"] = np.asarray(
+                self.max_delay_intermethod_range_median, dtype=float
             )
-            self._write_value(
-                qc_group,
-                "params/max_delay_intermethod_range_median",
-                np.asarray(self.max_delay_intermethod_range_median, dtype=float),
+            metrics["params/max_residual_norm_median"] = np.asarray(
+                self.max_residual_norm_median, dtype=float
             )
-            self._write_value(
-                qc_group,
-                "params/max_residual_norm_median",
-                np.asarray(self.max_residual_norm_median, dtype=float),
+            metrics["params/max_freq_self_reldiff_median"] = np.asarray(
+                self.max_freq_self_reldiff_median, dtype=float
             )
-            self._write_value(
-                qc_group,
-                "params/max_freq_self_reldiff_median",
-                np.asarray(self.max_freq_self_reldiff_median, dtype=float),
+            return MetricsTree(
+                name="QC_Windkessel_RC",
+                metrics=metrics,
+                attrs={
+                    "kind": "postprocess",
+                    "source_pipeline": str(wind_group.name),
+                },
             )
-
-    def _find_windkessel_group(self, pipelines: h5py.Group):
-        for name, group in pipelines.items():
-            if (
-                isinstance(group, h5py.Group)
-                and group.attrs.get("pipeline", "") == "Windkessel_RC"
-            ):
-                return group
-        # fallback if a user manually created an exact-case group
-        if "Windkessel_RC" in pipelines and isinstance(
-            pipelines["Windkessel_RC"], h5py.Group
-        ):
-            return pipelines["Windkessel_RC"]
-        return None
 
     def _read(self, group: h5py.Group, path: str):
-        try:
-            return group[path][()]
-        except Exception:
-            return None
+        return read_dataset(group, path, default=None)
 
     def _safe_median(self, x) -> float:
         x = np.asarray(x, dtype=float)
@@ -441,58 +413,15 @@ class QCWindkesselRC(BatchPostprocess):
             return "warn"
         return "ok"
 
-    def _resolve_target(
-        self, root_group: h5py.Group, key: str
-    ) -> tuple[h5py.Group, str]:
-        parts = [
-            part for part in str(key).replace("\\", "/").strip("/").split("/") if part
-        ]
-        if not parts:
-            raise ValueError("Empty target key.")
-        parent = root_group
-        for part in parts[:-1]:
-            parent = parent[part] if part in parent else parent.create_group(part)
-            if not isinstance(parent, h5py.Group):
-                raise ValueError(f"Cannot create subgroup under non-group path: {key}")
-        return parent, parts[-1]
-
-    def _write_value(self, root_group: h5py.Group, key: str, value) -> None:
-        parent, leaf = self._resolve_target(root_group, key)
-        if leaf in parent:
-            del parent[leaf]
-        str_dtype = h5py.string_dtype(encoding="utf-8")
-        if isinstance(value, str):
-            parent.create_dataset(leaf, data=value, dtype=str_dtype)
-            return
-        if (
-            isinstance(value, (list, tuple))
-            and value
-            and all(isinstance(v, str) for v in value)
-        ):
-            parent.create_dataset(leaf, data=np.asarray(value, dtype=str_dtype))
-            return
-        if isinstance(value, np.ndarray) and value.dtype.kind in {"U", "O"}:
-            parent.create_dataset(leaf, data=value.astype(str_dtype))
-            return
-        try:
-            parent.create_dataset(leaf, data=value)
-        except (TypeError, ValueError):
-            parent.create_dataset(leaf, data=str(value), dtype=str_dtype)
-
-    def _write_report_group(
-        self, qc_group: h5py.Group, representation: str, report: dict[str, Any]
-    ) -> None:
+    def _report_metrics(self, representation: str, report: dict[str, Any]) -> dict[str, Any]:
         base = f"{representation}"
-        self._write_value(qc_group, f"{base}/status", report["status"])
-        self._write_value(qc_group, f"{base}/flags", report["flags"])
+        metrics: dict[str, Any] = {
+            f"{base}/status": report["status"],
+            f"{base}/flags": report["flags"],
+        }
         for key, value in report["summary"].items():
-            self._write_value(
-                qc_group, f"{base}/summary/{key}", np.asarray(value, dtype=float)
-            )
+            metrics[f"{base}/summary/{key}"] = np.asarray(value, dtype=float)
         for method, info in report["method_summaries"].items():
             for key, value in info.items():
-                self._write_value(
-                    qc_group,
-                    f"{base}/method_summaries/{method}/{key}",
-                    np.asarray(value, dtype=float),
-                )
+                metrics[f"{base}/method_summaries/{method}/{key}"] = np.asarray(value, dtype=float)
+        return metrics

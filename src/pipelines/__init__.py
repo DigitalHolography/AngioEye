@@ -11,8 +11,9 @@ from .core.base import (
     PipelineDescriptor,
     ProcessPipeline,
     ProcessResult,
+    process_result_to_metrics_tree,
+    process_results_to_metric_trees,
 )
-from .core.utils import write_combined_results_h5, write_result_h5
 
 
 def _extend_with_external_pipeline_dir() -> None:
@@ -70,7 +71,7 @@ def _discover_pipelines() -> tuple[list[PipelineDescriptor], list[PipelineDescri
             missing_deps=cls.missing_deps,
             pipeline_cls=cls,
         )
-        if getattr(cls, "is_available", True):
+        if getattr(cls, "available", True):
             available.append(desc)
         else:
             missing.append(desc)
@@ -96,8 +97,8 @@ for _cls in (p.__class__ for p in _AVAILABLE):
 __all__ = [
     "ProcessPipeline",
     "ProcessResult",
-    "write_result_h5",
-    "write_combined_results_h5",
+    "process_result_to_metrics_tree",
+    "process_results_to_metric_trees",
     "load_pipeline_catalog",
     "MissingPipeline",
     *[_cls.__name__ for _cls in (p.__class__ for p in _AVAILABLE)],
