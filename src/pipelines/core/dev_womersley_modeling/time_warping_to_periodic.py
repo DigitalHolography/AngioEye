@@ -62,7 +62,7 @@ class WomersleyInversion(ProcessPipeline):
         return warped_seg
 
     @classmethod
-    def TimeWarpingToPeriodic(cls, v_profiles_cell, sys_idx_list):
+    def time_warping_to_periodic(cls, v_profiles_cell, sys_idx_list):
         all_bounds = np.asarray(sys_idx_list, dtype=int).ravel()
         if all_bounds.size < 2:
             raise ValueError("sys_idx_list must contain at least two boundaries")
