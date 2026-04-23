@@ -19,8 +19,8 @@ PIPELINE_ROOT = "/AngioEye/waveform_shape_metrics"
 VALID_METRIC_FOLDERS = ["raw", "bandlimited"]
 VALID_VESSELS = ["artery", "vein"]
 PIPELINE_BASE_CANDIDATES_WINDKESSEL = [
-    "/Pipelines/windkessel_rc/bandlimited",
-    "/Pipelines/Windkessel_RC/bandlimited",
+    "/AngioEye/windkessel_rc/bandlimited",
+    "/AngioEye/Windkessel_RC/bandlimited",
 ]
 
 METHODS_WINDKESSEL = ["arx", "freq", "time_integral"]
@@ -797,7 +797,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
         hline_label(vmax, "Vmax", va="bottom")
         hline_label(vmin, "Vmin", va="top")
         info_box([f"RI = {ri:.3f}"])
-        ax.set_xlabel( r"rectified time :  t/T", fontsize=14)
+        ax.set_xlabel(r"rectified time :  t/T", fontsize=14)
         ax.set_ylabel(r"$v(t) \: (mm/s)$", fontsize=14, labelpad=12)
     elif metric == "Delta_DTI":
         a = np.asarray(support.get("delta_dti_curve", []), dtype=float)
@@ -833,7 +833,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
         hline_label(vmin, "Vmin", va="top")
         hline_label(vmean, r"$\overline{{v}}$", va="bottom")
         info_box([f"PI = {pi:.3f}"])
-        ax.set_xlabel( r"rectified time : t/T", fontsize=14)
+        ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v(t) \: (mm/s)$", fontsize=14, labelpad=12)
     elif metric == "rho_h":
         A2 = np.asarray(support.get("A2_cumsum", []), dtype=float)
@@ -875,12 +875,16 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
 
         info_box(
             [
-                rf"$m_{{0.8}}={m80:.3f}$"
-                if np.isfinite(m80)
-                else r"$m_{0.8}=\mathrm{NaN}$",
-                rf"$\rho_h={rho_h:.3f}$"
-                if np.isfinite(rho_h)
-                else r"$\rho_h=\mathrm{NaN}$",
+                (
+                    rf"$m_{{0.8}}={m80:.3f}$"
+                    if np.isfinite(m80)
+                    else r"$m_{0.8}=\mathrm{NaN}$"
+                ),
+                (
+                    rf"$\rho_h={rho_h:.3f}$"
+                    if np.isfinite(rho_h)
+                    else r"$\rho_h=\mathrm{NaN}$"
+                ),
             ]
         )
     elif metric == "w_h":
@@ -914,12 +918,16 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
 
         info_box(
             [
-                rf"$m_{{0.5}}={m50:.3f}$"
-                if np.isfinite(m50)
-                else r"$m_{0.5}=\mathrm{NaN}$",
-                rf"$m_{{0.8}}={m80:.3f}$"
-                if np.isfinite(m80)
-                else r"$m_{0.8}=\mathrm{NaN}$",
+                (
+                    rf"$m_{{0.5}}={m50:.3f}$"
+                    if np.isfinite(m50)
+                    else r"$m_{0.5}=\mathrm{NaN}$"
+                ),
+                (
+                    rf"$m_{{0.8}}={m80:.3f}$"
+                    if np.isfinite(m80)
+                    else r"$m_{0.8}=\mathrm{NaN}$"
+                ),
                 rf"$w_h={w_h:.3f}$" if np.isfinite(w_h) else r"$w_h=\mathrm{NaN}$",
             ]
         )
@@ -994,13 +1002,13 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
         ax.axhline(0, color="black", linewidth=1.0)
         ax.axhline(t_delta, color="black", linestyle="--", linewidth=1.0)
         ax.axhspan(
-            t_delta - s_delta, 
-            t_delta + s_delta, 
-            facecolor='none',  
-            hatch="////",            
-            edgecolor="black",       
-            alpha=0.3,               
-            linewidth=0              
+            t_delta - s_delta,
+            t_delta + s_delta,
+            facecolor="none",
+            hatch="////",
+            edgecolor="black",
+            alpha=0.3,
+            linewidth=0,
         )
 
         info_box(
@@ -1036,7 +1044,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
 
         info_box([rf"$\eta_h={eta_h:.3f}$", f"H={len(harmonic_magnitudes)}"])
         ax.legend(frameon=False, fontsize=10)
-        ax.set_xlabel( r"rectified time : t/T", fontsize=14)
+        ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v(t) \: (mm/s)$", fontsize=14, labelpad=12)
     elif metric == "mu_t_over_T":
         mu_over_T = float(support["mu_t_over_T"])
@@ -1046,7 +1054,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
             mu_over_T, tau, sig, y0=0.0, color="black", linestyles="--", linewidth=1
         )
         info_box([rf"$\mu_t/T = {mu_over_T:.3f}$"])
-        ax.set_xlabel( r"rectified time : t/T", fontsize=14)
+        ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v(t) \: (mm/s)$", fontsize=14, labelpad=12)
 
     elif metric == "sigma_t_over_T":
@@ -1071,7 +1079,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
         )
 
         info_box([rf"$\mu_t/T={mu:.3f}$", rf"$\sigma_t/T={sigma:.3f}$"])
-        ax.set_xlabel( r"rectified time : t/T", fontsize=14)
+        ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v(t) \: (mm/s)$", fontsize=14, labelpad=12)
 
     elif metric == "t50_over_T":
@@ -1086,8 +1094,13 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
                 ax.vlines(tq, 0.0, yq, linestyles="--", linewidth=1, color="#000000")
                 ax.hlines(yq, 0.0, tq, linestyles="--", linewidth=1, color="#000000")
 
-        info_box([rf"$t_{{10}}/T = {t10:.3f}, t_{{50}}/T = {t50:.3f}$", rf"$t_{{90}}/T = {t90:.3f}$"])
-        ax.set_xlabel( r"rectified time : t/T", fontsize=14)
+        info_box(
+            [
+                rf"$t_{{10}}/T = {t10:.3f}, t_{{50}}/T = {t50:.3f}$",
+                rf"$t_{{90}}/T = {t90:.3f}$",
+            ]
+        )
+        ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$d(t) \: (a.u.)$ ", fontsize=14, labelpad=12)
 
     elif metric == "R_VTI":
@@ -1115,7 +1128,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
         d1 = float(np.nansum(sig[tau < 0.5]))
         d2 = float(np.nansum(sig[tau >= 0.5]))
         info_box([rf"$D_1={d1:.3g} , D_2={d2:.3g}$", rf"$R_{{VTI}}={ratio:.3f}$"])
-        ax.set_xlabel( r"rectified time : t/T", fontsize=14)
+        ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v(t) \: (mm/s)$", fontsize=14, labelpad=12)
 
     elif metric == "SF_VTI":
@@ -1146,7 +1159,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
         d1 = float(np.nansum(sig[tau < tau_k]))
         dtot = float(np.nansum(sig))
         info_box([rf"$D_1={d1:.3g} , D_1 + D_2={dtot:.3g}$", rf"$SF_{{VTI}}={sf:.3f}$"])
-        ax.set_xlabel( r"rectified time : t/T", fontsize=14)
+        ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v(t) \: (mm/s)$", fontsize=14, labelpad=12)
 
     elif metric == "t_max_over_T":
@@ -1157,7 +1170,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
             t_max_over_T, tau, sig, y0=0.0, color="black", linestyles="--", linewidth=1
         )
         info_box([rf"$t_{{max}}/T = {t_max_over_T:.3f}$"])
-        ax.set_xlabel( r"rectified time : t/T", fontsize=14)
+        ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v(t) \: (mm/s)$", fontsize=14, labelpad=12)
 
     elif metric == "t_min_over_T":
@@ -1168,7 +1181,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
             t_min_over_T, tau, sig, y0=0.0, color="black", linestyles="--", linewidth=1
         )
         info_box([rf"$t_{{min}}/T = {t_min_over_T:.3f}$"])
-        ax.set_xlabel( r"rectified time : t/T", fontsize=14)
+        ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v(t) \: (mm/s)$", fontsize=14, labelpad=12)
 
     elif metric == "Delta_t_over_T":
@@ -1184,7 +1197,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
             t_min_over_T, tau, sig, y0=0.0, color="black", linestyles="--", linewidth=1
         )
         info_box([rf"$\Delta_t/T = {delta_t:.3f}$"])
-        ax.set_xlabel( r"rectified time : t/T", fontsize=14)
+        ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v(t) \: (mm/s)$", fontsize=14, labelpad=12)
 
     elif metric == "t_up_over_T":
@@ -1195,7 +1208,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
             t_up, tau, sig, y0=0.0, color="black", linestyles="--", linewidth=1
         )
         info_box([rf"$t_{{up}}/T = {t_up:.3f}$"])
-        ax.set_xlabel( r"rectified time : t/T", fontsize=14)
+        ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v(t) \: (mm/s)$", fontsize=14, labelpad=12)
 
     elif metric == "t_down_over_T":
@@ -1206,7 +1219,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
             t_down, tau, sig, y0=0.0, color="black", linestyles="--", linewidth=1
         )
         info_box([rf"$t_{{down}}/T = {t_down:.3f}$"])
-        ax.set_xlabel( r"rectified time : t/T", fontsize=14)
+        ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v(t) \: (mm/s)$", fontsize=14, labelpad=12)
 
     elif metric == "S_decay":
@@ -1230,7 +1243,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
             t_min, tau, sig, y0=0.0, color="black", linestyles="--", linewidth=1
         )
         info_box([rf"$S_{{decay}}= {s_decay:.3f}$"])
-        ax.set_xlabel( r"rectified time : t/T", fontsize=14)
+        ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v(t) \: (mm/s)$", fontsize=14, labelpad=12)
 
     elif metric == "slope_rise_normalized":
@@ -1242,7 +1255,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
             tau[idx], tau, sig, y0=0.0, color="black", linestyles="--", linewidth=1.0
         )
         info_box([rf"$S_{{rise}}={s_rise:.3f}$"])
-        ax.set_xlabel( r"rectified time : t/T", fontsize=14)
+        ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v(t) \: (mm/s)$", fontsize=14, labelpad=12)
 
     elif metric == "slope_fall_normalized":
@@ -1254,7 +1267,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
             tau[idx], tau, sig, y0=0.0, color="black", linestyles="--", linewidth=1.0
         )
         info_box([rf"$S_{{fall}}={s_fall:.3f}$"])
-        ax.set_xlabel( r"rectified time : t/T", fontsize=14)
+        ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v(t) \: (mm/s)$", fontsize=14, labelpad=12)
 
     elif metric == "R_SD":
@@ -1281,7 +1294,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
             bbox=dict(facecolor="white", edgecolor="none"),
         )
         info_box([rf"$R_{{SD}}={ratio:.3f}$"])
-        ax.set_xlabel( r"rectified time : t/T", fontsize=14)
+        ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v(t) \: (mm/s)$", fontsize=14, labelpad=12)
 
     elif metric == "gamma_t":
@@ -1300,7 +1313,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
             mu + sigma, tau, sig, y0=0, color="#000000", linestyles="--", linewidth=1
         )
         info_box([rf"$\gamma_t={gamma_t:.3f}$"])
-        ax.set_xlabel( r"rectified time : t/T", fontsize=14)
+        ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v(t) \: (mm/s)$", fontsize=14, labelpad=12)
 
     elif metric == "rho_h_90":
@@ -1420,7 +1433,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
         else:
             info_box([rf"$N_{{eff}}/T \approx {n_eff_over_t:.3f}$"])
 
-        ax.set_xlabel( r"rectified time : t/T", fontsize=14)
+        ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$p^2(t)\: (a.u.)$", fontsize=14, labelpad=10)
 
     elif metric == "delta_phi2":
@@ -1463,7 +1476,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
                 f"Δφ2={dphi2:.2f} rad = {dphi2_t:.2f}",
             ]
         )
-        ax.set_xlabel( r"rectified time : t/T", fontsize=14)
+        ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel("Harmonic component (a.u.) ", fontsize=14, labelpad=12)
         ax.legend(
             loc="lower left", bbox_to_anchor=(0.02, 0.02), frameon=False, fontsize=10
@@ -1478,7 +1491,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
         ax.plot(vb_tau, vb, linewidth=3, color=main_color)
         hline_label(vmax, "Vmax", va="bottom")
         hline_label(rms, "RMS", va="top")
-        info_box([ f"CF= {cf:.3f}"])
+        info_box([f"CF= {cf:.3f}"])
         ax.set_xlabel(r"rectified time :  t/T", fontsize=14)
         ax.set_ylabel(r"$v(t) \: (mm/s)$", fontsize=14, labelpad=12)
 
@@ -1550,16 +1563,30 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
         xh = np.arange(0, len(mags2))
 
         ax.bar(xh[1:H_HIGH_MIN], mags2[1:H_HIGH_MIN], color="#cccccc")
-        ax.bar(xh[H_HIGH_MIN : H_HIGH_MAX + 1], mags2[H_HIGH_MIN : H_HIGH_MAX + 1], color=main_color,)
+        ax.bar(
+            xh[H_HIGH_MIN : H_HIGH_MAX + 1],
+            mags2[H_HIGH_MIN : H_HIGH_MAX + 1],
+            color=main_color,
+        )
 
         lines = [
-        f"E_high = {e_high:.3g}",
-        f"E_total = {e_total:.3g}",
-        rf"$E_{{high}}/E_{{total}} = {ratio:.3f}$",
+            f"E_high = {e_high:.3g}",
+            f"E_total = {e_total:.3g}",
+            rf"$E_{{high}}/E_{{total}} = {ratio:.3f}$",
         ]
         text = "\n".join([str(x) for x in lines if x is not None and str(x) != ""])
 
-        ax.text(0.5,0.98,text,transform=ax.transAxes,ha="left",va="top",fontsize=12,bbox=dict(facecolor="white", edgecolor="none", pad=1.0),clip_on=True,)
+        ax.text(
+            0.5,
+            0.98,
+            text,
+            transform=ax.transAxes,
+            ha="left",
+            va="top",
+            fontsize=12,
+            bbox=dict(facecolor="white", edgecolor="none", pad=1.0),
+            clip_on=True,
+        )
         ax.set_xlabel("Harmonic n (a.u.)", fontsize=14)
         ax.set_ylabel(r"$|V_n|^2 \: (a.u.)$", fontsize=14, labelpad=12)
 
@@ -1579,7 +1606,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
             [rf"$E_{{recon,Hmax}}={e_recon:.4f}$", f"Hmax={len(harmonic_magnitudes)}"]
         )
         ax.legend(frameon=False, fontsize=10)
-        ax.set_xlabel( r"rectified time : t/T", fontsize=14)
+        ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v(t) \: (mm/s)$", fontsize=14, labelpad=12)
 
     elif metric == "s_t":
@@ -1600,7 +1627,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
                 rf"$t_{{10}}={t10:.3f}, t_{{50}}={t50:.3f}, t_{{90}}={t90:.3f}$",
             ]
         )
-        ax.set_xlabel( r"rectified time : t/T", fontsize=14)
+        ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$d(t) \: (a.u.)$", fontsize=14, labelpad=12)
 
     elif metric == "w_t":
@@ -1620,7 +1647,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
         info_box(
             [rf"$w_{{t}}={w_t:.3f}$", rf"$t_{{25}}={t25:.3f}, t_{{75}}={t75:.3f}$"]
         )
-        ax.set_xlabel( r"rectified time : t/T", fontsize=14)
+        ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$d(t) \: (a.u.)$", fontsize=14, labelpad=12)
 
     elif metric == "R_Q_t":
@@ -1647,7 +1674,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
                 rf"$R_{{Q_{{t}}}}={r_q_t:.3f}$",
             ]
         )
-        ax.set_xlabel( r"rectified time : t/T", fontsize=14)
+        ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$d(t) \: (a.u.)$", fontsize=14, labelpad=12)
 
     elif metric == "s_d":
@@ -1667,7 +1694,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
                 rf"$d_{{10}}={d10:.3f}, d_{{50}}={d50:.3f}, d_{{90}}={d90:.3f}$",
             ]
         )
-        ax.set_xlabel( r"rectified time : t/T", fontsize=14)
+        ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$d(t) \: (a.u.)$", fontsize=14, labelpad=12)
 
     elif metric == "w_d":
@@ -1688,7 +1715,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
         info_box(
             [rf"$W_{{d}}={w_d:.3f}$", rf"$d_{{25}}={d25:.3f}, d_{{75}}={d75:.3f}$"]
         )
-        ax.set_xlabel( r"rectified time : t/T", fontsize=14)
+        ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$d(t) \: (a.u.)$", fontsize=14, labelpad=12)
 
     elif metric == "R_Q_d":
@@ -1717,7 +1744,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
                 rf"$R_{{Q_{{d}}}}={r_q_d:.3f}$",
             ]
         )
-        ax.set_xlabel( r"rectified time : t/T", fontsize=14)
+        ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$d(t) \: (a.u.)$", fontsize=14, labelpad=12)
 
     elif metric == "v_end_over_v_mean":
@@ -1744,13 +1771,13 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
             bbox=dict(facecolor="white", edgecolor="none"),
         )
         info_box([rf"$R_{{EM}}={ratio:.3f}$"])
-        ax.set_xlabel( r"rectified time : t/T", fontsize=14)
+        ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v(t) \: (mm/s)$", fontsize=14, labelpad=12)
 
     elif metric == "E_slope":
         e_slope = float(support["E_slope"])
         dvdt_norm = support["dvdt_norm"]
-        
+
         ax.plot(tau, sig, linewidth=3, color=main_color, label="signal")
         ax2 = ax.twinx()
         ax2.plot(
@@ -1764,7 +1791,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
         ax2.set_ylabel(r"$\dot v^2$", fontsize=12)
         ax2.set_yticks([])
         info_box([rf"$E_{{slope}}={e_slope:.4f}$"])
-        ax.set_xlabel( r"rectified time : t/T", fontsize=14)
+        ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v(t) \: (mm/s)$", fontsize=14, labelpad=12)
 
     elif metric == "E_curv":
@@ -1772,11 +1799,18 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
         d2vdt2_norm = support["d2vdt2_norm"]
         ax.plot(tau, sig, linewidth=3, color=main_color, label="signal")
         ax2 = ax.twinx()
-        ax2.plot(tau,d2vdt2_norm,linestyle="--",linewidth=1.5,color="black",label=r"$\ddot v^2$",)
+        ax2.plot(
+            tau,
+            d2vdt2_norm,
+            linestyle="--",
+            linewidth=1.5,
+            color="black",
+            label=r"$\ddot v^2$",
+        )
         ax2.set_yticks([])
         ax2.set_ylabel(r"$\ddot v^2$", fontsize=12)
         info_box([rf"$E_{{curv}}={e_curv:.4f}$"])
-        ax.set_xlabel( r"rectified time : t/T", fontsize=14)
+        ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v(t) \: (mm/s)$", fontsize=14, labelpad=12)
 
     elif metric == "W50_over_T":
@@ -1803,7 +1837,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
                 rf"$0.5\,V_{{max}} = {thr:.3f}$",
             ]
         )
-        ax.set_xlabel( r"rectified time : t/T", fontsize=14)
+        ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v(t) \: (mm/s)$", fontsize=14, labelpad=12)
     elif metric == "W80_over_T":
         w80 = float(support["W80_over_T"])
@@ -1829,7 +1863,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
                 rf"$0.8\,V_{{max}} = {thr:.3f}$",
             ]
         )
-        ax.set_xlabel( r"rectified time : t/T", fontsize=14)
+        ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v(t) \: (mm/s)$", fontsize=14, labelpad=12)
     elif metric == "N_t_over_T":
         m0 = float(support["m0"])
@@ -1848,7 +1882,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
         )
 
         info_box([rf"$N_t/T = {nt_over_t:.3f}$"])
-        ax.set_xlabel( r"rectified time : t/T", fontsize=14)
+        ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$p(t)\: (a.u.)$", fontsize=14, labelpad=10)
 
     else:
@@ -2544,7 +2578,8 @@ def save_dashboard(all_results, original_zip, single_group):
     dashboard_file = "metric_dashboard.html"
 
     with open(dashboard_file, "w", encoding="utf-8") as f:
-        f.write("""
+        f.write(
+            """
 <html>
 <head>
 <title>Metrics Dashboard</title>
@@ -2643,7 +2678,8 @@ body {
 </style>
 </head>
 <body>
-""")
+"""
+        )
 
     # -----------------------------
     # header + image M0
@@ -2653,12 +2689,14 @@ body {
         heatmap_fig = build_heatmap(img)
         heatmap_html = heatmap_fig.to_html(full_html=False, include_plotlyjs="cdn")
         with open(dashboard_file, "a", encoding="utf-8") as f:
-            f.write(f"""
+            f.write(
+                f"""
                 <div class="header">
                     {heatmap_html}
                     <h1>Metrics Analysis</h1>
                 </div>
-            """)
+            """
+            )
 
     # -----------------------------
     # export PNGs
@@ -2718,12 +2756,14 @@ body {
                 )
 
                 with open(dashboard_file, "a", encoding="utf-8") as f:
-                    f.write(f"""
+                    f.write(
+                        f"""
                     <div class="signal-plot">
                         <div class="metric-title">Signal {mode} {vessel} - {group}</div>
                         {fig_html}
                     </div>
-                    """)
+                    """
+                    )
 
             # 2) comparaison inter-groupes
             fig_comp = build_comparison_signal_figure(group_curves)
@@ -2732,12 +2772,14 @@ body {
             )
 
             with open(dashboard_file, "a", encoding="utf-8") as f:
-                f.write(f"""
+                f.write(
+                    f"""
                 <div class="signal-plot">
                     <div class="metric-title">Signal comparison {mode} {vessel}</div>
                     {fig_comp_html}
                 </div>
-                """)
+                """
+                )
 
     with open(dashboard_file, "a", encoding="utf-8") as f:
         f.write("</div>")
@@ -2837,12 +2879,14 @@ body {
                 )
 
                 with open(dashboard_file, "a", encoding="utf-8") as f:
-                    f.write(f"""
+                    f.write(
+                        f"""
                     <div class="plot">
                         <div class="mode-title">{mode.upper()} - {vessel.upper()}</div>
                         {fig_html}
                     </div>
-                    """)
+                    """
+                    )
 
         with open(dashboard_file, "a", encoding="utf-8") as f:
             f.write("</div></div>")
@@ -2851,7 +2895,8 @@ body {
     # resize plotly
     # -----------------------------
     with open(dashboard_file, "a", encoding="utf-8") as f:
-        f.write("""
+        f.write(
+            """
     <script>
     window.addEventListener("load", function() {
         setTimeout(function() {
@@ -2861,7 +2906,8 @@ body {
         }, 300);
     });
     </script>
-    """)
+    """
+        )
 
     with open(dashboard_file, "a", encoding="utf-8") as f:
         f.write("</body></html>")

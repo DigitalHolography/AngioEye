@@ -142,9 +142,7 @@ class ProcessApp(_BaseAppTk):
         self._apply_ui_mode(self.ui_mode, persist=False)
 
     def _set_initial_window_size(self) -> None:
-        width, height, min_width, min_height = self._window_size_for_mode(
-            self.ui_mode
-        )
+        width, height, min_width, min_height = self._window_size_for_mode(self.ui_mode)
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         width = min(width, screen_width)
@@ -303,9 +301,7 @@ class ProcessApp(_BaseAppTk):
             justify="center",
             wraplength=420,
         )
-        self.minimal_output_path_label.grid(
-            row=5, column=0, pady=(0, 6), sticky="ew"
-        )
+        self.minimal_output_path_label.grid(row=5, column=0, pady=(0, 6), sticky="ew")
         self.minimal_output_name_label = tk.Label(
             content,
             textvariable=self.minimal_output_name_var,
@@ -314,11 +310,11 @@ class ProcessApp(_BaseAppTk):
             justify="center",
             wraplength=420,
         )
-        self.minimal_output_name_label.grid(
-            row=6, column=0, pady=(0, 18), sticky="ew"
-        )
+        self.minimal_output_name_label.grid(row=6, column=0, pady=(0, 18), sticky="ew")
 
-        self.minimal_run_button = ttk.Button(content, text="Run", command=self.run_batch)
+        self.minimal_run_button = ttk.Button(
+            content, text="Run", command=self.run_batch
+        )
         self.minimal_run_button.grid(row=7, column=0, pady=(0, 18))
 
         self.minimal_progress = ttk.Progressbar(
@@ -401,13 +397,9 @@ class ProcessApp(_BaseAppTk):
             input_btn_frame, text="Browse file/zip", command=self.choose_batch_file
         ).pack(side="left", padx=(4, 0))
 
-        ttk.Label(parent, text="Output").grid(
-            row=1, column=0, sticky="w", pady=(8, 0)
-        )
+        ttk.Label(parent, text="Output").grid(row=1, column=0, sticky="w", pady=(8, 0))
         batch_output_entry = ttk.Entry(parent, textvariable=self.batch_output_var)
-        batch_output_entry.grid(
-            row=1, column=1, sticky="ew", padx=(0, 4), pady=(8, 0)
-        )
+        batch_output_entry.grid(row=1, column=1, sticky="ew", padx=(0, 4), pady=(8, 0))
         ttk.Button(parent, text="Browse", command=self.choose_batch_output).grid(
             row=1, column=2, sticky="w", pady=(8, 0)
         )
@@ -545,7 +537,7 @@ class ProcessApp(_BaseAppTk):
             width = max(560, min(660, screen_width - 260))
             height = max(420, min(520, screen_height - 260))
             min_width = min(500, width)
-            min_height = min(360, height)
+            min_height = min(520, height)
         return width, height, min_width, min_height
 
     def _ensure_window_size_for_mode(
@@ -633,10 +625,11 @@ class ProcessApp(_BaseAppTk):
 
     def _handle_dropped_paths(self, dropped_paths: Sequence[Path]) -> bool:
         for dropped_path in dropped_paths:
-            if (
-                dropped_path.is_file()
-                and dropped_path.suffix.lower() in {".h5", ".hdf5", ".zip"}
-            ):
+            if dropped_path.is_file() and dropped_path.suffix.lower() in {
+                ".h5",
+                ".hdf5",
+                ".zip",
+            }:
                 self.batch_input_var.set(str(dropped_path))
                 self._apply_input_defaults(dropped_path)
                 self._log_batch(f"[INPUT] Drag and drop -> {dropped_path}")
@@ -888,9 +881,9 @@ class ProcessApp(_BaseAppTk):
             text="Open folder",
             command=self.open_postprocess_folder,
         ).grid(row=0, column=3, sticky="w", padx=(4, 0))
-        ttk.Label(
-            controls, textvariable=self.postprocess_library_summary_var
-        ).grid(row=0, column=4, sticky="e")
+        ttk.Label(controls, textvariable=self.postprocess_library_summary_var).grid(
+            row=0, column=4, sticky="e"
+        )
 
         library_container = ttk.Frame(parent)
         library_container.grid(row=2, column=0, sticky="nsew")
@@ -930,9 +923,7 @@ class ProcessApp(_BaseAppTk):
         self._bind_vertical_mousewheel(
             self.postprocess_library_inner, self.postprocess_library_canvas
         )
-        self._bind_vertical_mousewheel(
-            library_scroll, self.postprocess_library_canvas
-        )
+        self._bind_vertical_mousewheel(library_scroll, self.postprocess_library_canvas)
 
     def _bind_vertical_mousewheel(self, widget: tk.Misc, canvas: tk.Canvas) -> None:
         for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
@@ -958,9 +949,7 @@ class ProcessApp(_BaseAppTk):
             return 1
         return 0
 
-    def _on_vertical_mousewheel(
-        self, event: tk.Event, canvas: tk.Canvas
-    ) -> str | None:
+    def _on_vertical_mousewheel(self, event: tk.Event, canvas: tk.Canvas) -> str | None:
         scroll_units = self._mousewheel_scroll_units(event)
         if not scroll_units:
             return None
@@ -1037,16 +1026,10 @@ class ProcessApp(_BaseAppTk):
         self.pipeline_library_inner.columnconfigure(0, weight=1)
 
         selected_header = ttk.Label(self.pipeline_library_inner, text="Selected")
-        selected_header.grid(
-            row=0, column=0, sticky="w", pady=(0, 6)
-        )
+        selected_header.grid(row=0, column=0, sticky="w", pady=(0, 6))
         status_header = ttk.Label(self.pipeline_library_inner, text="Status")
-        status_header.grid(
-            row=0, column=1, sticky="w", padx=(12, 0), pady=(0, 6)
-        )
-        self._bind_vertical_mousewheel(
-            selected_header, self.pipeline_library_canvas
-        )
+        status_header.grid(row=0, column=1, sticky="w", padx=(12, 0), pady=(0, 6))
+        self._bind_vertical_mousewheel(selected_header, self.pipeline_library_canvas)
         self._bind_vertical_mousewheel(status_header, self.pipeline_library_canvas)
 
         for idx, pipeline in enumerate(rows, start=1):
@@ -1081,28 +1064,18 @@ class ProcessApp(_BaseAppTk):
 
         self._update_pipeline_library_summary()
 
-    def _populate_postprocess_library(
-        self, rows: list[PostprocessDescriptor]
-    ) -> None:
+    def _populate_postprocess_library(self, rows: list[PostprocessDescriptor]) -> None:
         for child in self.postprocess_library_inner.winfo_children():
             child.destroy()
         self.postprocess_visibility_vars = {}
         self.postprocess_library_inner.columnconfigure(0, weight=1)
 
         selected_header = ttk.Label(self.postprocess_library_inner, text="Selected")
-        selected_header.grid(
-            row=0, column=0, sticky="w", pady=(0, 6)
-        )
+        selected_header.grid(row=0, column=0, sticky="w", pady=(0, 6))
         status_header = ttk.Label(self.postprocess_library_inner, text="Status")
-        status_header.grid(
-            row=0, column=1, sticky="w", padx=(12, 0), pady=(0, 6)
-        )
-        self._bind_vertical_mousewheel(
-            selected_header, self.postprocess_library_canvas
-        )
-        self._bind_vertical_mousewheel(
-            status_header, self.postprocess_library_canvas
-        )
+        status_header.grid(row=0, column=1, sticky="w", padx=(12, 0), pady=(0, 6))
+        self._bind_vertical_mousewheel(selected_header, self.postprocess_library_canvas)
+        self._bind_vertical_mousewheel(status_header, self.postprocess_library_canvas)
 
         for idx, postprocess in enumerate(rows, start=1):
             is_available = getattr(postprocess, "available", True)
@@ -1240,7 +1213,9 @@ class ProcessApp(_BaseAppTk):
             for pipeline in self.pipeline_rows
             if pipeline.available and self.pipeline_visibility.get(pipeline.name, False)
         )
-        available_count = sum(1 for pipeline in self.pipeline_rows if pipeline.available)
+        available_count = sum(
+            1 for pipeline in self.pipeline_rows if pipeline.available
+        )
         self.pipeline_library_summary_var.set(
             f"Selected: {selected_count}/{available_count}"
         )
@@ -1476,7 +1451,9 @@ class ProcessApp(_BaseAppTk):
             return
 
         pipeline_progress_units = len(inputs) * len(pipelines)
-        final_progress_units = len(postprocesses) + (1 if self.batch_zip_var.get() else 0)
+        final_progress_units = len(postprocesses) + (
+            1 if self.batch_zip_var.get() else 0
+        )
         self._start_progress(
             pipeline_progress_units,
             style_name=self._progress_primary_style,
@@ -1498,6 +1475,7 @@ class ProcessApp(_BaseAppTk):
 
             failures: list[str] = []
             processed_outputs: list[Path] = []
+            processed_input_paths: list[Path] = []
             for h5_path in inputs:
                 try:
                     relative_parent = self._relative_input_parent(h5_path, data_root)
@@ -1509,15 +1487,14 @@ class ProcessApp(_BaseAppTk):
                         output_filename=minimal_output_filename,
                     )
                     processed_outputs.append(combined_output)
+                    processed_input_paths.append(h5_path)
                 except Exception as exc:  # noqa: BLE001
                     failures.append(f"{h5_path}: {exc}")
                     self._log_batch(f"[FAIL] {h5_path.name}: {exc}")
 
             if final_progress_units:
                 final_status = (
-                    "Running postprocess..."
-                    if postprocesses
-                    else "Creating ZIP..."
+                    "Running postprocess..." if postprocesses else "Creating ZIP..."
                 )
                 self._start_progress(
                     final_progress_units,
@@ -1530,6 +1507,7 @@ class ProcessApp(_BaseAppTk):
                     postprocesses=postprocesses,
                     output_dir=output_dir,
                     processed_outputs=processed_outputs,
+                    input_h5_paths=processed_input_paths,
                     input_path=data_path,
                     selected_pipeline_names=selected_names,
                     failures=failures,
@@ -1632,6 +1610,7 @@ class ProcessApp(_BaseAppTk):
         postprocesses: Sequence[PostprocessDescriptor],
         output_dir: Path,
         processed_outputs: Sequence[Path],
+        input_h5_paths: Sequence[Path],
         input_path: Path,
         selected_pipeline_names: Sequence[str],
         failures: list[str],
@@ -1642,6 +1621,7 @@ class ProcessApp(_BaseAppTk):
             selected_pipelines=tuple(selected_pipeline_names),
             input_path=input_path,
             zip_outputs=self.batch_zip_var.get(),
+            input_h5_paths=tuple(input_h5_paths),
         )
         for descriptor in postprocesses:
             postprocess = descriptor.instantiate()

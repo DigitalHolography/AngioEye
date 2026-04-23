@@ -187,6 +187,7 @@ Inside a postprocess, you can:
 
 - read `context.output_dir`
 - read `context.processed_files`
+- read `context.input_h5_paths` (same order as `context.processed_files`)
 - read `context.selected_pipelines`
 - read `context.input_path`
 - read `context.zip_outputs`
