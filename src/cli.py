@@ -265,6 +265,7 @@ def run_cli(
 
         failures: list[str] = []
         processed_outputs: list[Path] = []
+        processed_input_paths: list[Path] = []
         for h5_path in inputs:
             try:
                 relative_parent = _relative_input_parent(h5_path, data_root)
@@ -275,6 +276,7 @@ def run_cli(
                     output_relative_parent=relative_parent,
                 )
                 processed_outputs.append(combined_output)
+                processed_input_paths.append(h5_path)
             except Exception as exc:  # noqa: BLE001
                 failures.append(f"{h5_path}: {exc}")
                 print(f"[FAIL] {h5_path.name}: {exc}", file=sys.stderr)
@@ -286,6 +288,7 @@ def run_cli(
                 selected_pipelines=tuple(pipeline.name for pipeline in pipelines),
                 input_path=data_path,
                 zip_outputs=zip_outputs,
+                input_h5_paths=tuple(processed_input_paths),
             )
             for descriptor in postprocesses:
                 print(f"[POST] Running {descriptor.name}...")

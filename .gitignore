@@ -63,3 +63,4 @@ Desktop.ini
 process_result.csv
 pipelines.txt
 requirements-optional.txt
+test/data/

@@ -50,7 +50,7 @@ class PipelineMetricsManifestPostprocess(BatchPostprocess):
 
         pipelines: list[dict[str, object]] = []
         with h5py.File(file_path, "r") as h5file:
-            pipelines_group = h5file.get("Pipelines")
+            pipelines_group = h5file.get("AngioEye")
             if pipelines_group is not None:
                 for group_name, group in pipelines_group.items():
                     if not isinstance(group, h5py.Group):
