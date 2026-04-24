@@ -2,17 +2,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from ..base import ProcessPipeline, ProcessResult, registerPipeline
 
-
-@registerPipeline(name="womersley inversion")
-class WomersleyInversion(ProcessPipeline):
-    description = "Placeholder Womersley inversion pipeline."
-
-    input_velocity_path = "/TODO/input/velocity"
-    input_period_path = "/TODO/input/period"
-    output_root = "womersley_inversion"
-
+class TimeWarpingtoPeriodic:
     @staticmethod
     def _nextpow2(n: int) -> int:
         n = int(n)
@@ -96,12 +87,3 @@ class WomersleyInversion(ProcessPipeline):
                 v_profiles_cell[i][j] = cls.handleSeg(seg, cycle_length, all_bounds)
 
         return v_profiles_cell
-
-    def run(self, h5file) -> ProcessResult:
-        _ = h5file
-        metrics = {
-            f"{self.output_root}/status": np.asarray(
-                "pending interface definition", dtype="S"
-            )
-        }
-        return ProcessResult(metrics=metrics)
