@@ -1,0 +1,254 @@
+from __future__ import annotations
+
+from collections.abc import Callable
+
+import numpy as np
+from scipy.optimize import least_squares
+from scipy.signal import convolve
+from scipy.special import jv
+
+from .geometric_correction import (
+    HarmonicRadialProfile,
+    LateralGrid,
+    RadialGrid,
+    project_harmonic_profile,
+)
+
+ArrayLike = np.ndarray
+
+
+def _convolve_same(values: ArrayLike, psf_kernel: ArrayLike | None) -> ArrayLike:
+    values = np.asarray(values)
+    if psf_kernel is None:
+        return values
+
+    return convolve(values, psf_kernel, mode="same")
+
+
+def _apply_geometric_correction(
+    model_profile: ArrayLike,
+    radial_grid: RadialGrid,
+    lateral_grid: LateralGrid,
+    harmonic_order: int = 1,
+) -> ArrayLike:
+
+    profile = HarmonicRadialProfile(
+        harmonic_order=harmonic_order,
+        radial_grid=radial_grid,
+        values=model_profile,
+    )
+    return np.asarray(project_harmonic_profile(profile, lateral_grid))
+
+
+def uWom_base(alpha, r):
+    """
+    Formula (18b):
+        Bn(x; alpha_n) = 1 - J0(lambda_n x) / J0(lambda_n)
+    """
+
+    r = np.asarray(r)
+
+    lambda_n = np.exp(1j * 3.0 * np.pi / 4.0) * alpha
+    J0 = jv(0, lambda_n)
+    Bn = 1.0 - (jv(0, lambda_n * r) / J0)
+    return Bn
+
+
+def uWom_psi(alpha, r):
+    """
+    Formula (18c):
+        Psin(x; alpha_n) = dBn / dlnR
+                           = -lambda_n J1(lambda_n) / J0(lambda_n)^2
+                             * J0(lambda_n x)
+    """
+
+    r = np.asarray(r)
+
+    lambda_n = np.exp(1j * 3.0 * np.pi / 4.0) * alpha
+    J0 = jv(0, lambda_n)
+
+    complex_scalar = (-lambda_n * jv(1, lambda_n)) / (J0**2)
+    radial_profile = jv(0, lambda_n * r)
+    Psin = complex_scalar * radial_profile
+    return Psin
+
+
+def get_womersley_basis(alpha, r):
+    Bn = uWom_base(alpha, r)
+    Psin = uWom_psi(alpha, r)
+    return Bn, Psin
+
+
+def womersley_flow_gain(alpha):
+    """
+    Formula (18d):
+        K(alpha_n) = 1 - 2 J1(lambda_n) / (lambda_n J0(lambda_n))
+    """
+
+    lambda_n = np.exp(1j * 3.0 * np.pi / 4.0) * alpha
+    J0 = jv(0, lambda_n)
+    Kn = 1.0 - (2.0 * jv(1, lambda_n)) / (lambda_n * J0)
+    return Kn
+
+
+def generate_womersley_profile(
+    x,
+    Cn,
+    Dn,
+    center,
+    alpha,
+    width_norm,
+    psf_kernel,
+):
+    """
+    Build the harmonic profile:
+        model_profile = Cn * Bn + Dn * Psin
+
+    TODO:
+        Confirm the exact convention of width_norm in the production pipeline.
+        This implementation follows the MATLAB reference:
+            r = (x - center) / width_norm
+    """
+
+    r = (x - center) / width_norm
+    Bn, Psin = get_womersley_basis(alpha, r)
+
+    Bn = _convolve_same(Bn, psf_kernel)
+    if Dn != 0:
+        Psin = _convolve_same(Psin, psf_kernel)
+
+    model_profile = (Cn * Bn) + (Dn * Psin)
+    return model_profile
+
+
+def costFun(
+    p,
+    modelArgHandle: Callable,
+    x_coords,
+    v_meas,
+    width_norm,
+    psf_kernel,
+    R0,
+    omega_n,
+    geometric_correction_operator=None,
+    radial_grid: RadialGrid | None = None,
+    lateral_grid: LateralGrid | None = None,
+    harmonic_order: int = 1,
+):
+    """
+    Residual between measured data and the modeled Womersley harmonic after
+    PSF blur and geometric correction.
+
+    Returns a real residual vector so it can be passed directly to
+    scipy.optimize.least_squares as a Python equivalent of MATLAB lsqnonlin.
+
+    TODO:
+        Confirm the exact storage convention of v_meas in the pipeline
+        (raw profile, already projected profile, real-only amplitude, or
+        complex harmonic coefficient). Complex residuals are flattened into
+        real and imaginary parts for optimization.
+    """
+
+    Cn, Dn, center, nu = modelArgHandle(p)
+
+    alpha_n = R0 * np.sqrt(omega_n / nu)
+    val = generate_womersley_profile(
+        x=x_coords,
+        Cn=Cn,
+        Dn=Dn,
+        center=center,
+        alpha=alpha_n,
+        width_norm=width_norm,
+        psf_kernel=psf_kernel,
+    )
+
+    val = _apply_geometric_correction(
+        model_profile=val,
+        x_coords=x_coords,
+        R0=R0,
+        geometric_correction_operator=geometric_correction_operator,
+        radial_grid=radial_grid,
+        lateral_grid=lateral_grid,
+        harmonic_order=harmonic_order,
+    )
+
+    if val.shape != v_meas.shape:
+        raise ValueError(
+            "Modeled profile and measured profile must have the same shape after "
+            f"correction, got {val.shape} and {v_meas.shape}."
+        )
+
+    res = val - v_meas
+    return res
+
+
+def fit_womersley_harmonic(
+    p0,
+    modelArgHandle: Callable,
+    x_coords,
+    v_meas,
+    width_norm,
+    psf_kernel,
+    R0,
+    omega_n,
+    bounds=(-np.inf, np.inf),
+    geometric_correction_operator=None,
+    radial_grid: RadialGrid | None = None,
+    lateral_grid: LateralGrid | None = None,
+    harmonic_order: int = 1,
+    **least_squares_kwargs,
+):
+    """
+    Python analogue of:
+        [p_fit, ...] = lsqnonlin(costFunctionHandle, ...)
+        [Cn_fit, Dn_fit, center_fit, nu_fit] = modelArgHandle(p_fit)
+        ALPHA_N = R0 * sqrt(omega_n / nu_fit)
+    """
+
+    def costFunctionHandle(p):
+        return costFun(
+            p=p,
+            modelArgHandle=modelArgHandle,
+            x_coords=x_coords,
+            v_meas=v_meas,
+            width_norm=width_norm,
+            psf_kernel=psf_kernel,
+            R0=R0,
+            omega_n=omega_n,
+            geometric_correction_operator=geometric_correction_operator,
+            radial_grid=radial_grid,
+            lateral_grid=lateral_grid,
+            harmonic_order=harmonic_order,
+        )
+
+    result = least_squares(
+        fun=costFunctionHandle,
+        x0=np.asarray(p0, dtype=float),
+        bounds=bounds,
+        **least_squares_kwargs,
+    )
+
+    p_fit = result.x
+    Cn_fit, Dn_fit, center_fit, nu_fit = modelArgHandle(p_fit)
+    ALPHA_N = R0 * np.sqrt(omega_n / nu_fit)
+
+    return {
+        "result": result,
+        "p_fit": p_fit,
+        "Cn_fit": Cn_fit,
+        "Dn_fit": Dn_fit,
+        "center_fit": center_fit,
+        "nu_fit": nu_fit,
+        "ALPHA_N": ALPHA_N,
+    }
+
+
+__all__ = [
+    "costFun",
+    "fit_womersley_harmonic",
+    "generate_womersley_profile",
+    "get_womersley_basis",
+    "uWom_base",
+    "uWom_psi",
+    "womersley_flow_gain",
+]

@@ -22,25 +22,25 @@ class RadialGrid:
 
     centers: ArrayLike
     edges: ArrayLike
-    radius: float
+    R0: float
 
     def __post_init__(self) -> None:
         centers = np.asarray(self.centers, dtype=float)
         edges = np.asarray(self.edges, dtype=float)
-        radius = float(self.radius)
+        R0 = float(self.R0)
 
         object.__setattr__(self, "centers", centers)
         object.__setattr__(self, "edges", edges)
-        object.__setattr__(self, "radius", radius)
+        object.__setattr__(self, "R0", R0)
 
     @classmethod
-    def uniform(cls, radius: float, n_samples: int) -> RadialGrid:
-        radius = float(radius)
+    def uniform(cls, R0: float, n_samples: int) -> RadialGrid:
+        R0 = float(R0)
         n_samples = int(n_samples)
 
-        edges = np.linspace(0.0, radius, n_samples + 1, dtype=float)
+        edges = np.linspace(0.0, R0, n_samples + 1, dtype=float)
         centers = 0.5 * (edges[:-1] + edges[1:])
-        return cls(centers=centers, edges=edges, radius=radius)
+        return cls(centers=centers, edges=edges, R0=R0)
 
 
 @dataclass(frozen=True)
@@ -154,13 +154,13 @@ def build_abel_projection_matrix(
 
     x = np.asarray(lateral_grid.positions, dtype=float)
     edges = np.asarray(radial_grid.edges, dtype=float)
-    radius = float(radial_grid.radius)
+    R0 = float(radial_grid.R0)
 
     K = np.zeros((x.size, radial_grid.centers.size), dtype=float)
 
     for i, xi in enumerate(x):
         x_abs = abs(float(xi))
-        if x_abs >= radius:
+        if x_abs >= R0:
             continue
 
         for j in range(radial_grid.centers.size):
