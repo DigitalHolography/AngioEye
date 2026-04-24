@@ -12,8 +12,6 @@ class RadialGrid:
     """
     Radial discretization for the theoretical velocity profile u_n(r).
 
-    Attributes
-    ----------
     centers:
         Radial sample locations r_j in [0, R0].
     edges:
@@ -31,41 +29,14 @@ class RadialGrid:
         edges = np.asarray(self.edges, dtype=float)
         radius = float(self.radius)
 
-        if centers.ndim != 1 or centers.size == 0:
-            raise ValueError("RadialGrid.centers must be a non-empty 1D array.")
-        if edges.ndim != 1 or edges.size != centers.size + 1:
-            raise ValueError(
-                "RadialGrid.edges must be a 1D array with len(edges)=len(centers)+1."
-            )
-        if not np.all(np.isfinite(centers)) or not np.all(np.isfinite(edges)):
-            raise ValueError("Radial grid values must be finite.")
-        if radius <= 0:
-            raise ValueError("RadialGrid.radius must be positive.")
-        if not np.all(np.diff(centers) > 0):
-            raise ValueError("RadialGrid.centers must be strictly increasing.")
-        if not np.all(np.diff(edges) > 0):
-            raise ValueError("RadialGrid.edges must be strictly increasing.")
-        if edges[0] < 0 or edges[-1] > radius + 1e-12:
-            raise ValueError("RadialGrid.edges must lie within [0, radius].")
-        if np.any(centers < edges[:-1]) or np.any(centers > edges[1:]):
-            raise ValueError("Each radial center must lie inside its cell edges.")
-
         object.__setattr__(self, "centers", centers)
         object.__setattr__(self, "edges", edges)
         object.__setattr__(self, "radius", radius)
-
-    @property
-    def widths(self) -> ArrayLike:
-        return np.diff(self.edges)
 
     @classmethod
     def uniform(cls, radius: float, n_samples: int) -> RadialGrid:
         radius = float(radius)
         n_samples = int(n_samples)
-        if radius <= 0:
-            raise ValueError("radius must be positive.")
-        if n_samples < 1:
-            raise ValueError("n_samples must be >= 1.")
 
         edges = np.linspace(0.0, radius, n_samples + 1, dtype=float)
         centers = 0.5 * (edges[:-1] + edges[1:])
@@ -85,10 +56,6 @@ class LateralGrid:
 
     def __post_init__(self) -> None:
         positions = np.asarray(self.positions, dtype=float)
-        if positions.ndim != 1 or positions.size == 0:
-            raise ValueError("LateralGrid.positions must be a non-empty 1D array.")
-        if not np.all(np.isfinite(positions)):
-            raise ValueError("LateralGrid.positions must be finite.")
         object.__setattr__(self, "positions", positions)
 
 
@@ -109,18 +76,10 @@ class HarmonicRadialProfile:
         harmonic_order = int(self.harmonic_order)
         values = np.asarray(self.values)
 
-        if harmonic_order < 0:
-            raise ValueError("harmonic_order must be >= 0.")
-        if values.ndim != 1:
-            raise ValueError("HarmonicRadialProfile.values must be a 1D array.")
         if values.size != self.radial_grid.centers.size:
             raise ValueError(
                 "Profile length must match the number of radial grid samples."
             )
-        if not np.all(np.isfinite(np.real(values))) or not np.all(
-            np.isfinite(np.imag(values))
-        ):
-            raise ValueError("Profile values must be finite.")
 
         object.__setattr__(self, "harmonic_order", harmonic_order)
         object.__setattr__(self, "values", values)
@@ -149,8 +108,6 @@ class AbelProjectionOperator:
             raise ValueError(
                 f"matrix must have shape {expected_shape}, got {matrix.shape}."
             )
-        if not np.all(np.isfinite(matrix)):
-            raise ValueError("Projection matrix must be finite.")
 
         object.__setattr__(self, "matrix", matrix)
 
@@ -216,21 +173,6 @@ def build_abel_projection_matrix(
     return K
 
 
-def build_abel_projection_operator(
-    radial_grid: RadialGrid,
-    lateral_grid: LateralGrid,
-) -> AbelProjectionOperator:
-    matrix = build_abel_projection_matrix(
-        radial_grid=radial_grid,
-        lateral_grid=lateral_grid,
-    )
-    return AbelProjectionOperator(
-        radial_grid=radial_grid,
-        lateral_grid=lateral_grid,
-        matrix=matrix,
-    )
-
-
 def project_harmonic_profile(
     profile: HarmonicRadialProfile,
     lateral_grid: LateralGrid,
@@ -240,8 +182,13 @@ def project_harmonic_profile(
     the projected measurement-space harmonic M_n(x_i).
     """
 
-    operator = build_abel_projection_operator(
+    matrix = build_abel_projection_matrix(
         radial_grid=profile.radial_grid,
         lateral_grid=lateral_grid,
+    )
+    operator = AbelProjectionOperator(
+        radial_grid=profile.radial_grid,
+        lateral_grid=lateral_grid,
+        matrix=matrix,
     )
     return operator.apply(profile)
