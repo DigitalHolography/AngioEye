@@ -1,15 +1,16 @@
-import os
 import re
-import tempfile
-import zipfile
 from collections import defaultdict
 from tkinter import Tk, filedialog
+from pathlib import Path
 import shutil
 import h5py
 import numpy as np
 import pandas as pd
+from angioeye_io.hdf5_io import find_first_existing_path
+from angioeye_io.archive_io import replace_folder_in_zip
+from .grouped_batch import iter_grouped_h5_files_in_zip
 
-SEGMENT_METRIC_FOLDER = "/AngioEye/waveform_shape_metrics/artery/by_segment/"
+SEGMENT_METRIC_FOLDER = "/AngioEye/Processing/waveform_shape_metrics/artery/by_segment/"
 SEGMENT_MODE = "bandlimited_segment"
 EPS = 1e-12
 
@@ -107,7 +108,7 @@ def choose_zip():
 
 
 def extract_sort_key(filename):
-    name = os.path.basename(filename)
+    name = Path(filename).name
 
     date_match = re.search(r"(\d{6})", name)
     date = int(date_match.group(1)) if date_match else 0
@@ -119,9 +120,17 @@ def extract_sort_key(filename):
 
 
 def extract_segment_metric(h5_path, metric_name, mode=SEGMENT_MODE):
-    dataset_path = f"{SEGMENT_METRIC_FOLDER}{mode}/{metric_name}"
+    suffix = f"{mode}/{metric_name}"
+    candidate_paths = [
+        f"{SEGMENT_METRIC_FOLDER.rstrip('/')}/{suffix}"
+    ]
+
     with h5py.File(h5_path, "r") as f:
-        if dataset_path not in f:
+        dataset_path = find_first_existing_path(
+            f,
+            candidate_paths,
+        )
+        if dataset_path is None:
             return None
         arr = np.array(f[dataset_path], dtype=float)
 
@@ -262,36 +271,21 @@ def analyze_zip(zip_path, metrics=INPUT_METRICS, mode=SEGMENT_MODE):
     """
     results = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        with zipfile.ZipFile(zip_path, "r") as z:
-            z.extractall(tmpdir)
-
-        for root, _, files in os.walk(tmpdir):
-            h5_files = sorted(
-                [f for f in files if f.endswith(".h5")],
-                key=extract_sort_key,
-            )
-            if not h5_files:
+    for grouped_file in iter_grouped_h5_files_in_zip(
+        zip_path,
+        sort_key=lambda record: (record.group_name, extract_sort_key(record.file_name)),
+    ):
+        for metric_name in metrics:
+            arr = extract_segment_metric(grouped_file.file_path, metric_name, mode=mode)
+            if arr is None:
                 continue
 
-            group_name = os.path.basename(root)
-            if root == tmpdir:
-                group_name = "all"
+            high = compute_file_higher_metrics_from_segment_array(arr, eps=EPS)
+            if high is None:
+                continue
 
-            for file in h5_files:
-                h5_path = os.path.join(root, file)
-
-                for metric_name in metrics:
-                    arr = extract_segment_metric(h5_path, metric_name, mode=mode)
-                    if arr is None:
-                        continue
-
-                    high = compute_file_higher_metrics_from_segment_array(arr, eps=EPS)
-                    if high is None:
-                        continue
-
-                    for high_name, value in high.items():
-                        results[group_name][metric_name][high_name].append(value)
+            for high_name, value in high.items():
+                results[grouped_file.group_name][metric_name][high_name].append(value)
 
     return results
 
@@ -358,8 +352,8 @@ def dataframe_to_latex_table(df, caption=None, label=None):
 
 
 def export_group_tables(zip_path, metrics=INPUT_METRICS, mode=SEGMENT_MODE, digits=3):
-    out_dir = os.path.join(os.path.dirname(zip_path), "latex_tables")
-    os.makedirs(out_dir, exist_ok=True)
+    out_dir = Path(zip_path).parent / "latex_tables"
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     results = analyze_zip(zip_path, metrics=metrics, mode=mode)
 
@@ -373,8 +367,8 @@ def export_group_tables(zip_path, metrics=INPUT_METRICS, mode=SEGMENT_MODE, digi
 
         safe_group = re.sub(r"[^A-Za-z0-9_-]+", "_", group_name)
 
-        csv_path = os.path.join(out_dir, f"{safe_group}_variability_table.csv")
-        tex_path = os.path.join(out_dir, f"{safe_group}_variability_table.tex")
+        csv_path = out_dir / f"{safe_group}_variability_table.csv"
+        tex_path = out_dir / f"{safe_group}_variability_table.tex"
 
         df.to_csv(csv_path, index=False)
 
@@ -387,30 +381,9 @@ def export_group_tables(zip_path, metrics=INPUT_METRICS, mode=SEGMENT_MODE, digi
             f.write(latex)
 
         generated.extend([csv_path, tex_path])
-    replace_folder_in_zip(zip_path, arc_folder="latex_tables")
-    if os.path.isdir(out_dir):
+    replace_folder_in_zip(zip_path, out_dir, arc_folder="latex_tables")
+    if out_dir.is_dir():
         shutil.rmtree(out_dir)
-
-
-def replace_folder_in_zip(zip_path: str, arc_folder: str):
-    temp_zip = zip_path + ".tmp"
-    out_dir = os.path.join(os.path.dirname(zip_path), "latex_tables")
-
-    with zipfile.ZipFile(zip_path, "r") as zin:
-        with zipfile.ZipFile(temp_zip, "w", compression=zipfile.ZIP_DEFLATED) as zout:
-            for item in zin.infolist():
-                if not item.filename.startswith(arc_folder + "/"):
-                    buffer = zin.read(item.filename)
-                    zout.writestr(item, buffer)
-
-            for root, _, files in os.walk(out_dir):
-                for fn in files:
-                    fullpath = os.path.join(root, fn)
-                    rel = os.path.relpath(fullpath, out_dir)
-                    arcname = os.path.join(arc_folder, rel).replace("\\", "/")
-                    zout.write(fullpath, arcname)
-
-    os.replace(temp_zip, zip_path)
 
 
 if __name__ == "__main__":

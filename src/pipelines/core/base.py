@@ -1,9 +1,11 @@
 import csv
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
 import h5py
 
+from angioeye_io.hdf5_io import MetricsTree
 from dependency_utils import find_missing_dependencies
 
 # Global Registry of all imports needed by the pipelines
@@ -49,6 +51,26 @@ class DatasetValue:
 def with_attrs(data: Any, attrs: dict[str, Any]) -> DatasetValue:
     """Convenience helper to attach attributes to a dataset value."""
     return DatasetValue(data=data, attrs=attrs)
+
+
+def process_result_to_metrics_tree(
+    pipeline_name: str,
+    result: "ProcessResult",
+) -> MetricsTree:
+    return MetricsTree(
+        name=pipeline_name,
+        metrics=result.metrics,
+        attrs=result.attrs,
+    )
+
+
+def process_results_to_metric_trees(
+    results: Sequence[tuple[str, "ProcessResult"]],
+) -> list[MetricsTree]:
+    return [
+        process_result_to_metrics_tree(pipeline_name, result)
+        for pipeline_name, result in results
+    ]
 
 
 # +==========================================================================+ #
