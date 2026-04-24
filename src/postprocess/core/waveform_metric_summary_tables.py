@@ -694,20 +694,26 @@ def generate_metric_tables_html(zip_path, output_dir="html_metric_tables"):
 
                 
 
-def save_dashboard(zip_path, export_png_dir="export_png", export_eps_dir="export_eps"):
-    generate_metric_tables_html(
+def save_dashboard(
     zip_path,
-    output_dir="html_metric_tables"
+    export_png_dir="export_png",
+    export_eps_dir="export_eps",
+    output_dir="html_metric_tables",
+):
+    del export_png_dir, export_eps_dir
+    generate_metric_tables_html(
+        zip_path,
+        output_dir=output_dir,
     )
 
     replace_folder_in_zip(
         zip_path,
-        "html_metric_tables",
-        arc_folder="html_metric_tables"
+        output_dir,
+        arc_folder="html_metric_tables",
     )
 
-    if os.path.isdir("html_metric_tables"):
-        shutil.rmtree("html_metric_tables")
+    if os.path.isdir(output_dir):
+        shutil.rmtree(output_dir)
     
     
     

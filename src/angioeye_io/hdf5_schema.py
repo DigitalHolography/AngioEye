@@ -9,6 +9,7 @@ from .hdf5_io import find_child_group_by_attr, safe_h5_key
 ANGIOEYE_ROOT = "/AngioEye"
 ANGIOEYE_PROCESSING_ROOT = f"{ANGIOEYE_ROOT}/Processing"
 ANGIOEYE_POSTPROCESS_ROOT = f"{ANGIOEYE_ROOT}/Postprocessing"
+LEGACY_PIPELINES_ROOT = "/pipelines"
 
 def _child_path_candidates(base_candidates: list[str], *parts: str) -> list[str]:
     suffix = "/".join(part.strip("/") for part in parts if part)

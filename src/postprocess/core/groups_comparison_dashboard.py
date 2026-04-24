@@ -2425,8 +2425,13 @@ def build_comparison_signal_figure(group_curves):
     return fig
 
 
-def save_dashboard(all_results, original_zip, single_group):
-    dashboard_file = "metric_dashboard.html"
+def save_dashboard(
+    all_results,
+    original_zip,
+    single_group,
+    dashboard_file="metric_dashboard.html",
+):
+    dashboard_file = str(dashboard_file)
 
     with open(dashboard_file, "w", encoding="utf-8") as f:
         f.write(

@@ -29,10 +29,14 @@ from .hdf5_schema import (
     postprocess_path_candidates,
 )
 from .archive_io import (
+    create_zip_from_tree,
+    extract_file_from_zip,
+    extract_folder_from_zip,
     extracted_zip_tree,
     replace_file_in_zip,
     replace_folder_in_zip,
     reset_output_dir,
+    temporary_zip_from_tree,
 )
 
 __all__ = [
@@ -62,8 +66,12 @@ __all__ = [
     "iter_metric_datasets",
     "pipeline_path_candidates",
     "postprocess_path_candidates",
+    "create_zip_from_tree",
+    "extract_file_from_zip",
+    "extract_folder_from_zip",
     "extracted_zip_tree",
     "replace_file_in_zip",
     "replace_folder_in_zip",
     "reset_output_dir",
+    "temporary_zip_from_tree",
 ]
