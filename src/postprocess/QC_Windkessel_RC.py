@@ -21,7 +21,7 @@ from .core.base import (
     name="QC_Windkessel_RC",
     description=(
         "Append interpreted QC for Windkessel_RC directly into each processed HDF5 file "
-        "under /AngioEye/PostProcesses/QC_Windkessel_RC."
+        "under /AngioEye/Postprocessing/QC_Windkessel_RC."
     ),
     required_pipelines=["Windkessel_RC"],
 )

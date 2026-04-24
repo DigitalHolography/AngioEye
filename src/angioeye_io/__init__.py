@@ -26,6 +26,7 @@ from .hdf5_schema import (
     get_processing_root,
     iter_metric_datasets,
     pipeline_path_candidates,
+    postprocess_path_candidates,
 )
 from .archive_io import (
     extracted_zip_tree,
@@ -60,6 +61,7 @@ __all__ = [
     "get_processing_root",
     "iter_metric_datasets",
     "pipeline_path_candidates",
+    "postprocess_path_candidates",
     "extracted_zip_tree",
     "replace_file_in_zip",
     "replace_folder_in_zip",

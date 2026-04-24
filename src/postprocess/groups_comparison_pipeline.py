@@ -67,14 +67,16 @@ class GraphicsDashboardPostprocess(BatchPostprocess):
                 member_prefix="export_png/",
                 output_dir=output_dir,
             )
-            png_paths.append(
-                self._extract_prefix(
-                    zip_path=temp_zip,
-                    member_prefix="export_eps/",
-                    output_dir=output_dir,
-                )
+            eps_paths = self._extract_prefix(
+                zip_path=temp_zip,
+                member_prefix="export_eps/",
+                output_dir=output_dir,
             )
-        created_paths = [str(dashboard_path), *[str(path) for path in png_paths]]
+        created_paths = [
+            str(dashboard_path),
+            *[str(path) for path in png_paths],
+            *[str(path) for path in eps_paths],
+        ]
         summary = f"Generated dashboard and {len(png_paths)} PNG illustration(s)."
         return PostprocessResult(summary=summary, generated_paths=created_paths)
 

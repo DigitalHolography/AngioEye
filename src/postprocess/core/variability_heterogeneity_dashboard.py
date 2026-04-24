@@ -7,11 +7,10 @@ import h5py
 import numpy as np
 import pandas as pd
 from angioeye_io.hdf5_io import find_first_existing_path
-from angioeye_io.hdf5_schema import pipeline_path_candidates
 from angioeye_io.archive_io import replace_folder_in_zip
 from .grouped_batch import iter_grouped_h5_files_in_zip
 
-SEGMENT_METRIC_FOLDER = "/AngioEye/waveform_shape_metrics/artery/by_segment/"
+SEGMENT_METRIC_FOLDER = "/AngioEye/Processing/waveform_shape_metrics/artery/by_segment/"
 SEGMENT_MODE = "bandlimited_segment"
 EPS = 1e-12
 
@@ -121,17 +120,17 @@ def extract_sort_key(filename):
 
 
 def extract_segment_metric(h5_path, metric_name, mode=SEGMENT_MODE):
-    dataset_path = None
+    suffix = f"{mode}/{metric_name}"
+    candidate_paths = [
+        f"{SEGMENT_METRIC_FOLDER.rstrip('/')}/{suffix}"
+    ]
+
     with h5py.File(h5_path, "r") as f:
         dataset_path = find_first_existing_path(
             f,
-            pipeline_path_candidates(
-                "waveform_shape_metrics", "artery", "by_segment", mode, metric_name
-            ),
+            candidate_paths,
         )
         if dataset_path is None:
-            return None
-        if dataset_path not in f:
             return None
         arr = np.array(f[dataset_path], dtype=float)
 

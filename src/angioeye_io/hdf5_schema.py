@@ -8,23 +8,38 @@ from .hdf5_io import find_child_group_by_attr, safe_h5_key
 
 ANGIOEYE_ROOT = "/AngioEye"
 ANGIOEYE_PROCESSING_ROOT = f"{ANGIOEYE_ROOT}/Processing"
-ANGIOEYE_POSTPROCESS_ROOT = f"{ANGIOEYE_ROOT}/PostProcesses"
-LEGACY_PIPELINES_ROOT = "/Pipelines"
+ANGIOEYE_POSTPROCESS_ROOT = f"{ANGIOEYE_ROOT}/Postprocessing"
 
-
-def pipeline_path_candidates(pipeline_name: str, *parts: str) -> list[str]:
+def _child_path_candidates(base_candidates: list[str], *parts: str) -> list[str]:
     suffix = "/".join(part.strip("/") for part in parts if part)
-    base_candidates = [
-        f"{ANGIOEYE_PROCESSING_ROOT}/{safe_h5_key(pipeline_name)}",
-        f"{LEGACY_PIPELINES_ROOT}/{safe_h5_key(pipeline_name)}",
-        f"{LEGACY_PIPELINES_ROOT}/{pipeline_name}",
-    ]
     candidates: list[str] = []
     for base in base_candidates:
         candidate = f"{base}/{suffix}" if suffix else base
         if candidate not in candidates:
             candidates.append(candidate)
     return candidates
+
+
+def pipeline_path_candidates(pipeline_name: str, *parts: str) -> list[str]:
+    safe_name = safe_h5_key(pipeline_name)
+    return _child_path_candidates(
+        [
+            f"{ANGIOEYE_PROCESSING_ROOT}/{safe_name}",
+            f"{ANGIOEYE_PROCESSING_ROOT}/{pipeline_name}",
+        ],
+        *parts,
+    )
+
+
+def postprocess_path_candidates(postprocess_name: str, *parts: str) -> list[str]:
+    safe_name = safe_h5_key(postprocess_name)
+    return _child_path_candidates(
+        [
+            f"{ANGIOEYE_POSTPROCESS_ROOT}/{safe_name}",
+            f"{ANGIOEYE_POSTPROCESS_ROOT}/{postprocess_name}",
+        ],
+        *parts,
+    )
 
 
 def get_processing_root(
@@ -48,8 +63,7 @@ def get_postprocess_root(
     *,
     create: bool = False,
 ) -> h5py.Group | None:
-    if ANGIOEYE_POSTPROCESS_ROOT in h5file:
-        group = h5file[ANGIOEYE_POSTPROCESS_ROOT]
+    if group := h5file.get(ANGIOEYE_POSTPROCESS_ROOT, None):
         return group if isinstance(group, h5py.Group) else None
     if create:
         return h5file.require_group(ANGIOEYE_POSTPROCESS_ROOT)
@@ -58,16 +72,19 @@ def get_postprocess_root(
 
 def find_pipeline_group(h5file: h5py.File, pipeline_name: str) -> h5py.Group | None:
     processing_root = get_processing_root(h5file)
-    if processing_root is None:
-        return None
+    if processing_root is not None:
+        by_attr = find_child_group_by_attr(processing_root, "pipeline", pipeline_name)
+        if by_attr is not None:
+            return by_attr
 
-    by_attr = find_child_group_by_attr(processing_root, "pipeline", pipeline_name)
-    if by_attr is not None:
-        return by_attr
+        safe_name = safe_h5_key(pipeline_name)
+        for key in (safe_name, pipeline_name):
+            child = processing_root.get(key)
+            if isinstance(child, h5py.Group):
+                return child
 
-    safe_name = safe_h5_key(pipeline_name)
-    for key in (safe_name, pipeline_name):
-        child = processing_root.get(key)
+    for candidate in pipeline_path_candidates(pipeline_name):
+        child = h5file.get(candidate)
         if isinstance(child, h5py.Group):
             return child
     return None
@@ -78,16 +95,23 @@ def find_postprocess_group(
     postprocess_name: str,
 ) -> h5py.Group | None:
     postprocess_root = get_postprocess_root(h5file)
-    if postprocess_root is None:
-        return None
+    if postprocess_root is not None:
+        by_attr = find_child_group_by_attr(
+            postprocess_root,
+            "pipeline",
+            postprocess_name,
+        )
+        if by_attr is not None:
+            return by_attr
 
-    by_attr = find_child_group_by_attr(postprocess_root, "pipeline", postprocess_name)
-    if by_attr is not None:
-        return by_attr
+        safe_name = safe_h5_key(postprocess_name)
+        for key in (safe_name, postprocess_name):
+            child = postprocess_root.get(key)
+            if isinstance(child, h5py.Group):
+                return child
 
-    safe_name = safe_h5_key(postprocess_name)
-    for key in (safe_name, postprocess_name):
-        child = postprocess_root.get(key)
+    for candidate in postprocess_path_candidates(postprocess_name):
+        child = h5file.get(candidate)
         if isinstance(child, h5py.Group):
             return child
     return None

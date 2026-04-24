@@ -17,7 +17,7 @@ from tkinter import Tk, filedialog
 import html
 import base64
 
-PIPELINE_ROOT = "/AngioEye/waveform_shape_metrics"
+PIPELINE_ROOT = "/AngioEye/Processing/waveform_shape_metrics"
 VALID_METRIC_FOLDERS = ["raw", "bandlimited"]
 VALID_VESSELS = ["artery", "vein"]
 
