@@ -1,8 +1,6 @@
 import os
 import re
 import shutil
-import tempfile
-import zipfile
 from collections import defaultdict
 from tkinter import Tk, filedialog
 
@@ -14,14 +12,26 @@ import plotly.express as px
 import plotly.graph_objects as go
 from matplotlib import gridspec
 from matplotlib.ticker import FormatStrFormatter
+from angioeye_io.hdf5_io import find_first_existing_path, read_array
+from angioeye_io.hdf5_schema import pipeline_path_candidates
+from angioeye_io.archive_io import (
+    extracted_zip_tree,
+    replace_file_in_zip,
+    replace_folder_in_zip,
+)
+from .grouped_batch import (
+    build_group_order,
+    build_grouped_h5_index,
+    find_control_group_name,
+    iter_grouped_h5_files_in_zip,
+)
 
-PIPELINE_ROOT = "/AngioEye/waveform_shape_metrics"
+WAVEFORM_SHAPE_METRICS_PIPELINE = "waveform_shape_metrics"
 VALID_METRIC_FOLDERS = ["raw", "bandlimited"]
 VALID_VESSELS = ["artery", "vein"]
-PIPELINE_BASE_CANDIDATES_WINDKESSEL = [
-    "/AngioEye/windkessel_rc/bandlimited",
-    "/AngioEye/Windkessel_RC/bandlimited",
-]
+PIPELINE_BASE_CANDIDATES_WINDKESSEL = pipeline_path_candidates(
+    "Windkessel_RC", "bandlimited"
+)
 
 METHODS_WINDKESSEL = ["arx", "freq", "time_integral"]
 METRICS_WINDKESSEL = ["tau", "Deltat"]
@@ -32,11 +42,6 @@ METHOD_MARKERS_WINDKESSEL = {
     "freq": "o",
     "time_integral": "^",
 }
-
-
-def extract_group_name(root: str, tmpdir: str) -> str:
-    return "all" if root == tmpdir else os.path.basename(root)
-
 
 def _run_optional_eps_export(export_func, output_dir: str) -> bool:
     try:
@@ -53,71 +58,28 @@ def _run_optional_eps_export(export_func, output_dir: str) -> bool:
         return False
     return True
 
-
-def iter_h5_files_in_zip(zip_path):
-    """
-    Itère sur tous les fichiers .h5 d'un zip.
-    Yield: (tmpdir, root, group_name, filename, fullpath)
-    """
-    with tempfile.TemporaryDirectory() as tmpdir:
-        with zipfile.ZipFile(zip_path, "r") as z:
-            z.extractall(tmpdir)
-
-        for root, _, files in os.walk(tmpdir):
-            h5_files = sorted(f for f in files if f.endswith(".h5"))
-            if not h5_files:
-                continue
-
-            group_name = extract_group_name(root, tmpdir)
-
-            for file in h5_files:
-                yield tmpdir, root, group_name, file, os.path.join(root, file)
+def get_metrics_base_candidates(vessel: str) -> list[str]:
+    return pipeline_path_candidates(WAVEFORM_SHAPE_METRICS_PIPELINE, vessel, "global")
 
 
-def build_group_order(groups):
-    groups = sorted(groups)
-    control_name = find_control_group_name(groups)
-    if control_name in groups:
-        groups = [g for g in groups if g != control_name] + [control_name]
-    return groups
-
-
-def find_existing_base_path(h5file, candidates):
-    for base in candidates:
-        if base in h5file:
-            return base
-    return None
-
-
-def read_dataset_safe(h5file, path):
-    if path not in h5file:
-        return None
-    arr = np.asarray(h5file[path], dtype=float)
-    if arr.shape == ():
-        return np.array([float(arr)], dtype=float)
-    return np.ravel(arr).astype(float)
-
-
-def get_metrics_base_path(vessel: str) -> str:
-    return f"{PIPELINE_ROOT}/{vessel}/global"
-
-
-def get_mode_path(vessel: str, mode: str) -> str:
-    return f"{PIPELINE_ROOT}/{vessel}/global/{mode}"
+def get_mode_path_candidates(vessel: str, mode: str) -> list[str]:
+    return pipeline_path_candidates(
+        WAVEFORM_SHAPE_METRICS_PIPELINE, vessel, "global", mode
+    )
 
 
 def extract_windkessel_rows_from_h5(h5_path, group_name):
     rows = []
 
     with h5py.File(h5_path, "r") as f:
-        base = find_existing_base_path(f, PIPELINE_BASE_CANDIDATES_WINDKESSEL)
+        base = find_first_existing_path(f, PIPELINE_BASE_CANDIDATES_WINDKESSEL)
         if base is None:
             return rows
 
         for method in METHODS_WINDKESSEL:
             for metric in METRICS_WINDKESSEL:
                 dataset_path = f"{base}/{method}/{metric}"
-                values = read_dataset_safe(f, dataset_path)
+                values = read_array(f, dataset_path, dtype=float)
                 if values is None:
                     continue
 
@@ -232,10 +194,13 @@ LATEX_FORMULAS = {
 
 
 def extract_graphics_support(h5_path, vessel="artery", mode="bandlimited"):
-    base = get_mode_path(vessel, mode)
+    base_candidates = get_mode_path_candidates(vessel, mode)
     out = {}
 
     with h5py.File(h5_path, "r") as f:
+        base = find_first_existing_path(f, base_candidates)
+        if base is None:
+            return None
         if base not in f:
             return None
 
@@ -250,11 +215,16 @@ def extract_graphics_support(h5_path, vessel="artery", mode="bandlimited"):
 def analyze_zip_windkessel(zip_path):
     rows = []
 
-    for _, _, group_name, _, h5_path in iter_h5_files_in_zip(zip_path):
+    for grouped_file in iter_grouped_h5_files_in_zip(zip_path):
         try:
-            rows.extend(extract_windkessel_rows_from_h5(h5_path, group_name))
+            rows.extend(
+                extract_windkessel_rows_from_h5(
+                    grouped_file.file_path,
+                    grouped_file.group_name,
+                )
+            )
         except Exception as e:
-            print(f"Erreur avec {h5_path}: {e}")
+            print(f"Erreur avec {grouped_file.file_path}: {e}")
 
     return pd.DataFrame(rows)
 
@@ -531,44 +501,30 @@ def circular_std(angles):
 def compute_group_delta_phi_stats(zip_path, vessel="artery", mode="bandlimited"):
     group_values = defaultdict(lambda: defaultdict(list))
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        with zipfile.ZipFile(zip_path, "r") as z:
-            z.extractall(tmpdir)
-
-        for root, _, files in os.walk(tmpdir):
-            h5_files = [f for f in files if f.endswith(".h5")]
-            if not h5_files:
+    for grouped_file in iter_grouped_h5_files_in_zip(zip_path):
+        try:
+            support = extract_graphics_support(
+                grouped_file.file_path, vessel=vessel, mode=mode
+            )
+            if not support:
                 continue
 
-            group_name = os.path.basename(root)
-            if root == tmpdir:
-                group_name = "all"
+            dphi = np.asarray(support.get("delta_phi_all", []), dtype=float)
 
-            for file in h5_files:
-                h5_path = os.path.join(root, file)
-                try:
-                    support = extract_graphics_support(
-                        h5_path, vessel=vessel, mode=mode
-                    )
-                    if not support:
-                        continue
+            if dphi.ndim == 2:
+                for beat_idx in range(dphi.shape[0]):
+                    row = dphi[beat_idx]
+                    for h, val in enumerate(row, start=2):
+                        if np.isfinite(val):
+                            group_values[grouped_file.group_name][h].append(val)
 
-                    dphi = np.asarray(support.get("delta_phi_all", []), dtype=float)
+            elif dphi.ndim == 1:
+                for h, val in enumerate(dphi, start=2):
+                    if np.isfinite(val):
+                        group_values[grouped_file.group_name][h].append(val)
 
-                    if dphi.ndim == 2:
-                        for beat_idx in range(dphi.shape[0]):
-                            row = dphi[beat_idx]
-                            for h, val in enumerate(row, start=2):
-                                if np.isfinite(val):
-                                    group_values[group_name][h].append(val)
-
-                    elif dphi.ndim == 1:
-                        for h, val in enumerate(dphi, start=2):
-                            if np.isfinite(val):
-                                group_values[group_name][h].append(val)
-
-                except Exception:
-                    continue
+        except Exception:
+            continue
 
     group_stats = {}
     for group, harmonics_dict in group_values.items():
@@ -674,17 +630,6 @@ def build_group_signal_figure(group_name, data):
     )
 
     return fig
-
-
-def find_control_group_name(groups):
-    # cherche "control", "controls", "ctrl" etc.
-    for g in groups:
-        if g is None:
-            continue
-        gl = str(g).lower()
-        if "control" in gl or gl in {"ctrl", "ctl", "controls"}:
-            return g
-    return None
 
 
 def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
@@ -1894,11 +1839,8 @@ def export_selected_metric_pngs_bandlimited(
 ):
     os.makedirs(out_dir, exist_ok=True)
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        with zipfile.ZipFile(zip_path, "r") as z:
-            z.extractall(tmpdir)
-
-        h5_index = build_h5_path_index_from_extracted_tree(tmpdir)
+    with extracted_zip_tree(zip_path) as extracted_root:
+        h5_index = build_grouped_h5_index(extracted_root)
 
         for vessel in VALID_VESSELS:
             if "bandlimited" not in all_results:
@@ -2094,67 +2036,17 @@ def export_selected_metric_pngs_bandlimited(
                 plt.close(fig)
 
 
-def replace_folder_in_zip(zip_path: str, folder_path: str, arc_folder: str):
-    """
-    Remplace complètement un dossier dans un zip.
-    Supprime toute ancienne version de arc_folder/ puis ajoute folder_path.
-    """
-    temp_zip = zip_path + ".tmp"
-
-    with zipfile.ZipFile(zip_path, "r") as zin:
-        with zipfile.ZipFile(temp_zip, "w", compression=zipfile.ZIP_DEFLATED) as zout:
-            for item in zin.infolist():
-                if not item.filename.startswith(arc_folder + "/"):
-                    buffer = zin.read(item.filename)
-                    zout.writestr(item, buffer)
-
-            for root, _, files in os.walk(folder_path):
-                for fn in files:
-                    fullpath = os.path.join(root, fn)
-                    rel = os.path.relpath(fullpath, folder_path)
-                    arcname = os.path.join(arc_folder, rel).replace("\\", "/")
-                    zout.write(fullpath, arcname)
-
-    os.replace(temp_zip, zip_path)
-
-
 def choose_zip():
     root = Tk()
     root.withdraw()
     return filedialog.askopenfilename(filetypes=[("ZIP", "*.zip")])
 
 
-def replace_file_in_zip(zip_path, file_to_add):
-
-    temp_zip = zip_path + ".tmp"
-
-    with zipfile.ZipFile(zip_path, "r") as zin:
-        with zipfile.ZipFile(temp_zip, "w") as zout:
-            for item in zin.infolist():
-                if item.filename != os.path.basename(file_to_add):
-                    buffer = zin.read(item.filename)
-                    zout.writestr(item, buffer)
-
-            zout.write(file_to_add)
-
-    os.replace(temp_zip, zip_path)
-
-
 def load_first_m0_image(zip_path):
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        with zipfile.ZipFile(zip_path, "r") as z:
-            z.extractall(tmpdir)
-
-        for root, _, files in os.walk(tmpdir):
-            for f in sorted(files):
-                if f.endswith(".h5"):
-                    h5_path = os.path.join(root, f)
-
-                    with h5py.File(h5_path, "r") as h5:
-                        img = h5["/Maps/M0_ff_img/value"][()]
-
-                    return img
+    for grouped_file in iter_grouped_h5_files_in_zip(zip_path):
+        with h5py.File(grouped_file.file_path, "r") as h5:
+            img = h5["/Maps/M0_ff_img/value"][()]
+        return img
 
     return None
 
@@ -2226,9 +2118,11 @@ def extract_metrics(h5_path):
 
     with h5py.File(h5_path, "r") as f:
         for vessel in VALID_VESSELS:
-            metrics_root_path = get_metrics_base_path(vessel)
+            metrics_root_path = find_first_existing_path(
+                f, get_metrics_base_candidates(vessel)
+            )
 
-            if metrics_root_path not in f:
+            if metrics_root_path is None or metrics_root_path not in f:
                 continue
 
             metrics_root = f[metrics_root_path]
@@ -2272,59 +2166,31 @@ def select_representative_file_per_group(df_metric: pd.DataFrame, value_col="mea
 
 
 def build_h5_path_index_from_extracted_tree(tmpdir: str):
-    """
-    Construit un index: {group_name -> {filename -> fullpath}}
-    group_name = nom du dossier parent (comme dans analyze_zip)
-    """
-    index = defaultdict(dict)
-    for root, _, files in os.walk(tmpdir):
-        h5_files = [f for f in files if f.endswith(".h5")]
-        if not h5_files:
-            continue
-        group_name = os.path.basename(root)
-        if root == tmpdir:
-            group_name = "all"
-        for f in h5_files:
-            index[group_name][f] = os.path.join(root, f)
-    return index
+    """Build an index {group_name -> {filename -> fullpath}} for an extracted tree."""
+    return build_grouped_h5_index(tmpdir)
 
 
 def analyze_zip(zip_path):
     all_results = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
     detected_groups = set()
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        with zipfile.ZipFile(zip_path, "r") as z:
-            z.extractall(tmpdir)
+    for grouped_file in iter_grouped_h5_files_in_zip(zip_path):
+        detected_groups.add(grouped_file.group_name)
+        metrics = extract_metrics(grouped_file.file_path)
 
-        for root, _, files in os.walk(tmpdir):
-            h5_files = sorted(f for f in files if f.endswith(".h5"))
-            if not h5_files:
-                continue
-
-            group_name = os.path.basename(root)
-            if root == tmpdir:
-                group_name = "all"
-
-            detected_groups.add(group_name)
-
-            for file in h5_files:
-                filepath = os.path.join(root, file)
-                metrics = extract_metrics(filepath)
-
-                for mode, vessel_dict in metrics.items():
-                    for vessel, metric_dict in vessel_dict.items():
-                        for metric_name, values in metric_dict.items():
-                            all_results[mode][vessel][metric_name].append(
-                                {
-                                    "file": file,
-                                    "group": group_name,
-                                    "mean": values["mean"],
-                                    "std": values["std"],
-                                    "latex_formula": values.get("latex_formula", ""),
-                                    "vessel": vessel,
-                                }
-                            )
+        for mode, vessel_dict in metrics.items():
+            for vessel, metric_dict in vessel_dict.items():
+                for metric_name, values in metric_dict.items():
+                    all_results[mode][vessel][metric_name].append(
+                        {
+                            "file": grouped_file.file_name,
+                            "group": grouped_file.group_name,
+                            "mean": values["mean"],
+                            "std": values["std"],
+                            "latex_formula": values.get("latex_formula", ""),
+                            "vessel": vessel,
+                        }
+                    )
 
     single_group = len(detected_groups) <= 1
     return dict(all_results), single_group
@@ -2472,33 +2338,18 @@ def extract_mean_support_per_file(h5_path, vessel="artery", mode="bandlimited"):
 def compute_group_mean_signals(zip_path, vessel="artery", mode="bandlimited"):
     group_signals = defaultdict(list)
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        with zipfile.ZipFile(zip_path, "r") as z:
-            z.extractall(tmpdir)
+    for grouped_file in iter_grouped_h5_files_in_zip(zip_path):
+        support_mean = extract_mean_support_per_file(
+            grouped_file.file_path, vessel=vessel, mode=mode
+        )
+        if support_mean is None or "signal_mean" not in support_mean:
+            continue
 
-        for root, _, files in os.walk(tmpdir):
-            h5_files = [f for f in files if f.endswith(".h5")]
-            if not h5_files:
-                continue
+        signal = np.asarray(support_mean["signal_mean"], dtype=float)
+        if signal.ndim != 1 or signal.size == 0:
+            continue
 
-            group_name = os.path.basename(root)
-            if root == tmpdir:
-                group_name = "all"
-
-            for file in h5_files:
-                h5_path = os.path.join(root, file)
-
-                support_mean = extract_mean_support_per_file(
-                    h5_path, vessel=vessel, mode=mode
-                )
-                if support_mean is None or "signal_mean" not in support_mean:
-                    continue
-
-                signal = np.asarray(support_mean["signal_mean"], dtype=float)
-                if signal.ndim != 1 or signal.size == 0:
-                    continue
-
-                group_signals[group_name].append(signal)
+        group_signals[grouped_file.group_name].append(signal)
 
     group_curves = {}
     for group, signals in group_signals.items():
@@ -2574,8 +2425,13 @@ def build_comparison_signal_figure(group_curves):
     return fig
 
 
-def save_dashboard(all_results, original_zip, single_group):
-    dashboard_file = "metric_dashboard.html"
+def save_dashboard(
+    all_results,
+    original_zip,
+    single_group,
+    dashboard_file="metric_dashboard.html",
+):
+    dashboard_file = str(dashboard_file)
 
     with open(dashboard_file, "w", encoding="utf-8") as f:
         f.write(
