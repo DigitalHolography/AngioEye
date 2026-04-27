@@ -15,19 +15,17 @@ ArrayLike = np.ndarray
 
 R0 = 50.0
 Nu = 3.0e-6
+v_meas: ArrayLike = np.array([])  # Placeholder for measured velocity data
 
 
 def _apply_geometric_correction(
     model_profile: ArrayLike,
-    radial_grid: RadialGrid | None,
-    lateral_grid: LateralGrid | None,
+    R0: float,
     harmonic_order: int = 1,
 ) -> ArrayLike:
     model_profile = np.asarray(model_profile)
-    if radial_grid is None or lateral_grid is None:
-        return model_profile
-    if radial_grid.centers.size != model_profile.size:
-        return model_profile
+    radial_grid = RadialGrid.uniform(R0=R0, n_samples=model_profile.size)
+    lateral_grid = LateralGrid.uniform(n_meas=v_meas.size)
 
     profile = HarmonicRadialProfile(
         harmonic_order=harmonic_order,
@@ -37,17 +35,8 @@ def _apply_geometric_correction(
     return np.asarray(project_harmonic_profile(profile, lateral_grid))
 
 
-def _coerce_weight_vector(weights, size: int) -> ArrayLike:
-    if weights is None:
-        return np.ones(size, dtype=float)
-
-    weights = np.asarray(weights, dtype=float)
-    if weights.ndim == 2:
-        weights = np.diag(weights)
-    if weights.ndim != 1 or weights.size != size:
-        raise ValueError(
-            f"Weights must be a vector of length {size}, got shape {weights.shape}."
-        )
+def _diagonal_weighting_operator(weights) -> ArrayLike:
+    weights = np.diag(weights)
     return weights
 
 
@@ -62,11 +51,11 @@ def _unpack_complex_coefficients(p) -> tuple[complex, complex]:
 
 def _stack_complex_residual(residual: ArrayLike) -> ArrayLike:
     residual = np.asarray(residual, dtype=complex)
-    return np.concatenate((residual.real, residual.imag))
+    return np.concatenate((np.real(residual), np.imag(residual)))
 
 
-def get_alpha_n(omega_n: float, R0: float = R0, nu: float = Nu) -> float:
-    return float(R0) * np.sqrt(float(omega_n) / float(nu))
+def get_alpha_n(omega_n: float, R0: float = R0, Nu: float = Nu) -> float:
+    return float(R0) * np.sqrt(float(omega_n) / float(Nu))
 
 
 def model_harmonic_profile(
@@ -75,13 +64,11 @@ def model_harmonic_profile(
     Cn,
     Dn,
     psf_kernel=None,
-    radial_grid: RadialGrid | None = None,
-    lateral_grid: LateralGrid | None = None,
     harmonic_order: int = 1,
     R0: float = R0,
-    nu: float = Nu,
+    Nu: float = Nu,
 ) -> ArrayLike:
-    alpha_n = get_alpha_n(omega_n=omega_n, R0=R0, nu=nu)
+    alpha_n = get_alpha_n(omega_n=omega_n, R0=R0, Nu=Nu)
     model_profile = generate_womersley_profile(
         r=r,
         Cn=Cn,
@@ -90,10 +77,10 @@ def model_harmonic_profile(
         R0=R0,
         psf_kernel=psf_kernel,
     )
+
     return _apply_geometric_correction(
         model_profile=model_profile,
-        radial_grid=radial_grid,
-        lateral_grid=lateral_grid,
+        R0=R0,
         harmonic_order=harmonic_order,
     )
 
@@ -105,41 +92,32 @@ def costFun(
     omega_n,
     psf_kernel=None,
     weights=None,
-    radial_grid: RadialGrid | None = None,
-    lateral_grid: LateralGrid | None = None,
     harmonic_order: int = 1,
     R0: float = R0,
-    nu: float = Nu,
+    Nu: float = Nu,
 ) -> ArrayLike:
     """
-    Weighted complex residual for fixed R0, nu, and psf_kernel.
+    Weighted complex residual for fixed R0, Nu, and psf_kernel.
 
     The optimization variables are the real and imaginary parts of Cn and Dn.
     """
 
     Cn, Dn = _unpack_complex_coefficients(p)
-    modeled = model_harmonic_profile(
+    v_modeled = model_harmonic_profile(
         r=r,
         omega_n=omega_n,
         Cn=Cn,
         Dn=Dn,
         psf_kernel=psf_kernel,
-        radial_grid=radial_grid,
-        lateral_grid=lateral_grid,
         harmonic_order=harmonic_order,
         R0=R0,
-        nu=nu,
+        Nu=Nu,
     )
 
     v_meas = np.asarray(v_meas, dtype=complex)
-    if modeled.shape != v_meas.shape:
-        raise ValueError(
-            "Modeled profile and measured harmonic must have the same shape, "
-            f"got {modeled.shape} and {v_meas.shape}."
-        )
 
-    sqrt_weight = np.sqrt(_coerce_weight_vector(weights, v_meas.size))
-    residual = sqrt_weight * (v_meas - modeled)
+    sqrt_weight = np.sqrt(_diagonal_weighting_operator(weights))
+    residual = sqrt_weight * (v_meas - v_modeled)
     return _stack_complex_residual(residual)
 
 
@@ -149,17 +127,15 @@ def fit_Cn_Dn_least_squares(
     omega_n,
     psf_kernel=None,
     weights=None,
-    radial_grid: RadialGrid | None = None,
-    lateral_grid: LateralGrid | None = None,
     harmonic_order: int = 1,
     p0=None,
     bounds=(-np.inf, np.inf),
     R0: float = R0,
-    nu: float = Nu,
+    Nu: float = Nu,
     **least_squares_kwargs,
 ):
     """
-    Fit complex coefficients Cn and Dn with fixed R0, nu, and psf_kernel.
+    Fit complex coefficients Cn and Dn with fixed R0, Nu, and psf_kernel.
     """
 
     if p0 is None:
@@ -175,40 +151,36 @@ def fit_Cn_Dn_least_squares(
             omega_n,
             psf_kernel,
             weights,
-            radial_grid,
-            lateral_grid,
             harmonic_order,
             R0,
-            nu,
+            Nu,
         ),
         **least_squares_kwargs,
     )
 
     Cn_fit, Dn_fit = _unpack_complex_coefficients(result.x)
-    modeled = model_harmonic_profile(
+    v_modeled = model_harmonic_profile(
         r=r,
         omega_n=omega_n,
         Cn=Cn_fit,
         Dn=Dn_fit,
         psf_kernel=psf_kernel,
-        radial_grid=radial_grid,
-        lateral_grid=lateral_grid,
         harmonic_order=harmonic_order,
         R0=R0,
-        nu=nu,
+        Nu=Nu,
     )
     v_meas = np.asarray(v_meas, dtype=complex)
-    residual = v_meas - modeled
-    weighted_residual = np.sqrt(_coerce_weight_vector(weights, v_meas.size)) * residual
+    residual = v_meas - v_modeled
+    weighted_residual = np.sqrt(_diagonal_weighting_operator(weights)) * residual
 
     return {
         "result": result,
         "Cn_fit": Cn_fit,
         "Dn_fit": Dn_fit,
-        "ALPHA_N": get_alpha_n(omega_n=omega_n, R0=R0, nu=nu),
+        "ALPHA_N": get_alpha_n(omega_n=omega_n, R0=R0, Nu=Nu),
         "R0": float(R0),
-        "nu": float(nu),
-        "modeled_profile": modeled,
+        "Nu": float(Nu),
+        "modeled_profile": v_modeled,
         "residual": residual,
         "weighted_residual": weighted_residual,
         "residual_magnitude_rms": float(

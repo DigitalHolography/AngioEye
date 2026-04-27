@@ -58,6 +58,12 @@ class LateralGrid:
         positions = np.asarray(self.positions, dtype=float)
         object.__setattr__(self, "positions", positions)
 
+    @classmethod
+    def uniform(cls, n_meas: int) -> LateralGrid:
+        n_meas = int(n_meas)
+        positions = np.arange(n_meas, dtype=int)
+        return cls(positions=positions)
+
 
 @dataclass(frozen=True)
 class HarmonicRadialProfile:
