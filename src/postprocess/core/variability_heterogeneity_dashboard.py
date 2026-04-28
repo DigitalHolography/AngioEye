@@ -9,6 +9,9 @@ import pandas as pd
 from angioeye_io.hdf5_io import find_first_existing_path
 from angioeye_io.archive_io import replace_folder_in_zip
 from .grouped_batch import iter_grouped_h5_files_in_zip
+from angioeye_io.archive_io import extract_folder_from_zip, temporary_zip_from_tree
+from angioeye_io.hdf5_io import MetricsTree, append_metrics_trees_to_h5, read_dataset
+from angioeye_io.hdf5_schema import ANGIOEYE_POSTPROCESS_ROOT, find_pipeline_group
 
 SEGMENT_METRIC_FOLDER = "/AngioEye/Processing/waveform_shape_metrics/artery/by_segment/"
 SEGMENT_MODE = "bandlimited_segment"
@@ -148,7 +151,6 @@ def extract_segment_metric(h5_path, metric_name, mode=SEGMENT_MODE):
 
     return arr
 
-
 def iqr_1d(x):
     x = np.asarray(x, dtype=float)
     x = x[np.isfinite(x)]
@@ -273,6 +275,35 @@ def compute_file_higher_metrics_from_segment_array(arr, eps=EPS):
         ),
     }
 
+def write_variability_tree(file_path):
+        metrics = {}
+
+        for metric_name in INPUT_METRICS:
+            arr = extract_segment_metric(file_path, metric_name)
+
+            if arr is None:
+                continue
+
+            high = compute_file_higher_metrics_from_segment_array(arr)
+
+            if high is None:
+                continue
+
+            for high_name, value in high.items():
+                key = f"{high_name}/{metric_name}"
+                metrics[key] = np.asarray(value, dtype=float)
+
+        if not metrics:
+            return None
+
+        return MetricsTree(
+            name="Variability",
+            metrics=metrics,
+            attrs={
+                "kind": "postprocess",
+                "source": "segment_metrics",
+            },
+        )
 
 def analyze_zip(zip_path, metrics=INPUT_METRICS, mode=SEGMENT_MODE):
     """
@@ -290,9 +321,10 @@ def analyze_zip(zip_path, metrics=INPUT_METRICS, mode=SEGMENT_MODE):
                 continue
 
             high = compute_file_higher_metrics_from_segment_array(arr, eps=EPS)
+            
             if high is None:
                 continue
-
+            
             for high_name, value in high.items():
                 results[grouped_file.group_name][metric_name][high_name].append(value)
 

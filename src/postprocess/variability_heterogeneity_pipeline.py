@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from angioeye_io.archive_io import extract_folder_from_zip, temporary_zip_from_tree
+from angioeye_io.hdf5_io import MetricsTree, append_metrics_trees_to_h5, read_dataset
+from angioeye_io.hdf5_schema import ANGIOEYE_POSTPROCESS_ROOT, find_pipeline_group
 
 from .core.base import (
     BatchPostprocess,
@@ -19,7 +21,9 @@ from .core.base import (
     required_deps=["pandas>=2.1"],
     required_pipelines=["waveform_shape_metrics"],
 )
-class GraphicsDashboardPostprocess(BatchPostprocess):
+class VariabilityHeterogeneityPostprocess(BatchPostprocess):
+
+
     def run(self, context: PostprocessContext) -> PostprocessResult:
         if not context.processed_files:
             raise ValueError(
@@ -32,11 +36,24 @@ class GraphicsDashboardPostprocess(BatchPostprocess):
 
         from .core import variability_heterogeneity_dashboard
 
+        for file_path in context.processed_files:
+            tree = variability_heterogeneity_dashboard.write_variability_tree(file_path)
+
+            if tree is None:
+                continue
+
+            append_metrics_trees_to_h5(
+                file_path,
+                ANGIOEYE_POSTPROCESS_ROOT,
+                [tree],
+                overwrite=True,
+            )
+
         with temporary_zip_from_tree(
             output_dir,
             source_paths=context.processed_files,
         ) as temp_zip:
-            results = variability_heterogeneity_dashboard.analyze_zip(
+            results, metrics = variability_heterogeneity_dashboard.analyze_zip(
                 str(temp_zip),
                 mode="bandlimited_segment",
             )
