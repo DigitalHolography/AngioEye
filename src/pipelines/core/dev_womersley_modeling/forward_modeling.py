@@ -9,13 +9,19 @@ from .geometric_correction import (
     RadialGrid,
     project_harmonic_profile,
 )
-from .womersley_quantities import generate_womersley_profile
+from .womersley_quantities import generate_womersley_profile, womersley_flow_gain
 
 ArrayLike = np.ndarray
 
-R0 = 50.0
-Nu = 3.0e-6
+R0 = 0.5  # Placeholder for vessel radius in mm
+Nu = 3.0e-6  # Placeholder for kinematic viscosity in mm^2/s
 v_meas: ArrayLike = np.array([])  # Placeholder for measured velocity data
+omega_n = (
+    2.0 * np.pi * 1.0
+)  # Placeholder for angular frequency of the harmonic component
+weights: ArrayLike = np.ones_like(v_meas)  # Placeholder for measurement weights
+r = np.linspace(0, R0, num=100)  # Radial grid for modeling
+psf_kernel: ArrayLike | None = None  # Placeholder for point spread function kernel
 
 
 def _apply_geometric_correction(
@@ -178,6 +184,7 @@ def fit_Cn_Dn_least_squares(
         "Cn_fit": Cn_fit,
         "Dn_fit": Dn_fit,
         "ALPHA_N": get_alpha_n(omega_n=omega_n, R0=R0, Nu=Nu),
+        "Kn": womersley_flow_gain(get_alpha_n(omega_n=omega_n, R0=R0, Nu=Nu)),
         "R0": float(R0),
         "Nu": float(Nu),
         "modeled_profile": v_modeled,
