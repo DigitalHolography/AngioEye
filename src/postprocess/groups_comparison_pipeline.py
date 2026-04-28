@@ -52,14 +52,10 @@ class GraphicsDashboardPostprocess(BatchPostprocess):
                 all_results,
                 str(temp_zip),
                 single_group,
-                dashboard_file=temp_root / "metric_dashboard.html",
+                
             )
 
-            dashboard_path = extract_file_from_zip(
-                zip_path=temp_zip,
-                member_name="metric_dashboard.html",
-                output_dir=output_dir,
-            )
+            
             png_paths = extract_folder_from_zip(
                 zip_path=temp_zip,
                 member_prefix="export_png/",
@@ -71,9 +67,9 @@ class GraphicsDashboardPostprocess(BatchPostprocess):
                 output_dir=output_dir,
             )
         created_paths = [
-            str(dashboard_path),
+            
             *[str(path) for path in png_paths],
             *[str(path) for path in eps_paths],
         ]
-        summary = f"Generated dashboard and {len(png_paths)} PNG illustration(s)."
+        summary = f" {len(png_paths)} PNG illustration(s)."
         return PostprocessResult(summary=summary, generated_paths=created_paths)
