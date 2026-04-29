@@ -1697,6 +1697,7 @@ def export_selected_metric_pngs_bandlimited(
                     )
 
                     if g in grp_mean.index:
+                        
                         ax_top.errorbar(
                             [x_pos[g]],
                             [grp_mean.loc[g]],
@@ -1709,7 +1710,8 @@ def export_selected_metric_pngs_bandlimited(
                             markerfacecolor="none",
                             markeredgecolor="red",
                             markeredgewidth=3,
-                        )
+                            )
+                        
 
                 ax_top.set_title(
                     f"{LATEX_FORMULAS.get(metric, metric)} (bandlimited waveform, {vessel})",
