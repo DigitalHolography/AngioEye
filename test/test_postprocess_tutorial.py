@@ -29,6 +29,7 @@ class PostprocessTutorialTests(unittest.TestCase):
                 selected_pipelines=("Basic Stats",),
                 input_path=tmp_path / "input_folder",
                 zip_outputs=False,
+                input_h5_paths=(tmp_path / "input_folder" / "sample.h5",),
             )
 
             result = PostprocessTutorial().run(context)
@@ -55,6 +56,10 @@ class PostprocessTutorialTests(unittest.TestCase):
             self.assertEqual(
                 [str(result_file)],
                 payload["context_fields"]["processed_files"],
+            )
+            self.assertEqual(
+                [str(tmp_path / "input_folder" / "sample.h5")],
+                payload["context_fields"]["input_h5_paths"],
             )
             self.assertEqual(
                 ["Basic Stats"],

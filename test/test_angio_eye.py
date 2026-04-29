@@ -18,6 +18,7 @@ fake_pipelines = types.ModuleType("pipelines")
 fake_pipelines.PipelineDescriptor = object
 fake_pipelines.ProcessResult = object
 fake_pipelines.load_pipeline_catalog = lambda: ([], [])
+fake_pipelines.process_results_to_metric_trees = lambda *args, **kwargs: []
 sys.modules.setdefault("pipelines", fake_pipelines)
 sys.modules.setdefault("pipelines.core", types.ModuleType("pipelines.core"))
 
@@ -25,9 +26,11 @@ fake_pipeline_errors = types.ModuleType("pipelines.core.errors")
 fake_pipeline_errors.format_pipeline_exception = lambda exc, _pipeline: str(exc)
 sys.modules.setdefault("pipelines.core.errors", fake_pipeline_errors)
 
-fake_pipeline_utils = types.ModuleType("pipelines.core.utils")
-fake_pipeline_utils.write_combined_results_h5 = lambda *args, **kwargs: None
-sys.modules.setdefault("pipelines.core.utils", fake_pipeline_utils)
+fake_angioeye_io = types.ModuleType("angioeye_io")
+fake_angioeye_io.ANGIOEYE_PROCESSING_ROOT = "/AngioEye/Processing"
+fake_angioeye_io.create_h5_file = lambda *args, **kwargs: None
+fake_angioeye_io.write_metrics_trees_to_h5 = lambda *args, **kwargs: None
+sys.modules.setdefault("angioeye_io", fake_angioeye_io)
 
 fake_postprocess = types.ModuleType("postprocess")
 fake_postprocess.PostprocessContext = object
@@ -39,10 +42,10 @@ from angio_eye import ProcessApp  # noqa: E402
 
 for _module_name in (
     "h5py",
+    "angioeye_io",
     "pipelines",
     "pipelines.core",
     "pipelines.core.errors",
-    "pipelines.core.utils",
     "postprocess",
 ):
     _module = sys.modules.get(_module_name)
@@ -251,6 +254,49 @@ class BatchZipCleanupTests(unittest.TestCase):
             self.assertEqual(str(input_path), app.batch_input_var.get())
             self.assertEqual([input_path], applied_paths)
             self.assertIn("Drag and drop", logs[0])
+
+
+class MouseWheelBindingTests(unittest.TestCase):
+    def test_mousewheel_scroll_units_handles_delta_and_button_events(self) -> None:
+        self.assertEqual(
+            -1, ProcessApp._mousewheel_scroll_units(SimpleNamespace(delta=120))
+        )
+        self.assertEqual(
+            1, ProcessApp._mousewheel_scroll_units(SimpleNamespace(delta=-120))
+        )
+        self.assertEqual(
+            -2, ProcessApp._mousewheel_scroll_units(SimpleNamespace(delta=240))
+        )
+        self.assertEqual(
+            -1, ProcessApp._mousewheel_scroll_units(SimpleNamespace(delta=1))
+        )
+        self.assertEqual(
+            -1, ProcessApp._mousewheel_scroll_units(SimpleNamespace(delta=0, num=4))
+        )
+        self.assertEqual(
+            1, ProcessApp._mousewheel_scroll_units(SimpleNamespace(delta=0, num=5))
+        )
+
+    def test_bind_vertical_mousewheel_registers_handlers_that_scroll_canvas(self):
+        app = ProcessApp.__new__(ProcessApp)
+        widget = mock.Mock()
+        canvas = mock.Mock()
+
+        ProcessApp._bind_vertical_mousewheel(app, widget, canvas)
+
+        self.assertEqual(
+            ["<MouseWheel>", "<Button-4>", "<Button-5>"],
+            [call.args[0] for call in widget.bind.call_args_list],
+        )
+        self.assertTrue(
+            all(call.kwargs.get("add") == "+" for call in widget.bind.call_args_list)
+        )
+
+        mousewheel_handler = widget.bind.call_args_list[0].args[1]
+        result = mousewheel_handler(SimpleNamespace(delta=-120))
+
+        canvas.yview_scroll.assert_called_once_with(1, "units")
+        self.assertEqual("break", result)
 
 
 if __name__ == "__main__":

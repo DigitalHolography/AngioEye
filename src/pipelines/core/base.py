@@ -1,9 +1,12 @@
 import csv
-import importlib.util
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
 import h5py
+
+from angioeye_io.hdf5_io import MetricsTree
+from dependency_utils import find_missing_dependencies
 
 # Global Registry of all imports needed by the pipelines
 PIPELINE_REGISTRY: dict[str, type["ProcessPipeline"]] = {}
@@ -19,16 +22,7 @@ def registerPipeline(
         cls.description = description or getattr(cls, "description", "")
         cls.requires = required_deps or []
 
-        # Check if requirements are missing in the current environment
-        missing = []
-        for req in cls.requires:
-            # TODO: We should maybe include the version check
-            # RM the version "torch>=2.0" -> "torch"
-            pkg = req.split(">")[0].split("=")[0].split("<")[0].strip()
-
-            if importlib.util.find_spec(pkg) is None:
-                missing.append(pkg)
-
+        missing = find_missing_dependencies(cls.requires)
         cls.missing_deps = missing
         cls.available = len(missing) == 0
 
@@ -57,6 +51,26 @@ class DatasetValue:
 def with_attrs(data: Any, attrs: dict[str, Any]) -> DatasetValue:
     """Convenience helper to attach attributes to a dataset value."""
     return DatasetValue(data=data, attrs=attrs)
+
+
+def process_result_to_metrics_tree(
+    pipeline_name: str,
+    result: "ProcessResult",
+) -> MetricsTree:
+    return MetricsTree(
+        name=pipeline_name,
+        metrics=result.metrics,
+        attrs=result.attrs,
+    )
+
+
+def process_results_to_metric_trees(
+    results: Sequence[tuple[str, "ProcessResult"]],
+) -> list[MetricsTree]:
+    return [
+        process_result_to_metrics_tree(pipeline_name, result)
+        for pipeline_name, result in results
+    ]
 
 
 # +==========================================================================+ #

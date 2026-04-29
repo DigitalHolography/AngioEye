@@ -18,15 +18,18 @@ from app_settings import (  # noqa: E402
 
 
 class AppSettingsTests(unittest.TestCase):
-    def test_default_settings_path_prefers_appdata(self) -> None:
+    def test_default_settings_path_prefers_appdata_and_version(self) -> None:
         with mock.patch.dict(
             "os.environ",
-            {"APPDATA": r"C:\Users\Test\AppData\Roaming"},
+            {
+                "APPDATA": r"C:\Users\Test\AppData\Roaming",
+                "ANGIOEYE_VERSION": "9.9.9",
+            },
             clear=True,
         ):
             self.assertEqual(
                 default_settings_path(),
-                Path(r"C:\Users\Test\AppData\Roaming\AngioEye\settings.json"),
+                Path(r"C:\Users\Test\AppData\Roaming\AngioEye\9.9.9\settings.json"),
             )
 
     def test_normalize_pipeline_visibility_defaults_first_run_to_visible(self) -> None:
@@ -78,6 +81,12 @@ class AppSettingsTests(unittest.TestCase):
             store = AppSettingsStore(Path(tmp_dir) / "settings.json")
 
             self.assertEqual(store.load_ui_mode(), "minimal")
+
+    def test_load_trim_h5source_defaults_to_true(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            store = AppSettingsStore(Path(tmp_dir) / "settings.json")
+
+            self.assertTrue(store.load_trim_h5source())
 
     def test_load_uses_default_template_when_user_settings_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -143,6 +152,14 @@ class AppSettingsTests(unittest.TestCase):
             store.save_ui_mode("advanced")
 
             self.assertEqual(store.load_ui_mode(), "advanced")
+
+    def test_store_round_trips_trim_h5source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            store = AppSettingsStore(Path(tmp_dir) / "settings.json")
+
+            store.save_trim_h5source(False)
+
+            self.assertFalse(store.load_trim_h5source())
 
 
 if __name__ == "__main__":

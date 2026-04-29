@@ -11,9 +11,9 @@ from .core.base import (
 
 
 @registerPostprocess(
-    name="groups comparison stats",
+    name="waveform metric summary tables",
     description=(
-        "Build the cohort HTML dashboard and PNG metric exports from arterial "
+        "Build an HTML report containing a table of waveform metrics and associated visualizations for each HDF5 file."
         "waveform shape metrics."
     ),
     required_deps=["matplotlib>=3.8", "pandas>=2.1", "plotly>=5.18"],
@@ -30,37 +30,29 @@ class GraphicsDashboardPostprocess(BatchPostprocess):
         if not output_dir.exists() or not output_dir.is_dir():
             raise FileNotFoundError(f"Output folder does not exist: {output_dir}")
 
-        from .core import stats_groups_comparison
+        from .core import waveform_metric_summary_tables
 
         with temporary_zip_from_tree(
             output_dir,
             source_paths=context.processed_files,
         ) as temp_zip:
             temp_root = temp_zip.parent
-            all_results = stats_groups_comparison.analyze_zip(str(temp_zip))
+            all_results = waveform_metric_summary_tables.analyze_zip(str(temp_zip))
             if not all_results:
                 raise ValueError(
                     "No compatible pipeline metrics were found for the dashboard."
                 )
-            stats_groups_comparison.save_dashboard(
+            waveform_metric_summary_tables.save_dashboard(
                 str(temp_zip),
-                export_png_dir=temp_root / "export_png",
-                export_eps_dir=temp_root / "export_eps",
+                output_dir=temp_root / "html_metric_tables",
             )
 
-            png_paths = extract_folder_from_zip(
+            table_paths = extract_folder_from_zip(
                 zip_path=temp_zip,
-                member_prefix="export_png/",
+                member_prefix="html_metric_tables/",
                 output_dir=output_dir,
             )
-            eps_paths = extract_folder_from_zip(
-                zip_path=temp_zip,
-                member_prefix="export_eps/",
-                output_dir=output_dir,
-            )
-        created_paths = [
-            *[str(path) for path in png_paths],
-            *[str(path) for path in eps_paths],
-        ]
-        summary = f"Generated {len(png_paths)} PNG illustration(s)."
+
+        created_paths = [*[str(path) for path in table_paths]]
+        summary = f"Generated {len(table_paths)} tables."
         return PostprocessResult(summary=summary, generated_paths=created_paths)

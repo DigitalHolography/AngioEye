@@ -14,7 +14,13 @@ from tkinter import filedialog, messagebox, ttk
 
 import h5py
 
+from angioeye_io import (
+    ANGIOEYE_PROCESSING_ROOT,
+    create_h5_file,
+    write_metrics_trees_to_h5,
+)
 from app_settings import (
+    LAST_BATCH_LOG_FILENAME,
     AppSettingsStore,
     normalize_pipeline_visibility,
     normalize_postprocess_visibility,
@@ -31,9 +37,13 @@ try:
 except ImportError:  #  optional dependency
     sv_ttk = None
 
-from pipelines import PipelineDescriptor, ProcessResult, load_pipeline_catalog
+from pipelines import (
+    PipelineDescriptor,
+    ProcessResult,
+    load_pipeline_catalog,
+    process_results_to_metric_trees,
+)
 from pipelines.core.errors import format_pipeline_exception
-from pipelines.core.utils import write_combined_results_h5
 from postprocess import (
     PostprocessContext,
     PostprocessDescriptor,
@@ -108,6 +118,7 @@ class ProcessApp(_BaseAppTk):
         self.batch_zip_var = tk.BooleanVar(value=False)
         self.batch_zip_name_var = tk.StringVar(value="outputs.zip")
         self.batch_progress_var = tk.DoubleVar(value=0.0)
+        self.minimal_status_var = tk.StringVar(value="Ready.")
         self.pipeline_library_summary_var = tk.StringVar(value="")
         self.postprocess_library_summary_var = tk.StringVar(value="")
         self.minimal_input_path_var = tk.StringVar(value="No input selected")
@@ -115,9 +126,15 @@ class ProcessApp(_BaseAppTk):
         self.minimal_output_name_var = tk.StringVar(value="Output name: -")
         self._progress_total_units = 1.0
         self._progress_completed_units = 0.0
+        self._last_saved_batch_log_path: Path | None = None
+        self._progress_primary_style = "MinimalPrimary.Horizontal.TProgressbar"
+        self._progress_final_style = "MinimalFinal.Horizontal.TProgressbar"
         self._window_icon_image: tk.PhotoImage | None = None
         self._minimal_logo_image: tk.PhotoImage | None = None
         self._minimal_title_font: tkfont.Font | None = None
+        self._trim_h5source = tk.BooleanVar(
+            value=self.settings_store.load_trim_h5source()
+        )
 
         self._set_initial_window_size()
         self._apply_theme()
@@ -134,9 +151,7 @@ class ProcessApp(_BaseAppTk):
         self._apply_ui_mode(self.ui_mode, persist=False)
 
     def _set_initial_window_size(self) -> None:
-        width, height, min_width, min_height = self._window_size_for_mode(
-            self.ui_mode
-        )
+        width, height, min_width, min_height = self._window_size_for_mode(self.ui_mode)
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         width = min(width, screen_width)
@@ -151,6 +166,7 @@ class ProcessApp(_BaseAppTk):
         Apply the Sun Valley ttk theme when available; otherwise fall back to a simple dark palette.
         """
         style = ttk.Style(self)
+        self._style = style
         if sv_ttk:
             try:
                 sv_ttk.set_theme("dark")
@@ -189,6 +205,25 @@ class ProcessApp(_BaseAppTk):
         self._bg_color = bg
         self._surface_color = surface
         self._accent_color = accent
+        self._configure_progress_styles()
+
+    def _configure_progress_styles(self) -> None:
+        progress_colors = {
+            self._progress_primary_style: self._accent_color,
+            self._progress_final_style: "#3fb37f",
+        }
+        for style_name, color in progress_colors.items():
+            try:
+                self._style.configure(
+                    style_name,
+                    troughcolor=self._surface_color,
+                    background=color,
+                    bordercolor=color,
+                    lightcolor=color,
+                    darkcolor=color,
+                )
+            except tk.TclError:
+                self._style.configure(style_name, background=color)
 
     def _build_ui(self) -> None:
         self._build_menu()
@@ -275,9 +310,7 @@ class ProcessApp(_BaseAppTk):
             justify="center",
             wraplength=420,
         )
-        self.minimal_output_path_label.grid(
-            row=5, column=0, pady=(0, 6), sticky="ew"
-        )
+        self.minimal_output_path_label.grid(row=5, column=0, pady=(0, 6), sticky="ew")
         self.minimal_output_name_label = tk.Label(
             content,
             textvariable=self.minimal_output_name_var,
@@ -286,11 +319,11 @@ class ProcessApp(_BaseAppTk):
             justify="center",
             wraplength=420,
         )
-        self.minimal_output_name_label.grid(
-            row=6, column=0, pady=(0, 18), sticky="ew"
-        )
+        self.minimal_output_name_label.grid(row=6, column=0, pady=(0, 18), sticky="ew")
 
-        self.minimal_run_button = ttk.Button(content, text="Run", command=self.run_batch)
+        self.minimal_run_button = ttk.Button(
+            content, text="Run", command=self.run_batch
+        )
         self.minimal_run_button.grid(row=7, column=0, pady=(0, 18))
 
         self.minimal_progress = ttk.Progressbar(
@@ -300,8 +333,18 @@ class ProcessApp(_BaseAppTk):
             maximum=100,
             variable=self.batch_progress_var,
             length=340,
+            style=self._progress_primary_style,
         )
         self.minimal_progress.grid(row=8, column=0, sticky="ew")
+        self.minimal_status_label = tk.Label(
+            content,
+            textvariable=self.minimal_status_var,
+            bg=self._bg_color,
+            fg=self._text_fg,
+            justify="center",
+            wraplength=420,
+        )
+        self.minimal_status_label.grid(row=9, column=0, pady=(8, 0), sticky="ew")
 
     def _get_minimal_title_font(self) -> tkfont.Font:
         if self._minimal_title_font is None:
@@ -363,13 +406,9 @@ class ProcessApp(_BaseAppTk):
             input_btn_frame, text="Browse file/zip", command=self.choose_batch_file
         ).pack(side="left", padx=(4, 0))
 
-        ttk.Label(parent, text="Output").grid(
-            row=1, column=0, sticky="w", pady=(8, 0)
-        )
+        ttk.Label(parent, text="Output").grid(row=1, column=0, sticky="w", pady=(8, 0))
         batch_output_entry = ttk.Entry(parent, textvariable=self.batch_output_var)
-        batch_output_entry.grid(
-            row=1, column=1, sticky="ew", padx=(0, 4), pady=(8, 0)
-        )
+        batch_output_entry.grid(row=1, column=1, sticky="ew", padx=(0, 4), pady=(8, 0))
         ttk.Button(parent, text="Browse", command=self.choose_batch_output).grid(
             row=1, column=2, sticky="w", pady=(8, 0)
         )
@@ -379,11 +418,14 @@ class ProcessApp(_BaseAppTk):
 
         run_btn = ttk.Button(controls, text="Run", command=self.run_batch)
         run_btn.grid(row=0, column=0, sticky="w")
-        ttk.Button(
+
+        trim_h5source_btn = ttk.Checkbutton(
             controls,
-            text="Export BatchLog",
-            command=self._export_batch_log,
-        ).grid(row=0, column=1, sticky="w", padx=(8, 0))
+            text="Trim h5 file(s)",
+            variable=self._trim_h5source,
+            command=self._persist_trim_h5source,
+        )
+        trim_h5source_btn.grid(row=0, column=1, sticky="w", padx=(8, 0))
 
         ttk.Label(parent, text="BatchLog").grid(
             row=3, column=0, sticky="nw", pady=(8, 2)
@@ -483,6 +525,15 @@ class ProcessApp(_BaseAppTk):
                 f"Could not save UI mode preference:\n{exc}",
             )
 
+    def _persist_trim_h5source(self) -> None:
+        try:
+            self.settings_store.save_trim_h5source(self._trim_h5source.get())
+        except OSError as exc:
+            self._show_settings_warning(
+                "Settings not saved",
+                f"Could not save trim preference:\n{exc}",
+            )
+
     def _window_size_for_mode(self, mode: str) -> tuple[int, int, int, int]:
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
@@ -495,7 +546,7 @@ class ProcessApp(_BaseAppTk):
             width = max(560, min(660, screen_width - 260))
             height = max(420, min(520, screen_height - 260))
             min_width = min(500, width)
-            min_height = min(360, height)
+            min_height = min(520, height)
         return width, height, min_width, min_height
 
     def _ensure_window_size_for_mode(
@@ -575,6 +626,7 @@ class ProcessApp(_BaseAppTk):
 
     def _on_close(self) -> None:
         self._persist_ui_mode()
+        self._persist_trim_h5source()
         self.destroy()
 
     def _on_batch_paths_changed(self, *_args) -> None:
@@ -582,10 +634,11 @@ class ProcessApp(_BaseAppTk):
 
     def _handle_dropped_paths(self, dropped_paths: Sequence[Path]) -> bool:
         for dropped_path in dropped_paths:
-            if (
-                dropped_path.is_file()
-                and dropped_path.suffix.lower() in {".h5", ".hdf5", ".zip"}
-            ):
+            if dropped_path.is_file() and dropped_path.suffix.lower() in {
+                ".h5",
+                ".hdf5",
+                ".zip",
+            }:
                 self.batch_input_var.set(str(dropped_path))
                 self._apply_input_defaults(dropped_path)
                 self._log_batch(f"[INPUT] Drag and drop -> {dropped_path}")
@@ -639,16 +692,50 @@ class ProcessApp(_BaseAppTk):
         output_value = (self.batch_output_var.get() or "").strip()
         self.minimal_output_path_var.set(output_value or "No output folder selected")
 
+    def _set_minimal_status(self, text: str) -> None:
+        self.minimal_status_var.set(text)
+        self.update_idletasks()
+
+    def _batch_log_path(self) -> Path:
+        return self.settings_store.path.with_name(LAST_BATCH_LOG_FILENAME)
+
+    def _persist_batch_log_snapshot(self) -> None:
+        log_path = self._batch_log_path()
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_path.write_text(
+                self.batch_output.get("1.0", "end-1c"),
+                encoding="utf-8",
+            )
+        except OSError:
+            self._last_saved_batch_log_path = None
+            return
+        self._last_saved_batch_log_path = log_path
+
+    def _set_progress_style(self, style_name: str) -> None:
+        if hasattr(self, "minimal_progress"):
+            self.minimal_progress.configure(style=style_name)
+
     def _reset_progress(self) -> None:
         self._progress_total_units = 1.0
         self._progress_completed_units = 0.0
+        self._set_progress_style(self._progress_primary_style)
         self.batch_progress_var.set(0.0)
         self.update_idletasks()
 
-    def _start_progress(self, total_units: float) -> None:
+    def _start_progress(
+        self,
+        total_units: float,
+        *,
+        style_name: str | None = None,
+        status_text: str | None = None,
+    ) -> None:
         self._progress_total_units = max(float(total_units), 1.0)
         self._progress_completed_units = 0.0
+        self._set_progress_style(style_name or self._progress_primary_style)
         self.batch_progress_var.set(0.0)
+        if status_text is not None:
+            self._set_minimal_status(status_text)
         self.update_idletasks()
 
     def _set_progress_units(self, completed_units: float) -> None:
@@ -674,6 +761,7 @@ class ProcessApp(_BaseAppTk):
             input_path.is_file() and input_path.suffix.lower() == ".zip"
         )
         self._reset_progress()
+        self._set_minimal_status("Ready.")
 
     def _minimal_output_filename_for_run(
         self,
@@ -761,6 +849,13 @@ class ProcessApp(_BaseAppTk):
                 self.pipeline_library_window, width=evt.width
             ),
         )
+        self._bind_vertical_mousewheel(
+            self.pipeline_library_canvas, self.pipeline_library_canvas
+        )
+        self._bind_vertical_mousewheel(
+            self.pipeline_library_inner, self.pipeline_library_canvas
+        )
+        self._bind_vertical_mousewheel(library_scroll, self.pipeline_library_canvas)
 
     def _build_postprocess_library_tab(self, parent: ttk.Frame) -> None:
         parent.columnconfigure(0, weight=1)
@@ -795,9 +890,9 @@ class ProcessApp(_BaseAppTk):
             text="Open folder",
             command=self.open_postprocess_folder,
         ).grid(row=0, column=3, sticky="w", padx=(4, 0))
-        ttk.Label(
-            controls, textvariable=self.postprocess_library_summary_var
-        ).grid(row=0, column=4, sticky="e")
+        ttk.Label(controls, textvariable=self.postprocess_library_summary_var).grid(
+            row=0, column=4, sticky="e"
+        )
 
         library_container = ttk.Frame(parent)
         library_container.grid(row=2, column=0, sticky="nsew")
@@ -831,6 +926,44 @@ class ProcessApp(_BaseAppTk):
                 self.postprocess_library_window, width=evt.width
             ),
         )
+        self._bind_vertical_mousewheel(
+            self.postprocess_library_canvas, self.postprocess_library_canvas
+        )
+        self._bind_vertical_mousewheel(
+            self.postprocess_library_inner, self.postprocess_library_canvas
+        )
+        self._bind_vertical_mousewheel(library_scroll, self.postprocess_library_canvas)
+
+    def _bind_vertical_mousewheel(self, widget: tk.Misc, canvas: tk.Canvas) -> None:
+        for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            widget.bind(
+                sequence,
+                lambda event, target_canvas=canvas: self._on_vertical_mousewheel(
+                    event, target_canvas
+                ),
+                add="+",
+            )
+
+    @staticmethod
+    def _mousewheel_scroll_units(event: tk.Event) -> int:
+        delta = int(getattr(event, "delta", 0) or 0)
+        if delta:
+            steps = max(1, abs(delta) // 120) if abs(delta) >= 120 else 1
+            return -steps if delta > 0 else steps
+
+        button = getattr(event, "num", None)
+        if button == 4:
+            return -1
+        if button == 5:
+            return 1
+        return 0
+
+    def _on_vertical_mousewheel(self, event: tk.Event, canvas: tk.Canvas) -> str | None:
+        scroll_units = self._mousewheel_scroll_units(event)
+        if not scroll_units:
+            return None
+        canvas.yview_scroll(scroll_units, "units")
+        return "break"
 
     def _register_pipelines(self) -> None:
         available, missing = load_pipeline_catalog()
@@ -901,12 +1034,12 @@ class ProcessApp(_BaseAppTk):
         self.pipeline_visibility_vars = {}
         self.pipeline_library_inner.columnconfigure(0, weight=1)
 
-        ttk.Label(self.pipeline_library_inner, text="Selected").grid(
-            row=0, column=0, sticky="w", pady=(0, 6)
-        )
-        ttk.Label(self.pipeline_library_inner, text="Status").grid(
-            row=0, column=1, sticky="w", padx=(12, 0), pady=(0, 6)
-        )
+        selected_header = ttk.Label(self.pipeline_library_inner, text="Selected")
+        selected_header.grid(row=0, column=0, sticky="w", pady=(0, 6))
+        status_header = ttk.Label(self.pipeline_library_inner, text="Status")
+        status_header.grid(row=0, column=1, sticky="w", padx=(12, 0), pady=(0, 6))
+        self._bind_vertical_mousewheel(selected_header, self.pipeline_library_canvas)
+        self._bind_vertical_mousewheel(status_header, self.pipeline_library_canvas)
 
         for idx, pipeline in enumerate(rows, start=1):
             is_available = getattr(pipeline, "available", True)
@@ -924,10 +1057,12 @@ class ProcessApp(_BaseAppTk):
                 ),
             )
             check.grid(row=idx, column=0, sticky="w", pady=(0, 6))
+            self._bind_vertical_mousewheel(check, self.pipeline_library_canvas)
 
             status_text = self._pipeline_status_text(pipeline)
             status = ttk.Label(self.pipeline_library_inner, text=status_text)
             status.grid(row=idx, column=1, sticky="w", padx=(12, 0), pady=(0, 6))
+            self._bind_vertical_mousewheel(status, self.pipeline_library_canvas)
 
             tip_text = self._descriptor_tooltip_text(pipeline)
             if tip_text:
@@ -938,20 +1073,18 @@ class ProcessApp(_BaseAppTk):
 
         self._update_pipeline_library_summary()
 
-    def _populate_postprocess_library(
-        self, rows: list[PostprocessDescriptor]
-    ) -> None:
+    def _populate_postprocess_library(self, rows: list[PostprocessDescriptor]) -> None:
         for child in self.postprocess_library_inner.winfo_children():
             child.destroy()
         self.postprocess_visibility_vars = {}
         self.postprocess_library_inner.columnconfigure(0, weight=1)
 
-        ttk.Label(self.postprocess_library_inner, text="Selected").grid(
-            row=0, column=0, sticky="w", pady=(0, 6)
-        )
-        ttk.Label(self.postprocess_library_inner, text="Status").grid(
-            row=0, column=1, sticky="w", padx=(12, 0), pady=(0, 6)
-        )
+        selected_header = ttk.Label(self.postprocess_library_inner, text="Selected")
+        selected_header.grid(row=0, column=0, sticky="w", pady=(0, 6))
+        status_header = ttk.Label(self.postprocess_library_inner, text="Status")
+        status_header.grid(row=0, column=1, sticky="w", padx=(12, 0), pady=(0, 6))
+        self._bind_vertical_mousewheel(selected_header, self.postprocess_library_canvas)
+        self._bind_vertical_mousewheel(status_header, self.postprocess_library_canvas)
 
         for idx, postprocess in enumerate(rows, start=1):
             is_available = getattr(postprocess, "available", True)
@@ -969,10 +1102,12 @@ class ProcessApp(_BaseAppTk):
                 ),
             )
             check.grid(row=idx, column=0, sticky="w", pady=(0, 6))
+            self._bind_vertical_mousewheel(check, self.postprocess_library_canvas)
 
             status_text = self._postprocess_status_text(postprocess)
             status = ttk.Label(self.postprocess_library_inner, text=status_text)
             status.grid(row=idx, column=1, sticky="w", padx=(12, 0), pady=(0, 6))
+            self._bind_vertical_mousewheel(status, self.postprocess_library_canvas)
 
             tip_text = self._descriptor_tooltip_text(postprocess)
             if tip_text:
@@ -1087,7 +1222,9 @@ class ProcessApp(_BaseAppTk):
             for pipeline in self.pipeline_rows
             if pipeline.available and self.pipeline_visibility.get(pipeline.name, False)
         )
-        available_count = sum(1 for pipeline in self.pipeline_rows if pipeline.available)
+        available_count = sum(
+            1 for pipeline in self.pipeline_rows if pipeline.available
+        )
         self.pipeline_library_summary_var.set(
             f"Selected: {selected_count}/{available_count}"
         )
@@ -1180,47 +1317,27 @@ class ProcessApp(_BaseAppTk):
         self.batch_output.delete("1.0", "end")
         self.batch_output.insert("end", message)
         self.batch_output.configure(state="disabled")
+        self._persist_batch_log_snapshot()
 
     def _log_batch(self, text: str) -> None:
         self.batch_output.configure(state="normal")
         self.batch_output.insert("end", f"{text}\n")
         self.batch_output.see("end")
         self.batch_output.configure(state="disabled")
+        self._persist_batch_log_snapshot()
         self.batch_output.update_idletasks()
         self.update_idletasks()
 
-    def _export_batch_log(self, initial_dir: Path | None = None) -> Path | None:
-        if initial_dir is None:
-            initial_dir = Path(self.batch_output_var.get() or Path.cwd())
-        if not initial_dir.exists():
-            initial_dir = Path.cwd()
-        path = filedialog.asksaveasfilename(
-            defaultextension=".txt",
-            filetypes=[("Text file", "*.txt"), ("All files", "*.*")],
-            initialdir=str(initial_dir),
-            initialfile="batch_log.txt",
-            title="Export batch log",
-        )
-        if not path:
-            return None
-        try:
-            log_text = self.batch_output.get("1.0", "end").rstrip()
-            Path(path).write_text(log_text, encoding="utf-8")
-            self._log_batch(f"[LOG] Exported batch log -> {path}")
-            return Path(path)
-        except Exception as exc:  # noqa: BLE001
-            messagebox.showerror("Export failed", f"Could not save log: {exc}")
-            return None
-
-    def _show_batch_error_dialog(self, message: str, initial_dir: Path) -> None:
+    def _show_batch_error_dialog(self, message: str) -> None:
         self.bell()
-        export = messagebox.askyesno(
+        if self._last_saved_batch_log_path is not None:
+            message = (
+                f"{message}\n\nLatest log saved to:\n{self._last_saved_batch_log_path}"
+            )
+        messagebox.showwarning(
             "Batch completed with errors",
-            f"{message}\n\nExport log to .txt?",
-            icon="warning",
+            message,
         )
-        if export:
-            self._export_batch_log(initial_dir)
 
     def choose_batch_folder(self) -> None:
         path = filedialog.askdirectory(
@@ -1328,6 +1445,7 @@ class ProcessApp(_BaseAppTk):
         base_output_dir.mkdir(parents=True, exist_ok=True)
 
         self._reset_batch_output("Starting batch run...\n")
+        self._set_minimal_status("Preparing batch...")
 
         tempdir: tempfile.TemporaryDirectory | None = None
         try:
@@ -1336,16 +1454,20 @@ class ProcessApp(_BaseAppTk):
         except Exception as exc:  # noqa: BLE001
             messagebox.showerror("Invalid input", f"Cannot prepare input: {exc}")
             self._log_batch(f"Error: {exc}")
+            self._set_minimal_status("Run failed.")
             if tempdir is not None:
                 tempdir.cleanup()
             return
 
-        total_progress_units = (
-            (len(inputs) * len(pipelines))
-            + len(postprocesses)
-            + (1 if self.batch_zip_var.get() else 0)
+        pipeline_progress_units = len(inputs) * len(pipelines)
+        final_progress_units = len(postprocesses) + (
+            1 if self.batch_zip_var.get() else 0
         )
-        self._start_progress(total_progress_units)
+        self._start_progress(
+            pipeline_progress_units,
+            style_name=self._progress_primary_style,
+            status_text="Running pipelines...",
+        )
         minimal_output_filename = self._minimal_output_filename_for_run(
             data_path,
             inputs,
@@ -1353,6 +1475,7 @@ class ProcessApp(_BaseAppTk):
 
         work_output_dir: Path | None = None
         clean_work_output = False
+        zip_failed = False
         try:
             output_dir = base_output_dir
             if self.batch_zip_var.get():
@@ -1361,6 +1484,7 @@ class ProcessApp(_BaseAppTk):
 
             failures: list[str] = []
             processed_outputs: list[Path] = []
+            processed_input_paths: list[Path] = []
             for h5_path in inputs:
                 try:
                     relative_parent = self._relative_input_parent(h5_path, data_root)
@@ -1372,15 +1496,27 @@ class ProcessApp(_BaseAppTk):
                         output_filename=minimal_output_filename,
                     )
                     processed_outputs.append(combined_output)
+                    processed_input_paths.append(h5_path)
                 except Exception as exc:  # noqa: BLE001
                     failures.append(f"{h5_path}: {exc}")
                     self._log_batch(f"[FAIL] {h5_path.name}: {exc}")
+
+            if final_progress_units:
+                final_status = (
+                    "Running postprocess..." if postprocesses else "Creating ZIP..."
+                )
+                self._start_progress(
+                    final_progress_units,
+                    style_name=self._progress_final_style,
+                    status_text=final_status,
+                )
 
             if postprocesses and processed_outputs:
                 self._run_postprocesses(
                     postprocesses=postprocesses,
                     output_dir=output_dir,
                     processed_outputs=processed_outputs,
+                    input_h5_paths=processed_input_paths,
                     input_path=data_path,
                     selected_pipeline_names=selected_names,
                     failures=failures,
@@ -1390,6 +1526,7 @@ class ProcessApp(_BaseAppTk):
                     "[POST SKIP] No successful pipeline outputs were generated, "
                     "so postprocess steps were skipped."
                 )
+                self._advance_progress(len(postprocesses))
 
             summary_msg: str
             if self.batch_zip_var.get():
@@ -1397,6 +1534,7 @@ class ProcessApp(_BaseAppTk):
                     zip_name = self.batch_zip_name_var.get().strip() or "outputs.zip"
                     if not zip_name.lower().endswith(".zip"):
                         zip_name += ".zip"
+                    self._set_minimal_status("Creating ZIP...")
                     self._log_batch("[ZIP] Preparing archive...")
                     last_progress_log = 0.0
                     zip_progress_base = self._progress_completed_units
@@ -1425,6 +1563,7 @@ class ProcessApp(_BaseAppTk):
                     summary_msg = f"ZIP archive: {zip_path}"
                     clean_work_output = True
                 except Exception as exc:  # noqa: BLE001
+                    zip_failed = True
                     self._set_progress_units(zip_progress_base + 1.0)
                     self._log_batch(f"[ZIP FAIL] {exc}")
                     messagebox.showerror(
@@ -1441,12 +1580,14 @@ class ProcessApp(_BaseAppTk):
             self._log_batch(f"Completed. {summary_msg}")
 
             if failures:
+                self._set_minimal_status("Completed with errors.")
                 self._show_batch_error_dialog(
-                    f"{len(failures)} failure(s). See log for details.\n\n{summary_msg}",
-                    initial_dir=base_output_dir,
+                    f"{len(failures)} failure(s). See log for details.\n\n{summary_msg}"
                 )
             else:
-                messagebox.showinfo("Batch completed", summary_msg)
+                self._set_minimal_status(
+                    "Completed with errors." if zip_failed else "Process ended."
+                )
         finally:
             if tempdir is not None:
                 tempdir.cleanup()
@@ -1478,6 +1619,7 @@ class ProcessApp(_BaseAppTk):
         postprocesses: Sequence[PostprocessDescriptor],
         output_dir: Path,
         processed_outputs: Sequence[Path],
+        input_h5_paths: Sequence[Path],
         input_path: Path,
         selected_pipeline_names: Sequence[str],
         failures: list[str],
@@ -1488,6 +1630,7 @@ class ProcessApp(_BaseAppTk):
             selected_pipelines=tuple(selected_pipeline_names),
             input_path=input_path,
             zip_outputs=self.batch_zip_var.get(),
+            input_h5_paths=tuple(input_h5_paths),
         )
         for descriptor in postprocesses:
             postprocess = descriptor.instantiate()
@@ -1602,10 +1745,16 @@ class ProcessApp(_BaseAppTk):
 
         def _worker() -> None:
             try:
-                write_combined_results_h5(
-                    pipeline_results,
+                create_h5_file(
                     combined_h5_out,
                     source_file=source_file,
+                    trim_source=self._trim_h5source.get(),
+                )
+                write_metrics_trees_to_h5(
+                    combined_h5_out,
+                    ANGIOEYE_PROCESSING_ROOT,
+                    process_results_to_metric_trees(pipeline_results),
+                    overwrite=False,
                 )
             except Exception as exc:  # noqa: BLE001
                 errors.append(exc)

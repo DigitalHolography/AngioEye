@@ -1,7 +1,8 @@
-import importlib.util
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from dependency_utils import find_missing_dependencies
 
 POSTPROCESS_REGISTRY: dict[str, type["BatchPostprocess"]] = {}
 
@@ -18,12 +19,7 @@ def registerPostprocess(
         cls.requires = required_deps or []
         cls.required_pipelines = required_pipelines or []
 
-        missing = []
-        for req in cls.requires:
-            pkg = req.split(">")[0].split("=")[0].split("<")[0].strip()
-            if importlib.util.find_spec(pkg) is None:
-                missing.append(pkg)
-
+        missing = find_missing_dependencies(cls.requires)
         cls.missing_deps = missing
         cls.available = len(missing) == 0
         POSTPROCESS_REGISTRY[name] = cls
@@ -39,6 +35,7 @@ class PostprocessContext:
     selected_pipelines: tuple[str, ...]
     input_path: Path
     zip_outputs: bool
+    input_h5_paths: tuple[Path, ...] = ()
 
 
 @dataclass

@@ -5,6 +5,8 @@ from pathlib import Path
 
 import h5py
 
+from angioeye_io.hdf5_schema import get_processing_root, iter_metric_datasets
+
 from .core.base import (
     BatchPostprocess,
     PostprocessContext,
@@ -50,7 +52,7 @@ class PipelineMetricsManifestPostprocess(BatchPostprocess):
 
         pipelines: list[dict[str, object]] = []
         with h5py.File(file_path, "r") as h5file:
-            pipelines_group = h5file.get("Pipelines")
+            pipelines_group = get_processing_root(h5file)
             if pipelines_group is not None:
                 for group_name, group in pipelines_group.items():
                     if not isinstance(group, h5py.Group):
@@ -72,12 +74,6 @@ class PipelineMetricsManifestPostprocess(BatchPostprocess):
         }
 
     def _collect_dataset_paths(self, group: h5py.Group) -> list[str]:
-        metric_paths: list[str] = []
-
-        def visitor(name: str, obj: h5py.Dataset | h5py.Group) -> None:
-            if isinstance(obj, h5py.Dataset):
-                metric_paths.append(name)
-
-        group.visititems(visitor)
+        metric_paths = [name for name, _dataset in iter_metric_datasets(group)]
         metric_paths.sort()
         return metric_paths

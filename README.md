@@ -36,7 +36,7 @@ pip install -e .
 # Installs pipeline-specific dependencies (optional)
 pip install -e ".[pipelines]"
 
-# Installs postprocess-specific dependencies such as the graphics dashboard (optional)
+# Installs postprocess-specific dependencies such as the included dashboard and plotting postprocesses (optional)
 pip install -e ".[postprocess]"
 ```
 
@@ -111,9 +111,9 @@ python src/cli.py
 
 Pipelines are the heart of AngioEye. To add a new analysis, create a file in `src/pipelines/` with a class inheriting from `ProcessPipeline`.
 
-To register it to the app, add the decorator `@register_pipeline`. You can define any needed imports inside, as well as some more info.
+To register it to the app, add the decorator `@registerPipeline`. You can define any needed imports inside, as well as some more info.
 
-To see more complete examples, check out `src/pipelines/basic_stats.py` and `src/pipelines/dummy_heavy.py`.
+To see more complete examples, check out `src/pipelines/waveform_shape_metrics.py` and `src/pipelines/Windkessel_RC.py`.
 
 ### Simple Pipeline Structure
 
@@ -187,12 +187,13 @@ Inside a postprocess, you can:
 
 - read `context.output_dir`
 - read `context.processed_files`
+- read `context.input_h5_paths` (same order as `context.processed_files`)
 - read `context.selected_pipelines`
 - read `context.input_path`
 - read `context.zip_outputs`
 - write extra artifacts into `context.output_dir` before optional zipping
 - return a short `summary`, explicit `generated_paths`, and structured `metadata`
 
-The included `Graphics Dashboard` postprocess shows the intended pattern: it consumes the `arterial_waveform_shape_metrics` output and generates a cohort dashboard plus PNG exports after the batch finishes.
+The included `groups comparison dashboard` postprocess shows the intended pattern: it consumes the `waveform_shape_metrics` output and generates a cohort dashboard plus PNG exports after the batch finishes.
 `Pipeline Metrics Manifest` is a lighter built-in example that writes a JSON inventory of the generated pipeline metric datasets for the batch.
 `Postprocess Tutorial` is the minimal reference example: it writes a single JSON file showing every `PostprocessContext` field and the `PostprocessResult` output format.
