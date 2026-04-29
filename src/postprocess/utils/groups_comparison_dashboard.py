@@ -21,7 +21,7 @@ from angioeye_io.archive_io import (
     reset_output_dir,
     replace_folder_in_zip,
 )
-from ..core.grouped_batch import (
+from .grouped_batch import (
     build_group_order,
     build_grouped_h5_index,
     find_control_group_name,
@@ -45,6 +45,7 @@ METHOD_MARKERS_WINDKESSEL = {
     "time_integral": "^",
 }
 
+
 def _run_optional_eps_export(export_func, output_dir: str) -> bool:
     try:
         export_func()
@@ -59,6 +60,7 @@ def _run_optional_eps_export(export_func, output_dir: str) -> bool:
         )
         return False
     return True
+
 
 def get_metrics_base_candidates(vessel: str) -> list[str]:
     return pipeline_path_candidates(WAVEFORM_SHAPE_METRICS_PIPELINE, vessel, "global")
@@ -286,7 +288,7 @@ def plot_windkessel_metric_for_method(df, metric, method, out_path):
             capsize=6,
             markersize=13,
             markerfacecolor="none",
-            markeredgecolor="black",
+            markeredgecolor="red",
             markeredgewidth=2.2,
             zorder=3,
         )
@@ -361,7 +363,6 @@ def _higher_harmonic_weights_from_support(support):
     return _safe_norm(hh)
 
 
-
 def _phase_delay_equivalents_from_support(support):
     """
     t_{Δφ,n}/T = Δφ_n / (2π n), avec n à partir de 2.
@@ -405,8 +406,6 @@ def select_support_beat(support, beat_idx):
             out[k] = v
 
     return out
-
-
 
 
 def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
@@ -1698,26 +1697,19 @@ def export_selected_metric_pngs_bandlimited(
                     )
 
                     if g in grp_mean.index:
-                        try :
-                            ax_top.errorbar(
-                                [x_pos[g]],
-                                [grp_mean.loc[g]],
-                                color="black",
-                                yerr=[grp_std.loc[g] if pd.notna(grp_std.loc[g]) else 0],
-                                fmt=shapes[i % len(shapes)],
-                                capsize=5,
-                                markersize=12,
-                                linewidth=1.2,
-                                markerfacecolor="none",
-                                markeredgecolor="black",
-                                markeredgewidth=3,
-                            )
-                        except Exception as e:
-                            print("💥 ERROR HERE")
-                            print("group:", g)
-                            print("mean:", grp_mean.loc[g], type(grp_mean.loc[g]))
-                            print("std:", grp_std.loc[g], type(grp_std.loc[g]))
-                            raise
+                        ax_top.errorbar(
+                            [x_pos[g]],
+                            [grp_mean.loc[g]],
+                            color="black",
+                            yerr=[grp_std.loc[g] if pd.notna(grp_std.loc[g]) else 0],
+                            fmt=shapes[i % len(shapes)],
+                            capsize=5,
+                            markersize=12,
+                            linewidth=1.2,
+                            markerfacecolor="none",
+                            markeredgecolor="red",
+                            markeredgewidth=3,
+                        )
 
                 ax_top.set_title(
                     f"{LATEX_FORMULAS.get(metric, metric)} (bandlimited waveform, {vessel})",
@@ -1898,6 +1890,7 @@ def select_representative_file_per_group(df_metric: pd.DataFrame, value_col="mea
 
     return rep
 
+
 METRIC_GROUPS = {
     "Timing and displacement - distribution metrics": {
         "mu_t_over_T",
@@ -1933,31 +1926,25 @@ METRIC_GROUPS = {
         "slope_fall_normalized",
         "v_end_over_v_mean",
     },
-    
     "Harmonic - domain organization metrics": {
         "E_low_over_E_total",
         "rho_h",
         "w_h",
         "N_h_over_H_minus_1",
         "eta_h",
-        
-        
     },
-    
     "Derivative - energy metrics": {
         "E_slope",
-        
     },
     "Temporal support and concentration metrics": {
         "N_t_over_T",
         "N_eff_over_T",
-        
     },
 }
+
+
 def generate_html_gallery(image_dir, html_dir, html_name="metric_dashboard.html"):
-    png_files = sorted(
-        [f for f in os.listdir(image_dir) if f.lower().endswith(".png")]
-    )
+    png_files = sorted([f for f in os.listdir(image_dir) if f.lower().endswith(".png")])
 
     html = [
         "<!DOCTYPE html>",
@@ -2002,7 +1989,7 @@ def generate_html_gallery(image_dir, html_dir, html_name="metric_dashboard.html"
         "        body { font-family: Arial, sans-serif; background: #f5f5f5; padding: 20px; }",
         "        h1 { text-align: center; }",
         "        .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; max-width: 1600px; margin: 0 auto; }",
-        "        @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }", 
+        "        @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }",
         "        .card { background: white; border-radius: 12px; padding: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }",
         "        .card h2 { font-size: 16px; margin-bottom: 10px; }",
         "        img { width: 100%; border-radius: 8px; border: 1px solid #ddd; }",
@@ -2022,7 +2009,6 @@ def generate_html_gallery(image_dir, html_dir, html_name="metric_dashboard.html"
         "            <label><input type='checkbox' id='showArtery' checked onchange='applyFilters()'> Artery</label>",
         "            <label><input type='checkbox' id='showVein' checked onchange='applyFilters()'> Vein</label>",
         "        </div>",
-        
         "               <div class='search-help'>",
         "            Search by metric name : <code>RI</code>, <code>PI</code>, <code>mu_t_over_T</code>, <code>W50</code>, <code>rho_h</code>, <code>phi</code>, <code>slope</code>, etc.",
         "        </div>",
@@ -2039,21 +2025,20 @@ def generate_html_gallery(image_dir, html_dir, html_name="metric_dashboard.html"
 
     for group_name, group_metrics in METRIC_GROUPS.items():
         group_id = (
-            group_name.lower()
-            .replace(" ", "_")
-            .replace("-", "_")
-            .replace("/", "_")
+            group_name.lower().replace(" ", "_").replace("-", "_").replace("/", "_")
         )
 
-        html.extend([
-            "        <div class='filter-group-box'>",
-            "            <div class='group-header'>",
-            f"                <span class='group-toggle' onclick=\"toggleCollapse('{group_id}', this)\">▼</span>",
-            f"                <input type='checkbox' checked onchange=\"toggleGroup('{group_id}', this.checked)\">",
-            f"                <label>{group_name}</label>",
-            "            </div>",
-            f"            <div class='filter-group-content' data-group='{group_id}'>",
-        ])
+        html.extend(
+            [
+                "        <div class='filter-group-box'>",
+                "            <div class='group-header'>",
+                f"                <span class='group-toggle' onclick=\"toggleCollapse('{group_id}', this)\">▼</span>",
+                f"                <input type='checkbox' checked onchange=\"toggleGroup('{group_id}', this.checked)\">",
+                f"                <label>{group_name}</label>",
+                "            </div>",
+                f"            <div class='filter-group-content' data-group='{group_id}'>",
+            ]
+        )
 
         for png in sorted(png_files):
             title = os.path.splitext(png)[0]
@@ -2074,18 +2059,24 @@ def generate_html_gallery(image_dir, html_dir, html_name="metric_dashboard.html"
 
             display_title = LATEX_FORMULAS.get(metric_name, metric_name)
             display_title = display_title.replace("$", "")
-            filter_id = f"{metric_name}_{vessel}".replace("/", "_").replace(" ", "_").lower()
+            filter_id = (
+                f"{metric_name}_{vessel}".replace("/", "_").replace(" ", "_").lower()
+            )
 
-            html.extend([
-                "        <div class='filter-item'>",
-                f"            <input type='checkbox' class='metric-filter' id='filter_{filter_id}' value='{filter_key.lower()}' checked onchange='applyFilters()'>",
-                f"            <label for='filter_{filter_id}'>\\({display_title}\\) ({vessel})</label>",
+            html.extend(
+                [
+                    "        <div class='filter-item'>",
+                    f"            <input type='checkbox' class='metric-filter' id='filter_{filter_id}' value='{filter_key.lower()}' checked onchange='applyFilters()'>",
+                    f"            <label for='filter_{filter_id}'>\\({display_title}\\) ({vessel})</label>",
+                    "        </div>",
+                ]
+            )
+        html.extend(
+            [
+                "            </div>",
                 "        </div>",
-            ])
-        html.extend([
-        "            </div>",
-        "        </div>",
-        ])
+            ]
+        )
 
     remaining_metrics = []
 
@@ -2108,38 +2099,48 @@ def generate_html_gallery(image_dir, html_dir, html_name="metric_dashboard.html"
         remaining_metrics.append((metric_name, vessel, filter_key))
 
     if remaining_metrics:
-        html.extend([
-            "        <div class='filter-group-box'>",
-            "            <div class='group-header'>",
-            "                <span class='group-toggle' onclick=\"toggleCollapse('other', this)\">▼</span>",
-            "                <input type='checkbox' checked onchange=\"toggleGroup('other', this.checked)\">",
-            "                <label>Other</label>",
-            "            </div>",
-            "            <div class='filter-group-content' data-group='other'>",
-        ])
+        html.extend(
+            [
+                "        <div class='filter-group-box'>",
+                "            <div class='group-header'>",
+                "                <span class='group-toggle' onclick=\"toggleCollapse('other', this)\">▼</span>",
+                "                <input type='checkbox' checked onchange=\"toggleGroup('other', this.checked)\">",
+                "                <label>Other</label>",
+                "            </div>",
+                "            <div class='filter-group-content' data-group='other'>",
+            ]
+        )
 
         for metric_name, vessel, filter_key in remaining_metrics:
             display_title = LATEX_FORMULAS.get(metric_name, metric_name)
             display_title = display_title.replace("$", "")
 
-            filter_id = f"{metric_name}_{vessel}".replace("/", "_").replace(" ", "_").lower()
+            filter_id = (
+                f"{metric_name}_{vessel}".replace("/", "_").replace(" ", "_").lower()
+            )
 
-            html.extend([
-                "        <div class='filter-item'>",
-                f"            <input type='checkbox' class='metric-filter' id='filter_{filter_id}' value='{filter_key.lower()}' checked onchange='applyFilters()'>",
-                f"            <label for='filter_{filter_id}'>\\({display_title}\\) ({vessel})</label>",
+            html.extend(
+                [
+                    "        <div class='filter-item'>",
+                    f"            <input type='checkbox' class='metric-filter' id='filter_{filter_id}' value='{filter_key.lower()}' checked onchange='applyFilters()'>",
+                    f"            <label for='filter_{filter_id}'>\\({display_title}\\) ({vessel})</label>",
+                    "        </div>",
+                ]
+            )
+        html.extend(
+            [
+                "            </div>",
                 "        </div>",
-            ])
-        html.extend([
-        "            </div>",
-        "        </div>",
-        ])
-        
-    html.extend([
-    "            </div>",
-    "        </div>",
-    "    <div class='grid' id='metricsGrid'>",
-])
+            ]
+        )
+
+    html.extend(
+        [
+            "            </div>",
+            "        </div>",
+            "    <div class='grid' id='metricsGrid'>",
+        ]
+    )
 
     for png in sorted(png_files):
         title = os.path.splitext(png)[0]
@@ -2160,136 +2161,144 @@ def generate_html_gallery(image_dir, html_dir, html_name="metric_dashboard.html"
         with open(png_path, "rb") as img_file:
             encoded = base64.b64encode(img_file.read()).decode("utf-8")
 
-        html.extend([
-            f"        <div class='card metric-card' data-metric='{filter_key}' data-search='{search_text}' data-vessel='{vessel.lower()}'>",
-            f"            <h2>\\({display_title}\\) - {vessel.capitalize()}</h2>",
-            f"            <img class='image-thumbnail' src='data:image/png;base64,{encoded}' alt='{title}' onclick=\"openImageModal(this.src)\">",
-            "        </div>",
-        ])
+        html.extend(
+            [
+                f"        <div class='card metric-card' data-metric='{filter_key}' data-search='{search_text}' data-vessel='{vessel.lower()}'>",
+                f"            <h2>\\({display_title}\\) - {vessel.capitalize()}</h2>",
+                f"            <img class='image-thumbnail' src='data:image/png;base64,{encoded}' alt='{title}' onclick=\"openImageModal(this.src)\">",
+                "        </div>",
+            ]
+        )
 
-    html.extend([
-    "    </div>",
-    "    <div id='imageModal' class='image-modal' onclick='closeImageModal()'>",
-    "        <span class='image-modal-close'>&times;</span>",
-    "        <img id='modalImage' src='' onclick='closeImageModal(); event.stopPropagation()'>",
-    "    </div>",
-    "    <script>",
-    "        function toggleFilters() {",
-    "            document.getElementById('filterPanel').classList.toggle('open');",
-    "        }",
-    "",
-    "        function toggleCollapse(groupName, element) {",
-    "            const container = document.querySelector(`.filter-group-content[data-group='${groupName}']`);",
-    "            if (!container) return;",
-    "",
-    "            container.classList.toggle('collapsed');",
-    "            element.textContent = container.classList.contains('collapsed') ? '▶' : '▼';",
-    "        }",
-    "",
-    "        function openImageModal(src) {",
-    "            document.getElementById('modalImage').src = src;",
-    "            document.getElementById('imageModal').classList.add('open');",
-    "        }",
-    "",
-    "        function closeImageModal() {",
-    "            document.getElementById('imageModal').classList.remove('open');",
-    "        }",
-    "        function applyFilters() {",
-    "            const search = document.getElementById('searchBox').value.toLowerCase();",
-    "            const checked = Array.from(document.querySelectorAll('.metric-filter:checked')).map(cb => cb.value.toLowerCase());",
-    "            const cards = document.querySelectorAll('.metric-card');",
-    "            const showArtery = document.getElementById('showArtery').checked;",
-    "            const showVein = document.getElementById('showVein').checked;",
-    "",
-    "            cards.forEach(card => {",
-    "                const metric = card.dataset.metric.toLowerCase();",
-    "                const searchText = card.dataset.search.toLowerCase();",
-    "",
-    "                const vessel = card.dataset.vessel.toLowerCase();",
-    "",
-    "                const visibleByCheckbox = checked.includes(metric);",
-    "                const visibleBySearch = search === '' || searchText.includes(search);",
-    "",
-    "                const visibleByVessel =",
-    "                    (vessel === 'artery' && showArtery) ||",
-    "                    (vessel === 'vein' && showVein);",    "",
-    "                if (visibleByCheckbox && visibleBySearch && visibleByVessel) {",
-    "                    card.classList.remove('hidden');",
-    "                } else {",
-    "                    card.classList.add('hidden');",
-    "                }",
-    "            });",
-    "        }",
-    "",
-    "        function toggleGroup(groupName, checked) {",
-    "            const container = document.querySelector(`.filter-group-content[data-group='${groupName}']`);",
-    "            if (!container) return;",
-    "",
-    "            container.querySelectorAll('.metric-filter').forEach(cb => {",
-    "                cb.checked = checked;",
-    "            });",
-    "",
-    "            applyFilters();",
-    "        }",
-    "        function collapseAllGroups() {",
-    "            document.querySelectorAll('.filter-group-content').forEach(group => {",
-    "                group.classList.add('collapsed');",
-    "            });",
-    "",
-    "            document.querySelectorAll('.group-toggle').forEach(toggle => {",
-    "                toggle.textContent = '▶';",
-    "            });",
-    "        }",
-    "",
-    "        function expandAllGroups() {",
-    "            document.querySelectorAll('.filter-group-content').forEach(group => {",
-    "                group.classList.remove('collapsed');",
-    "            });",
-    "",
-    "            document.querySelectorAll('.group-toggle').forEach(toggle => {",
-    "                toggle.textContent = '▼';",
-    "            });",
-    "        }",
-    "",
-    "        function invertSelection() {",
-    "            document.querySelectorAll('.metric-filter').forEach(cb => {",
-    "                cb.checked = !cb.checked;",
-    "            });",
-    "",
-    "            document.querySelectorAll('.filter-group-content').forEach(group => {",
-    "                const checkboxes = Array.from(group.querySelectorAll('.metric-filter'));",
-    "                const groupCheckbox = group.parentElement.querySelector('.group-header input[type=\"checkbox\"]');",
-    "",
-    "                if (groupCheckbox) {",
-    "                    groupCheckbox.checked = checkboxes.every(cb => cb.checked);",
-    "                }",
-    "            });",
-    "",
-    "            applyFilters();",
-    "        }",
-    "        function selectAllFilters() {",
-    "            document.querySelectorAll('.metric-filter').forEach(cb => cb.checked = true);",
-    "            document.querySelectorAll('.group-header input[type=\"checkbox\"]').forEach(cb => cb.checked = true);",
-    "            applyFilters();",
-    "        }",
-    "",
-    "        function clearAllFilters() {",
-    "            document.querySelectorAll('.metric-filter').forEach(cb => cb.checked = false);",
-    "            document.querySelectorAll('.group-header input[type=\"checkbox\"]').forEach(cb => cb.checked = false);",
-    "            applyFilters();",
-    "        }",
-    "",
-    "        document.getElementById('searchBox').addEventListener('input', applyFilters);",
-    "        window.addEventListener('load', applyFilters);",
-    "    </script>",
-    "</body>",
-    "</html>",
-])
+    html.extend(
+        [
+            "    </div>",
+            "    <div id='imageModal' class='image-modal' onclick='closeImageModal()'>",
+            "        <span class='image-modal-close'>&times;</span>",
+            "        <img id='modalImage' src='' onclick='closeImageModal(); event.stopPropagation()'>",
+            "    </div>",
+            "    <script>",
+            "        function toggleFilters() {",
+            "            document.getElementById('filterPanel').classList.toggle('open');",
+            "        }",
+            "",
+            "        function toggleCollapse(groupName, element) {",
+            "            const container = document.querySelector(`.filter-group-content[data-group='${groupName}']`);",
+            "            if (!container) return;",
+            "",
+            "            container.classList.toggle('collapsed');",
+            "            element.textContent = container.classList.contains('collapsed') ? '▶' : '▼';",
+            "        }",
+            "",
+            "        function openImageModal(src) {",
+            "            document.getElementById('modalImage').src = src;",
+            "            document.getElementById('imageModal').classList.add('open');",
+            "        }",
+            "",
+            "        function closeImageModal() {",
+            "            document.getElementById('imageModal').classList.remove('open');",
+            "        }",
+            "        function applyFilters() {",
+            "            const search = document.getElementById('searchBox').value.toLowerCase();",
+            "            const checked = Array.from(document.querySelectorAll('.metric-filter:checked')).map(cb => cb.value.toLowerCase());",
+            "            const cards = document.querySelectorAll('.metric-card');",
+            "            const showArtery = document.getElementById('showArtery').checked;",
+            "            const showVein = document.getElementById('showVein').checked;",
+            "",
+            "            cards.forEach(card => {",
+            "                const metric = card.dataset.metric.toLowerCase();",
+            "                const searchText = card.dataset.search.toLowerCase();",
+            "",
+            "                const vessel = card.dataset.vessel.toLowerCase();",
+            "",
+            "                const visibleByCheckbox = checked.includes(metric);",
+            "                const visibleBySearch = search === '' || searchText.includes(search);",
+            "",
+            "                const visibleByVessel =",
+            "                    (vessel === 'artery' && showArtery) ||",
+            "                    (vessel === 'vein' && showVein);",
+            "",
+            "                if (visibleByCheckbox && visibleBySearch && visibleByVessel) {",
+            "                    card.classList.remove('hidden');",
+            "                } else {",
+            "                    card.classList.add('hidden');",
+            "                }",
+            "            });",
+            "        }",
+            "",
+            "        function toggleGroup(groupName, checked) {",
+            "            const container = document.querySelector(`.filter-group-content[data-group='${groupName}']`);",
+            "            if (!container) return;",
+            "",
+            "            container.querySelectorAll('.metric-filter').forEach(cb => {",
+            "                cb.checked = checked;",
+            "            });",
+            "",
+            "            applyFilters();",
+            "        }",
+            "        function collapseAllGroups() {",
+            "            document.querySelectorAll('.filter-group-content').forEach(group => {",
+            "                group.classList.add('collapsed');",
+            "            });",
+            "",
+            "            document.querySelectorAll('.group-toggle').forEach(toggle => {",
+            "                toggle.textContent = '▶';",
+            "            });",
+            "        }",
+            "",
+            "        function expandAllGroups() {",
+            "            document.querySelectorAll('.filter-group-content').forEach(group => {",
+            "                group.classList.remove('collapsed');",
+            "            });",
+            "",
+            "            document.querySelectorAll('.group-toggle').forEach(toggle => {",
+            "                toggle.textContent = '▼';",
+            "            });",
+            "        }",
+            "",
+            "        function invertSelection() {",
+            "            document.querySelectorAll('.metric-filter').forEach(cb => {",
+            "                cb.checked = !cb.checked;",
+            "            });",
+            "",
+            "            document.querySelectorAll('.filter-group-content').forEach(group => {",
+            "                const checkboxes = Array.from(group.querySelectorAll('.metric-filter'));",
+            "                const groupCheckbox = group.parentElement.querySelector('.group-header input[type=\"checkbox\"]');",
+            "",
+            "                if (groupCheckbox) {",
+            "                    groupCheckbox.checked = checkboxes.every(cb => cb.checked);",
+            "                }",
+            "            });",
+            "",
+            "            applyFilters();",
+            "        }",
+            "        function selectAllFilters() {",
+            "            document.querySelectorAll('.metric-filter').forEach(cb => cb.checked = true);",
+            "            document.querySelectorAll('.group-header input[type=\"checkbox\"]').forEach(cb => cb.checked = true);",
+            "            applyFilters();",
+            "        }",
+            "",
+            "        function clearAllFilters() {",
+            "            document.querySelectorAll('.metric-filter').forEach(cb => cb.checked = false);",
+            "            document.querySelectorAll('.group-header input[type=\"checkbox\"]').forEach(cb => cb.checked = false);",
+            "            applyFilters();",
+            "        }",
+            "",
+            "        document.getElementById('searchBox').addEventListener('input', applyFilters);",
+            "        window.addEventListener('load', applyFilters);",
+            "    </script>",
+            "</body>",
+            "</html>",
+        ]
+    )
     html_path = os.path.join(html_dir, html_name)
     with open(html_path, "w", encoding="utf-8") as f:
         f.write("\n".join(html))
 
-def add_html_to_zip(zip_path: str, html_path: str, arc_name: str = "waveform_metrics_dashboard.html"):
+
+def add_html_to_zip(
+    zip_path: str, html_path: str, arc_name: str = "waveform_metrics_dashboard.html"
+):
     import zipfile
     import os
 
@@ -2350,13 +2359,10 @@ def save_dashboard(all_results, zip_path, single_group):
         zip_path,
         png_dir,
         "png",
-        show_right_panel=True,
+        show_right_panel=False,
     )
 
     replace_folder_in_zip(zip_path, png_dir, arc_folder="export_png")
-
-    
-    
 
     # --- EPS ---
     if eps_supported:
@@ -2366,6 +2372,7 @@ def save_dashboard(all_results, zip_path, single_group):
                 zip_path,
                 eps_dir,
                 "eps",
+                show_right_panel=False,
             ),
             eps_dir,
         )
@@ -2373,8 +2380,7 @@ def save_dashboard(all_results, zip_path, single_group):
     if eps_supported:
         replace_folder_in_zip(zip_path, eps_dir, arc_folder="export_eps")
 
-
-    #HTML 
+    # HTML
     temp_html_dir = tempfile.mkdtemp()
     generate_html_gallery(
         image_dir=png_dir,
@@ -2382,10 +2388,7 @@ def save_dashboard(all_results, zip_path, single_group):
         html_name="waveform_metrics_dashboard.html",
     )
 
-    html_path = os.path.join(
-        temp_html_dir,
-        "waveform_metrics_dashboard.html"
-    )
+    html_path = os.path.join(temp_html_dir, "waveform_metrics_dashboard.html")
 
     add_html_to_zip(
         zip_path,
@@ -2394,13 +2397,14 @@ def save_dashboard(all_results, zip_path, single_group):
     )
 
     if os.path.isdir(temp_html_dir):
-            shutil.rmtree(temp_html_dir)
-    
+        shutil.rmtree(temp_html_dir)
+
     if os.path.isdir(png_dir):
         shutil.rmtree(png_dir)
 
     if os.path.isdir(eps_dir):
         shutil.rmtree(eps_dir)
+
 
 if __name__ == "__main__":
     zip_path = choose_zip()
