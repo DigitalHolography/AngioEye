@@ -13,13 +13,12 @@ from .core.base import (
 @registerPostprocess(
     name="waveform metric summary tables",
     description=(
-        "Build an HTML report containing a table of waveform metrics and associated visualizations for each HDF5 file."
-        "waveform shape metrics."
+        "Create an HTML report for each processed HDF5 file, including a summary table of waveform metrics and their corresponding visualizations."
     ),
     required_deps=["matplotlib>=3.8", "pandas>=2.1", "plotly>=5.18"],
     required_pipelines=["waveform_shape_metrics"],
 )
-class GraphicsDashboardPostprocess(BatchPostprocess):
+class WaveformMetricSummaryTablesPostprocess(BatchPostprocess):
     def run(self, context: PostprocessContext) -> PostprocessResult:
         if not context.processed_files:
             raise ValueError(
