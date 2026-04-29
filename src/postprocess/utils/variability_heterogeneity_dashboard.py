@@ -8,7 +8,10 @@ import numpy as np
 import pandas as pd
 from angioeye_io.hdf5_io import find_first_existing_path
 from angioeye_io.archive_io import replace_folder_in_zip
-from .grouped_batch import iter_grouped_h5_files_in_zip
+from ..core.grouped_batch import iter_grouped_h5_files_in_zip
+from angioeye_io.archive_io import extract_folder_from_zip, temporary_zip_from_tree
+from angioeye_io.hdf5_io import MetricsTree, append_metrics_trees_to_h5, read_dataset
+from angioeye_io.hdf5_schema import ANGIOEYE_POSTPROCESS_ROOT, find_pipeline_group
 
 SEGMENT_METRIC_FOLDER = "/AngioEye/Processing/waveform_shape_metrics/artery/by_segment/"
 SEGMENT_MODE = "bandlimited_segment"
@@ -52,44 +55,53 @@ INPUT_METRICS = [
     "eta_h",
 ]
 METRIC_LABELS = {
-    "mu_t_over_T": r"$\mu_t/T$",
-    "RI": r"$\mathrm{RI}$",
-    "PI": r"$\mathrm{PI}$",
+    "RI": r"$\rm RI$",
+    "rho_h_90": r"$\rho_{h,90}$",
+    "rho_h_95": r"$\rho_{h,95}$",
+    "crest_factor": r"$\rm CF$",
+    "t50_over_T": r"$t_{50}/T$",
     "R_VTI": r"$R_{VTI}$",
+    "spectral_entropy": r"$H_{spec}$",
+    "mu_t_over_T": r"$\mu_t/T$",
+    "PI": r"$\rm PI$",
     "SF_VTI": r"$SF_{VTI}$",
     "sigma_t_over_T": r"$\sigma_t/T$",
-    "W50_over_T": r"$W_{50}/T$",
-    "E_low_over_E_total": r"$E_{\mathrm{low}}/E_{\mathrm{total}}$",
-    "E_high_over_E_total": r"$E_{\mathrm{high}}/E_{\mathrm{total}}$",
-    "t_max_over_T": r"$t_{\max}/T$",
-    "t_min_over_T": r"$t_{\min}/T$",
-    "Delta_t_over_T": r"$\Delta_t/T$",
-    "slope_rise_normalized": r"$S_{\mathrm{rise}}$",
-    "slope_fall_normalized": r"$S_{\mathrm{fall}}$",
+    "delta_phi2": r"$\Delta\phi_2$",
+    "t_max_over_T": r"$t_{\mathrm{max}}/T$",
+    "t_min_over_T": r"$t_{\mathrm{min}}/T$",
+    "Delta_t_over_T": r"$\Delta_{\mathrm{t}}/T$",
     "t_up_over_T": r"$t_{\mathrm{up}}/T$",
     "t_down_over_T": r"$t_{\mathrm{down}}/T$",
     "S_decay": r"$S_{\mathrm{decay}}$",
-    "crest_factor": r"$\mathrm{CF}$",
+    "Delta_DTI": r"$\Delta_{\mathrm{DTI}}$",
+    "E_high_over_E_total": r"$E_{\mathrm{high}}/E_{\mathrm{total}}$",
+    "E_low_over_E_total": r"$E_{\mathrm{low}}/E_{\mathrm{total}}$",
     "R_SD": r"$R_{SD}$",
-    "Delta_DTI": r"$\Delta_{DTI}$",
+    "slope_fall_normalized": r"$S_{\mathrm{fall}}$",
+    "slope_rise_normalized": r"$S_{\mathrm{rise}}$",
     "gamma_t": r"$\gamma_t$",
-    "spectral_entropy": r"$H_{\mathrm{spec}}$",
-    "delta_phi2": r"$\Delta\phi_2$",
-    "rho_h_90": r"$\rho_{h,90}$",
     "mu_h": r"$\mu_h$",
     "sigma_h": r"$\sigma_h$",
     "N_eff_over_T": r"$N_{\mathrm{eff}}/T$",
-    "N_H_over_T": r"$N_H/T$",
-    "phase_locking_residual": r"$E_{\phi}$",
     "E_recon_H_MAX": r"$E_{\mathrm{recon},H_{\max}}$",
-    "Q_t_skew": r"$Q_{t,\mathrm{skew}}$",
-    "Q_t_width": r"$Q_{t,\mathrm{width}}$",
-    "R_Q_t": r"$R_{Q_t}$",
-    "Q_d_skew": r"$Q_{d,\mathrm{skew}}$",
-    "Q_d_width": r"$Q_{d,\mathrm{width}}$",
-    "R_Q_d": r"$R_{Q_d}$",
+    "s_t": r"$s_{\mathrm{t}}$",
+    "w_t": r"$w_{\mathrm{t}}$",
+    "s_d": r"$s_{\mathrm{d}}$",
+    "w_d": r"$w_{\mathrm{d}}$",
     "v_end_over_v_mean": r"$R_{EM}$",
     "E_slope": r"$E_{\mathrm{slope}}$",
+    "phase_locking_residual": r"$E_{\phi}$",
+    "W50_over_T": r"$W_{50}/T$",
+    "W80_over_T": r"$W_{80}/T$",
+    "N_t_over_T": r"$N_t/T$",
+    "t_phi_n_over_T": r"$t_{\Delta\phi_n}/T$",
+    "t_phi_over_T": r"$t_{\phi}/T$",
+    "D_phi": r"$D_{\phi}$",
+    "s_phi_over_T": r"$s_{\Delta\phi}/T$",
+    "eta_h": r"$\eta_h$",
+    "rho_h": r"$\rho_{h}$",
+    "w_h": r"$w_{h}$",
+    "N_h_over_H_minus_1": r"$N_{H}/(H-1)$",
 }
 COLUMN_LABELS = {
     "MED_seg_medbeat": r"$\mathrm{med}_{b}(\mathrm{med}_{seg})$",
@@ -138,7 +150,6 @@ def extract_segment_metric(h5_path, metric_name, mode=SEGMENT_MODE):
         return None
 
     return arr
-
 
 def iqr_1d(x):
     x = np.asarray(x, dtype=float)
@@ -264,6 +275,35 @@ def compute_file_higher_metrics_from_segment_array(arr, eps=EPS):
         ),
     }
 
+def write_variability_tree(file_path):
+        metrics = {}
+
+        for metric_name in INPUT_METRICS:
+            arr = extract_segment_metric(file_path, metric_name)
+
+            if arr is None:
+                continue
+
+            high = compute_file_higher_metrics_from_segment_array(arr)
+
+            if high is None:
+                continue
+
+            for high_name, value in high.items():
+                key = f"{high_name}/{metric_name}"
+                metrics[key] = np.asarray(value, dtype=float)
+
+        if not metrics:
+            return None
+
+        return MetricsTree(
+            name="Variability",
+            metrics=metrics,
+            attrs={
+                "kind": "postprocess",
+                "source": "segment_metrics",
+            },
+        )
 
 def analyze_zip(zip_path, metrics=INPUT_METRICS, mode=SEGMENT_MODE):
     """
@@ -281,9 +321,10 @@ def analyze_zip(zip_path, metrics=INPUT_METRICS, mode=SEGMENT_MODE):
                 continue
 
             high = compute_file_higher_metrics_from_segment_array(arr, eps=EPS)
+            
             if high is None:
                 continue
-
+            
             for high_name, value in high.items():
                 results[grouped_file.group_name][metric_name][high_name].append(value)
 

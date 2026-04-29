@@ -30,7 +30,7 @@ class GraphicsDashboardPostprocess(BatchPostprocess):
         if not output_dir.exists() or not output_dir.is_dir():
             raise FileNotFoundError(f"Output folder does not exist: {output_dir}")
 
-        from .core import waveform_metric_summary_tables
+        from .utils import waveform_metric_summary_tables
 
         with temporary_zip_from_tree(
             output_dir,

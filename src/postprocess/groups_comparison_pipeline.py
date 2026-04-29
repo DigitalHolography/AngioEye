@@ -34,7 +34,7 @@ class GraphicsDashboardPostprocess(BatchPostprocess):
         if not output_dir.exists() or not output_dir.is_dir():
             raise FileNotFoundError(f"Output folder does not exist: {output_dir}")
 
-        from .core import groups_comparison_dashboard
+        from .utils import groups_comparison_dashboard
 
         with temporary_zip_from_tree(
             output_dir,
@@ -52,14 +52,8 @@ class GraphicsDashboardPostprocess(BatchPostprocess):
                 all_results,
                 str(temp_zip),
                 single_group,
-                dashboard_file=temp_root / "metric_dashboard.html",
             )
 
-            dashboard_path = extract_file_from_zip(
-                zip_path=temp_zip,
-                member_name="metric_dashboard.html",
-                output_dir=output_dir,
-            )
             png_paths = extract_folder_from_zip(
                 zip_path=temp_zip,
                 member_prefix="export_png/",
@@ -70,10 +64,16 @@ class GraphicsDashboardPostprocess(BatchPostprocess):
                 member_prefix="export_eps/",
                 output_dir=output_dir,
             )
+
+            dashboard_path = extract_file_from_zip(
+                zip_path=temp_zip,
+                member_name="waveform_metrics_dashboard.html",
+                output_dir=output_dir,
+            )
         created_paths = [
             str(dashboard_path),
             *[str(path) for path in png_paths],
             *[str(path) for path in eps_paths],
         ]
-        summary = f"Generated dashboard and {len(png_paths)} PNG illustration(s)."
+        summary = f" Generated HTML and dashboard {len(png_paths)} PNG illustration(s)."
         return PostprocessResult(summary=summary, generated_paths=created_paths)

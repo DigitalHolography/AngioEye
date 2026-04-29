@@ -30,7 +30,7 @@ class GraphicsDashboardPostprocess(BatchPostprocess):
         if not output_dir.exists() or not output_dir.is_dir():
             raise FileNotFoundError(f"Output folder does not exist: {output_dir}")
 
-        from .core import stats_groups_comparison
+        from .utils import stats_groups_comparison
 
         with temporary_zip_from_tree(
             output_dir,
