@@ -1,9 +1,11 @@
 import os
 import re
 import shutil
+import tempfile
+import zipfile
 from collections import defaultdict
 from tkinter import Tk, filedialog
-
+import base64
 import h5py
 import matplotlib.pyplot as plt
 import numpy as np
@@ -16,7 +18,7 @@ from angioeye_io.hdf5_io import find_first_existing_path, read_array
 from angioeye_io.hdf5_schema import pipeline_path_candidates
 from angioeye_io.archive_io import (
     extracted_zip_tree,
-    replace_file_in_zip,
+    reset_output_dir,
     replace_folder_in_zip,
 )
 from .grouped_batch import (
@@ -1610,7 +1612,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
 
 
 def export_selected_metric_pngs_bandlimited(
-    all_results, zip_path, out_dir, format="png"
+    all_results, zip_path, out_dir, format="png", show_right_panel=True
 ):
     os.makedirs(out_dir, exist_ok=True)
 
@@ -1645,14 +1647,23 @@ def export_selected_metric_pngs_bandlimited(
                 grp_std = grp.std()
                 rep_file = select_representative_file_per_group(df, value_col="mean")
 
-                fig = plt.figure(figsize=(15, 6.2), dpi=200)
+                if show_right_panel:
+                    fig = plt.figure(figsize=(15, 6.2), dpi=200)
+                else:
+                    fig = plt.figure(figsize=(8, 6.2), dpi=200)
 
-                outer = gridspec.GridSpec(
-                    1,
-                    2,
-                    width_ratios=[0.7, 1.0],
-                    wspace=0.15,
-                )
+                if show_right_panel:
+                    outer = gridspec.GridSpec(
+                        1,
+                        2,
+                        width_ratios=[0.7, 1.0],
+                        wspace=0.15,
+                    )
+                else:
+                    outer = gridspec.GridSpec(
+                        1,
+                        1,
+                    )
 
                 fig.subplots_adjust(left=0.04, right=0.995, bottom=0.08, top=0.86)
 
@@ -1660,7 +1671,10 @@ def export_selected_metric_pngs_bandlimited(
                 ax_header.axis("off")
 
                 # ===== Gauche: scatter =====
-                ax_top = fig.add_subplot(outer[0, 0])
+                if show_right_panel:
+                    ax_top = fig.add_subplot(outer[0, 0])
+                else:
+                    ax_top = fig.add_subplot(outer[0])
 
                 if control_name in x_pos:
                     cx = x_pos[control_name]
@@ -1684,19 +1698,26 @@ def export_selected_metric_pngs_bandlimited(
                     )
 
                     if g in grp_mean.index:
-                        ax_top.errorbar(
-                            [x_pos[g]],
-                            [grp_mean.loc[g]],
-                            color="black",
-                            yerr=[grp_std.loc[g] if pd.notna(grp_std.loc[g]) else 0],
-                            fmt=shapes[i % len(shapes)],
-                            capsize=5,
-                            markersize=12,
-                            linewidth=1.2,
-                            markerfacecolor="none",
-                            markeredgecolor="black",
-                            markeredgewidth=3,
-                        )
+                        try :
+                            ax_top.errorbar(
+                                [x_pos[g]],
+                                [grp_mean.loc[g]],
+                                color="black",
+                                yerr=[grp_std.loc[g] if pd.notna(grp_std.loc[g]) else 0],
+                                fmt=shapes[i % len(shapes)],
+                                capsize=5,
+                                markersize=12,
+                                linewidth=1.2,
+                                markerfacecolor="none",
+                                markeredgecolor="black",
+                                markeredgewidth=3,
+                            )
+                        except Exception as e:
+                            print("💥 ERROR HERE")
+                            print("group:", g)
+                            print("mean:", grp_mean.loc[g], type(grp_mean.loc[g]))
+                            print("std:", grp_std.loc[g], type(grp_std.loc[g]))
+                            raise
 
                 ax_top.set_title(
                     f"{LATEX_FORMULAS.get(metric, metric)} (bandlimited waveform, {vessel})",
@@ -1710,33 +1731,70 @@ def export_selected_metric_pngs_bandlimited(
                 ax_top.grid(True, axis="y")
 
                 # ===== Droite: illustrations =====
-                right = gridspec.GridSpecFromSubplotSpec(
-                    2,
-                    2,
-                    subplot_spec=outer[0, 1],
-                    hspace=0.5,
-                    wspace=0.28,
-                )
+                if show_right_panel:
+                    right = gridspec.GridSpecFromSubplotSpec(
+                        2,
+                        2,
+                        subplot_spec=outer[0, 1],
+                        hspace=0.5,
+                        wspace=0.28,
+                    )
 
-                for i, g in enumerate(groups[:4]):
-                    r = i // 2
-                    c = i % 2
-                    ax = fig.add_subplot(right[r, c])
+                    for i, g in enumerate(groups[:4]):
+                        r = i // 2
+                        c = i % 2
+                        ax = fig.add_subplot(right[r, c])
 
-                    chosen = rep_file.get(g, None)
-                    path = h5_index.get(g, {}).get(chosen, None) if chosen else None
+                        chosen = rep_file.get(g, None)
+                        path = h5_index.get(g, {}).get(chosen, None) if chosen else None
 
-                    if metric == "D_phi":
-                        if path and os.path.exists(path):
+                        if metric == "D_phi":
+                            if path and os.path.exists(path):
+                                support = extract_graphics_support(
+                                    path, vessel=vessel, mode="bandlimited"
+                                )
+                                if support:
+                                    support_beat = select_support_beat(support, 0)
+                                    plot_metric_illustration(
+                                        ax, metric, support_beat, path, vessel
+                                    )
+                                    ax.set_title(f"{g}", fontsize=14)
+                                else:
+                                    ax.text(
+                                        0.5,
+                                        0.5,
+                                        f"No support for {g} ({vessel})",
+                                        ha="center",
+                                        va="center",
+                                    )
+                                    ax.axis("off")
+                            else:
+                                ax.text(
+                                    0.5,
+                                    0.5,
+                                    f"No representative file for {g}",
+                                    ha="center",
+                                    va="center",
+                                )
+                                ax.axis("off")
+
+                        elif path and os.path.exists(path):
                             support = extract_graphics_support(
-                                path, vessel=vessel, mode="bandlimited"
+                                path,
+                                vessel=vessel,
+                                mode="bandlimited",
                             )
+
                             if support:
                                 support_beat = select_support_beat(support, 0)
+
                                 plot_metric_illustration(
                                     ax, metric, support_beat, path, vessel
                                 )
                                 ax.set_title(f"{g}", fontsize=14)
+
+                                ymin, ymax = ax.get_ylim()
+                                ax.set_ylim(np.minimum(0, ymin), ymax * 1.4)
                             else:
                                 ax.text(
                                     0.5,
@@ -1756,47 +1814,11 @@ def export_selected_metric_pngs_bandlimited(
                             )
                             ax.axis("off")
 
-                    elif path and os.path.exists(path):
-                        support = extract_graphics_support(
-                            path,
-                            vessel=vessel,
-                            mode="bandlimited",
-                        )
-
-                        if support:
-                            support_beat = select_support_beat(support, 0)
-
-                            plot_metric_illustration(
-                                ax, metric, support_beat, path, vessel
-                            )
-                            ax.set_title(f"{g}", fontsize=14)
-
-                            ymin, ymax = ax.get_ylim()
-                            ax.set_ylim(np.minimum(0, ymin), ymax * 1.4)
-                        else:
-                            ax.text(
-                                0.5,
-                                0.5,
-                                f"No support for {g} ({vessel})",
-                                ha="center",
-                                va="center",
-                            )
-                            ax.axis("off")
-                    else:
-                        ax.text(
-                            0.5,
-                            0.5,
-                            f"No representative file for {g}",
-                            ha="center",
-                            va="center",
-                        )
-                        ax.axis("off")
-
-                for j in range(len(groups[:4]), 4):
-                    r = j // 2
-                    c = j % 2
-                    ax_empty = fig.add_subplot(right[r, c])
-                    ax_empty.axis("off")
+                    for j in range(len(groups[:4]), 4):
+                        r = j // 2
+                        c = j % 2
+                        ax_empty = fig.add_subplot(right[r, c])
+                        ax_empty.axis("off")
                 if format == "png":
                     png_path = os.path.join(
                         out_dir, f"{metric}_bandlimited_{vessel}.png"
@@ -1876,6 +1898,406 @@ def select_representative_file_per_group(df_metric: pd.DataFrame, value_col="mea
 
     return rep
 
+METRIC_GROUPS = {
+    "Timing and displacement - distribution metrics": {
+        "mu_t_over_T",
+        "sigma_t_over_T",
+        "gamma_t",
+    },
+    "Near peak crest witdh": {
+        "W50_over_T",
+        "W80_over_T",
+    },
+    "Excursion and pulsability metrics": {
+        "PI",
+        "RI",
+    },
+    "Displacement partitioning and cumulative - displacement geometry": {
+        "R_VTI",
+        "SF_VTI",
+        "Delta_DTI",
+        "t50_over_T",
+        "s_t",
+        "w_t",
+        "s_d",
+        "w_d",
+    },
+    "Temporal kinetics and persistence metrics": {
+        "t_max_over_T",
+        "t_min_over_T",
+        "Delta_t_over_T",
+        "t_up_over_T",
+        "t_down_over_T",
+        "crest_factor",
+        "slope_rise_normalized",
+        "slope_fall_normalized",
+        "v_end_over_v_mean",
+    },
+    
+    "Harmonic - domain organization metrics": {
+        "E_low_over_E_total",
+        "rho_h",
+        "w_h",
+        "N_h_over_H_minus_1",
+        "eta_h",
+        
+        
+    },
+    
+    "Derivative - energy metrics": {
+        "E_slope",
+        
+    },
+    "Temporal support and concentration metrics": {
+        "N_t_over_T",
+        "N_eff_over_T",
+        
+    },
+}
+def generate_html_gallery(image_dir, html_dir, html_name="metric_dashboard.html"):
+    png_files = sorted(
+        [f for f in os.listdir(image_dir) if f.lower().endswith(".png")]
+    )
+
+    html = [
+        "<!DOCTYPE html>",
+        "<html lang='fr'>",
+        "<head>",
+        "    <meta charset='UTF-8'>",
+        "    <meta name='viewport' content='width=device-width, initial-scale=1.0'>",
+        "    <title>Waveform Metrics Dashboard</title>",
+        "    <script src='https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js'></script>",
+        "    <style>",
+        "        .group-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }",
+        "        .group-toggle { cursor: pointer; font-size: 14px; color: #666; width: 18px; text-align: center; }",
+        "        .filter-group-content.collapsed { display: none; }",
+        "        .image-thumbnail { width: 100%; border: 1px solid #cccccc; border-radius: 8px; cursor: pointer; outline: none; transition: transform 0.2s ease; }",
+        "        .image-thumbnail:focus, .image-thumbnail:active { outline: none; border: 1px solid #cccccc; }",
+        "        .image-thumbnail:hover { transform: scale(1.02); }",
+        "        .image-modal { display: none; position: fixed; z-index: 9999; left: 0; top: 0; width: 100vw; height: 100vh; background-color: rgba(0,0,0,0.9); justify-content: center; align-items: center; padding: 20px; box-sizing: border-box; }",
+        "        .image-modal.open { display: flex; }",
+        "        .image-modal img { display: block; max-width: 90vw; max-height: 90vh; width: auto; height: auto; object-fit: contain; border-radius: 10px; background: white; }",
+        "        .image-modal-close { position: absolute; top: 20px; right: 35px; color: white; font-size: 40px; font-weight: bold; cursor: pointer; }",
+        "        .card img { cursor: zoom-in; transition: transform 0.2s ease; }",
+        "        .card img:hover { transform: scale(1.02); }",
+        "        .toolbar { background: white; border-radius: 12px; padding: 15px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }",
+        "        .toolbar-top { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 15px; }",
+        "        .toolbar input[type='text'] { flex: 1; min-width: 250px; padding: 10px; border: 1px solid #ccc; border-radius: 8px; font-size: 14px; }",
+        "        .toolbar button { padding: 10px 14px; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; background: #e0e0e0; }",
+        "        .toolbar button:hover { background: #d0d0d0; }",
+        "        .filter-panel { border-top: 1px solid #ddd; padding-top: 15px; display: none; }",
+        "        .filter-panel.open { display: block; }",
+        "        .filter-grid { display: flex; flex-direction: column; gap: 12px; }",
+        "        .filter-item { display: flex; align-items: center; gap: 8px; background: #fafafa; border: 1px solid #ddd; border-radius: 8px; padding: 8px; }",
+        "        .filter-item input { cursor: pointer; }",
+        "        .filter-group-box { background: #f8f8f8; border: 1px solid #ddd; border-radius: 10px; padding: 10px; margin-bottom: 12px; }",
+        "        .filter-group-title { font-weight: bold; margin-bottom: 10px; font-size: 15px; color: #222; border-bottom: 1px solid #ddd; padding-bottom: 6px; }",
+        "        .filter-group-content { display: flex; flex-direction: column; gap: 6px; }",
+        "        .hidden { display: none !important; }",
+        "        .group-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }",
+        "        .group-header input { cursor: pointer; }",
+        "        .group-header label { font-weight: bold; font-size: 15px; color: #222; cursor: pointer; }",
+        "        .search-help { font-size: 13px; color: #666; margin-top: 8px; }",
+        "        .search-help code { background: #f0f0f0; padding: 2px 6px; border-radius: 4px; }",
+        "        body { font-family: Arial, sans-serif; background: #f5f5f5; padding: 20px; }",
+        "        h1 { text-align: center; }",
+        "        .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; max-width: 1600px; margin: 0 auto; }",
+        "        @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }", 
+        "        .card { background: white; border-radius: 12px; padding: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }",
+        "        .card h2 { font-size: 16px; margin-bottom: 10px; }",
+        "        img { width: 100%; border-radius: 8px; border: 1px solid #ddd; }",
+        "    </style>",
+        "</head>",
+        "<body>",
+        "    <h1>Waveform Shape Metrics Dashboard</h1>",
+        "    <div class='toolbar'>",
+        "        <div class='toolbar-top'>",
+        "            <input type='text' id='searchBox' placeholder='Search for a metric...'>",
+        "            <button onclick='toggleFilters()'>Show / Hide Filters</button>",
+        "            <button onclick='selectAllFilters()'>Select All</button>",
+        "            <button onclick='clearAllFilters()'>Clear All</button>",
+        "            <button onclick='collapseAllGroups()'>Collapse All Groups</button>",
+        "            <button onclick='expandAllGroups()'>Expand All Groups</button>",
+        "            <button onclick='invertSelection()'>Invert Selection</button>",
+        "            <label><input type='checkbox' id='showArtery' checked onchange='applyFilters()'> Artery</label>",
+        "            <label><input type='checkbox' id='showVein' checked onchange='applyFilters()'> Vein</label>",
+        "        </div>",
+        
+        "               <div class='search-help'>",
+        "            Search by metric name : <code>RI</code>, <code>PI</code>, <code>mu_t_over_T</code>, <code>W50</code>, <code>rho_h</code>, <code>phi</code>, <code>slope</code>, etc.",
+        "        </div>",
+        "        <div id='filterPanel' class='filter-panel'>",
+        "            <div class='filter-grid'>",
+    ]
+
+    seen_metrics = set()
+
+    assigned_metrics = set()
+
+    for metrics in METRIC_GROUPS.values():
+        assigned_metrics.update(metrics)
+
+    for group_name, group_metrics in METRIC_GROUPS.items():
+        group_id = (
+            group_name.lower()
+            .replace(" ", "_")
+            .replace("-", "_")
+            .replace("/", "_")
+        )
+
+        html.extend([
+            "        <div class='filter-group-box'>",
+            "            <div class='group-header'>",
+            f"                <span class='group-toggle' onclick=\"toggleCollapse('{group_id}', this)\">▼</span>",
+            f"                <input type='checkbox' checked onchange=\"toggleGroup('{group_id}', this.checked)\">",
+            f"                <label>{group_name}</label>",
+            "            </div>",
+            f"            <div class='filter-group-content' data-group='{group_id}'>",
+        ])
+
+        for png in sorted(png_files):
+            title = os.path.splitext(png)[0]
+
+            parts = title.split("_bandlimited_")
+            metric_name = parts[0]
+            vessel = parts[1] if len(parts) > 1 else "unknown"
+
+            if metric_name not in group_metrics:
+                continue
+
+            filter_key = f"{metric_name}_{vessel}"
+
+            if filter_key in seen_metrics:
+                continue
+
+            seen_metrics.add(filter_key)
+
+            display_title = LATEX_FORMULAS.get(metric_name, metric_name)
+            display_title = display_title.replace("$", "")
+            filter_id = f"{metric_name}_{vessel}".replace("/", "_").replace(" ", "_").lower()
+
+            html.extend([
+                "        <div class='filter-item'>",
+                f"            <input type='checkbox' class='metric-filter' id='filter_{filter_id}' value='{filter_key.lower()}' checked onchange='applyFilters()'>",
+                f"            <label for='filter_{filter_id}'>\\({display_title}\\) ({vessel})</label>",
+                "        </div>",
+            ])
+        html.extend([
+        "            </div>",
+        "        </div>",
+        ])
+
+    remaining_metrics = []
+
+    for png in sorted(png_files):
+        title = os.path.splitext(png)[0]
+
+        parts = title.split("_bandlimited_")
+        metric_name = parts[0]
+        vessel = parts[1] if len(parts) > 1 else "unknown"
+
+        if metric_name in assigned_metrics:
+            continue
+
+        filter_key = f"{metric_name}_{vessel}"
+
+        if filter_key in seen_metrics:
+            continue
+
+        seen_metrics.add(filter_key)
+        remaining_metrics.append((metric_name, vessel, filter_key))
+
+    if remaining_metrics:
+        html.extend([
+            "        <div class='filter-group-box'>",
+            "            <div class='group-header'>",
+            "                <span class='group-toggle' onclick=\"toggleCollapse('other', this)\">▼</span>",
+            "                <input type='checkbox' checked onchange=\"toggleGroup('other', this.checked)\">",
+            "                <label>Other</label>",
+            "            </div>",
+            "            <div class='filter-group-content' data-group='other'>",
+        ])
+
+        for metric_name, vessel, filter_key in remaining_metrics:
+            display_title = LATEX_FORMULAS.get(metric_name, metric_name)
+            display_title = display_title.replace("$", "")
+
+            filter_id = f"{metric_name}_{vessel}".replace("/", "_").replace(" ", "_").lower()
+
+            html.extend([
+                "        <div class='filter-item'>",
+                f"            <input type='checkbox' class='metric-filter' id='filter_{filter_id}' value='{filter_key.lower()}' checked onchange='applyFilters()'>",
+                f"            <label for='filter_{filter_id}'>\\({display_title}\\) ({vessel})</label>",
+                "        </div>",
+            ])
+        html.extend([
+        "            </div>",
+        "        </div>",
+        ])
+        
+    html.extend([
+    "            </div>",
+    "        </div>",
+    "    <div class='grid' id='metricsGrid'>",
+])
+
+    for png in sorted(png_files):
+        title = os.path.splitext(png)[0]
+
+        parts = title.split("_bandlimited_")
+        metric_name = parts[0]
+        vessel = parts[1] if len(parts) > 1 else "unknown"
+
+        display_title = LATEX_FORMULAS.get(metric_name, metric_name)
+        display_title = display_title.replace("$", "")
+
+        filter_key = f"{metric_name}_{vessel}".lower()
+
+        search_text = f"{metric_name.lower()} {display_title.lower()} {vessel.lower()} {filter_key}"
+        search_text = search_text.replace("\\", "").replace("{", "").replace("}", "")
+        png_path = os.path.join(image_dir, png)
+
+        with open(png_path, "rb") as img_file:
+            encoded = base64.b64encode(img_file.read()).decode("utf-8")
+
+        html.extend([
+            f"        <div class='card metric-card' data-metric='{filter_key}' data-search='{search_text}' data-vessel='{vessel.lower()}'>",
+            f"            <h2>\\({display_title}\\) - {vessel.capitalize()}</h2>",
+            f"            <img class='image-thumbnail' src='data:image/png;base64,{encoded}' alt='{title}' onclick=\"openImageModal(this.src)\">",
+            "        </div>",
+        ])
+
+    html.extend([
+    "    </div>",
+    "    <div id='imageModal' class='image-modal' onclick='closeImageModal()'>",
+    "        <span class='image-modal-close'>&times;</span>",
+    "        <img id='modalImage' src='' onclick='closeImageModal(); event.stopPropagation()'>",
+    "    </div>",
+    "    <script>",
+    "        function toggleFilters() {",
+    "            document.getElementById('filterPanel').classList.toggle('open');",
+    "        }",
+    "",
+    "        function toggleCollapse(groupName, element) {",
+    "            const container = document.querySelector(`.filter-group-content[data-group='${groupName}']`);",
+    "            if (!container) return;",
+    "",
+    "            container.classList.toggle('collapsed');",
+    "            element.textContent = container.classList.contains('collapsed') ? '▶' : '▼';",
+    "        }",
+    "",
+    "        function openImageModal(src) {",
+    "            document.getElementById('modalImage').src = src;",
+    "            document.getElementById('imageModal').classList.add('open');",
+    "        }",
+    "",
+    "        function closeImageModal() {",
+    "            document.getElementById('imageModal').classList.remove('open');",
+    "        }",
+    "        function applyFilters() {",
+    "            const search = document.getElementById('searchBox').value.toLowerCase();",
+    "            const checked = Array.from(document.querySelectorAll('.metric-filter:checked')).map(cb => cb.value.toLowerCase());",
+    "            const cards = document.querySelectorAll('.metric-card');",
+    "            const showArtery = document.getElementById('showArtery').checked;",
+    "            const showVein = document.getElementById('showVein').checked;",
+    "",
+    "            cards.forEach(card => {",
+    "                const metric = card.dataset.metric.toLowerCase();",
+    "                const searchText = card.dataset.search.toLowerCase();",
+    "",
+    "                const vessel = card.dataset.vessel.toLowerCase();",
+    "",
+    "                const visibleByCheckbox = checked.includes(metric);",
+    "                const visibleBySearch = search === '' || searchText.includes(search);",
+    "",
+    "                const visibleByVessel =",
+    "                    (vessel === 'artery' && showArtery) ||",
+    "                    (vessel === 'vein' && showVein);",    "",
+    "                if (visibleByCheckbox && visibleBySearch && visibleByVessel) {",
+    "                    card.classList.remove('hidden');",
+    "                } else {",
+    "                    card.classList.add('hidden');",
+    "                }",
+    "            });",
+    "        }",
+    "",
+    "        function toggleGroup(groupName, checked) {",
+    "            const container = document.querySelector(`.filter-group-content[data-group='${groupName}']`);",
+    "            if (!container) return;",
+    "",
+    "            container.querySelectorAll('.metric-filter').forEach(cb => {",
+    "                cb.checked = checked;",
+    "            });",
+    "",
+    "            applyFilters();",
+    "        }",
+    "        function collapseAllGroups() {",
+    "            document.querySelectorAll('.filter-group-content').forEach(group => {",
+    "                group.classList.add('collapsed');",
+    "            });",
+    "",
+    "            document.querySelectorAll('.group-toggle').forEach(toggle => {",
+    "                toggle.textContent = '▶';",
+    "            });",
+    "        }",
+    "",
+    "        function expandAllGroups() {",
+    "            document.querySelectorAll('.filter-group-content').forEach(group => {",
+    "                group.classList.remove('collapsed');",
+    "            });",
+    "",
+    "            document.querySelectorAll('.group-toggle').forEach(toggle => {",
+    "                toggle.textContent = '▼';",
+    "            });",
+    "        }",
+    "",
+    "        function invertSelection() {",
+    "            document.querySelectorAll('.metric-filter').forEach(cb => {",
+    "                cb.checked = !cb.checked;",
+    "            });",
+    "",
+    "            document.querySelectorAll('.filter-group-content').forEach(group => {",
+    "                const checkboxes = Array.from(group.querySelectorAll('.metric-filter'));",
+    "                const groupCheckbox = group.parentElement.querySelector('.group-header input[type=\"checkbox\"]');",
+    "",
+    "                if (groupCheckbox) {",
+    "                    groupCheckbox.checked = checkboxes.every(cb => cb.checked);",
+    "                }",
+    "            });",
+    "",
+    "            applyFilters();",
+    "        }",
+    "        function selectAllFilters() {",
+    "            document.querySelectorAll('.metric-filter').forEach(cb => cb.checked = true);",
+    "            document.querySelectorAll('.group-header input[type=\"checkbox\"]').forEach(cb => cb.checked = true);",
+    "            applyFilters();",
+    "        }",
+    "",
+    "        function clearAllFilters() {",
+    "            document.querySelectorAll('.metric-filter').forEach(cb => cb.checked = false);",
+    "            document.querySelectorAll('.group-header input[type=\"checkbox\"]').forEach(cb => cb.checked = false);",
+    "            applyFilters();",
+    "        }",
+    "",
+    "        document.getElementById('searchBox').addEventListener('input', applyFilters);",
+    "        window.addEventListener('load', applyFilters);",
+    "    </script>",
+    "</body>",
+    "</html>",
+])
+    html_path = os.path.join(html_dir, html_name)
+    with open(html_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(html))
+
+def add_html_to_zip(zip_path: str, html_path: str, arc_name: str = "waveform_metrics_dashboard.html"):
+    import zipfile
+    import os
+
+    if not os.path.exists(html_path):
+        raise FileNotFoundError(f"HTML file not found: {html_path}")
+
+    with zipfile.ZipFile(zip_path, "a", compression=zipfile.ZIP_DEFLATED) as z:
+        z.write(html_path, arc_name)
 
 
 def analyze_zip(zip_path):
@@ -1904,44 +2326,44 @@ def analyze_zip(zip_path):
     return dict(all_results), single_group
 
 
-def save_dashboard(all_results, original_zip, single_group):
+def save_dashboard(all_results, zip_path, single_group):
     # -----------------------------
     # export PNGs
     # -----------------------------
     png_dir = "export_png"
     eps_dir = "export_eps"
 
-    os.makedirs(png_dir, exist_ok=True)
-    os.makedirs(eps_dir, exist_ok=True)
+    reset_output_dir(png_dir)
+    reset_output_dir(eps_dir)
 
     # --- Windkessel ---
-    export_windkessel_figures(original_zip, png_dir, format="png")
+    export_windkessel_figures(zip_path, png_dir, format="png")
 
     eps_supported = _run_optional_eps_export(
-        lambda: export_windkessel_figures(original_zip, eps_dir, format="eps"),
+        lambda: export_windkessel_figures(zip_path, eps_dir, format="eps"),
         eps_dir,
     )
 
     # --- Metrics illustrations ---
     export_selected_metric_pngs_bandlimited(
         all_results,
-        original_zip,
+        zip_path,
         png_dir,
         "png",
+        show_right_panel=True,
     )
 
-    replace_folder_in_zip(original_zip, png_dir, arc_folder="export_png")
+    replace_folder_in_zip(zip_path, png_dir, arc_folder="export_png")
 
-    # nettoyage PNG
-    if os.path.isdir(png_dir):
-        shutil.rmtree(png_dir)
+    
+    
 
     # --- EPS ---
     if eps_supported:
         eps_supported = _run_optional_eps_export(
             lambda: export_selected_metric_pngs_bandlimited(
                 all_results,
-                original_zip,
+                zip_path,
                 eps_dir,
                 "eps",
             ),
@@ -1949,13 +2371,36 @@ def save_dashboard(all_results, original_zip, single_group):
         )
 
     if eps_supported:
-        replace_folder_in_zip(original_zip, eps_dir, arc_folder="export_eps")
+        replace_folder_in_zip(zip_path, eps_dir, arc_folder="export_eps")
 
-    # nettoyage EPS
+
+    #HTML 
+    temp_html_dir = tempfile.mkdtemp()
+    generate_html_gallery(
+        image_dir=png_dir,
+        html_dir=temp_html_dir,
+        html_name="waveform_metrics_dashboard.html",
+    )
+
+    html_path = os.path.join(
+        temp_html_dir,
+        "waveform_metrics_dashboard.html"
+    )
+
+    add_html_to_zip(
+        zip_path,
+        html_path,
+        arc_name="waveform_metrics_dashboard.html",
+    )
+
+    if os.path.isdir(temp_html_dir):
+            shutil.rmtree(temp_html_dir)
+    
+    if os.path.isdir(png_dir):
+        shutil.rmtree(png_dir)
+
     if os.path.isdir(eps_dir):
         shutil.rmtree(eps_dir)
-
-
 
 if __name__ == "__main__":
     zip_path = choose_zip()
