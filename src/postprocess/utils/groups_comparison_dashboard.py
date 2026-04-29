@@ -21,7 +21,7 @@ from angioeye_io.archive_io import (
     reset_output_dir,
     replace_folder_in_zip,
 )
-from .grouped_batch import (
+from ..core.grouped_batch import (
     build_group_order,
     build_grouped_h5_index,
     find_control_group_name,
