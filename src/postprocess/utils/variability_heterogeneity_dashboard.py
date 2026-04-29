@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 from angioeye_io.hdf5_io import find_first_existing_path
 from angioeye_io.archive_io import replace_folder_in_zip
-from .grouped_batch import iter_grouped_h5_files_in_zip
+from ..core.grouped_batch import iter_grouped_h5_files_in_zip
 from angioeye_io.archive_io import extract_folder_from_zip, temporary_zip_from_tree
 from angioeye_io.hdf5_io import MetricsTree, append_metrics_trees_to_h5, read_dataset
 from angioeye_io.hdf5_schema import ANGIOEYE_POSTPROCESS_ROOT, find_pipeline_group

@@ -14,7 +14,7 @@ from angioeye_io.archive_io import (
     replace_folder_in_zip,
     reset_output_dir,
 )
-from .grouped_batch import (
+from ..core.grouped_batch import (
     find_control_group_name,
     iter_grouped_h5_files_in_zip,
 )

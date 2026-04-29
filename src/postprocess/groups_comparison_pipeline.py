@@ -34,7 +34,7 @@ class GraphicsDashboardPostprocess(BatchPostprocess):
         if not output_dir.exists() or not output_dir.is_dir():
             raise FileNotFoundError(f"Output folder does not exist: {output_dir}")
 
-        from .core import groups_comparison_dashboard
+        from .utils import groups_comparison_dashboard
 
         with temporary_zip_from_tree(
             output_dir,
@@ -52,10 +52,8 @@ class GraphicsDashboardPostprocess(BatchPostprocess):
                 all_results,
                 str(temp_zip),
                 single_group,
-                
             )
 
-            
             png_paths = extract_folder_from_zip(
                 zip_path=temp_zip,
                 member_prefix="export_png/",
@@ -73,7 +71,7 @@ class GraphicsDashboardPostprocess(BatchPostprocess):
                 output_dir=output_dir,
             )
         created_paths = [
-            str(dashboard_path)
+            str(dashboard_path),
             *[str(path) for path in png_paths],
             *[str(path) for path in eps_paths],
         ]

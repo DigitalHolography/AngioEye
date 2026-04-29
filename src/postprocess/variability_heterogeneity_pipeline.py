@@ -34,7 +34,7 @@ class VariabilityHeterogeneityPostprocess(BatchPostprocess):
         if not output_dir.exists() or not output_dir.is_dir():
             raise FileNotFoundError(f"Output folder does not exist: {output_dir}")
 
-        from .core import variability_heterogeneity_dashboard
+        from .utils import variability_heterogeneity_dashboard
 
         for file_path in context.processed_files:
             tree = variability_heterogeneity_dashboard.write_variability_tree(file_path)
