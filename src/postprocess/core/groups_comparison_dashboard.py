@@ -286,7 +286,7 @@ def plot_windkessel_metric_for_method(df, metric, method, out_path):
             capsize=6,
             markersize=13,
             markerfacecolor="none",
-            markeredgecolor="black",
+            markeredgecolor="red",
             markeredgewidth=2.2,
             zorder=3,
         )
@@ -1698,26 +1698,21 @@ def export_selected_metric_pngs_bandlimited(
                     )
 
                     if g in grp_mean.index:
-                        try :
-                            ax_top.errorbar(
-                                [x_pos[g]],
-                                [grp_mean.loc[g]],
-                                color="black",
-                                yerr=[grp_std.loc[g] if pd.notna(grp_std.loc[g]) else 0],
-                                fmt=shapes[i % len(shapes)],
-                                capsize=5,
-                                markersize=12,
-                                linewidth=1.2,
-                                markerfacecolor="none",
-                                markeredgecolor="black",
-                                markeredgewidth=3,
+                        
+                        ax_top.errorbar(
+                            [x_pos[g]],
+                            [grp_mean.loc[g]],
+                            color="black",
+                            yerr=[grp_std.loc[g] if pd.notna(grp_std.loc[g]) else 0],
+                            fmt=shapes[i % len(shapes)],
+                            capsize=5,
+                            markersize=12,
+                            linewidth=1.2,
+                            markerfacecolor="none",
+                            markeredgecolor="red",
+                            markeredgewidth=3,
                             )
-                        except Exception as e:
-                            print("💥 ERROR HERE")
-                            print("group:", g)
-                            print("mean:", grp_mean.loc[g], type(grp_mean.loc[g]))
-                            print("std:", grp_std.loc[g], type(grp_std.loc[g]))
-                            raise
+                        
 
                 ax_top.set_title(
                     f"{LATEX_FORMULAS.get(metric, metric)} (bandlimited waveform, {vessel})",
@@ -2350,7 +2345,7 @@ def save_dashboard(all_results, zip_path, single_group):
         zip_path,
         png_dir,
         "png",
-        show_right_panel=True,
+        show_right_panel=False,
     )
 
     replace_folder_in_zip(zip_path, png_dir, arc_folder="export_png")
@@ -2366,6 +2361,7 @@ def save_dashboard(all_results, zip_path, single_group):
                 zip_path,
                 eps_dir,
                 "eps",
+                show_right_panel=False,
             ),
             eps_dir,
         )

@@ -73,7 +73,7 @@ class GraphicsDashboardPostprocess(BatchPostprocess):
                 output_dir=output_dir,
             )
         created_paths = [
-            str(dashboard_path)
+            str(dashboard_path),
             *[str(path) for path in png_paths],
             *[str(path) for path in eps_paths],
         ]
