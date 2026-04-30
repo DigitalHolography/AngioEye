@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import os
-import shutil
-import tempfile
-import zipfile
-from pathlib import Path
+from angioeye_io.archive_io import extract_folder_from_zip, temporary_zip_from_tree
+from angioeye_io.hdf5_io import MetricsTree, append_metrics_trees_to_h5, read_dataset
+from angioeye_io.hdf5_schema import ANGIOEYE_POSTPROCESS_ROOT, find_pipeline_group
 
 from .core.base import (
     BatchPostprocess,
@@ -23,7 +21,9 @@ from .core.base import (
     required_deps=["pandas>=2.1"],
     required_pipelines=["waveform_shape_metrics"],
 )
-class GraphicsDashboardPostprocess(BatchPostprocess):
+class VariabilityHeterogeneityPostprocess(BatchPostprocess):
+
+
     def run(self, context: PostprocessContext) -> PostprocessResult:
         if not context.processed_files:
             raise ValueError(
@@ -34,34 +34,40 @@ class GraphicsDashboardPostprocess(BatchPostprocess):
         if not output_dir.exists() or not output_dir.is_dir():
             raise FileNotFoundError(f"Output folder does not exist: {output_dir}")
 
-        from .core import variability_heterogeneity_dashboard
+        from .utils import variability_heterogeneity_dashboard
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_root = Path(temp_dir)
-            temp_zip = temp_root / "batch_outputs.zip"
-            self._zip_folder(output_dir, temp_zip)
+        for file_path in context.processed_files:
+            tree = variability_heterogeneity_dashboard.write_variability_tree(file_path)
 
-            cwd = Path.cwd()
-            try:
-                os.chdir(temp_root)
+            if tree is None:
+                continue
 
-                results = variability_heterogeneity_dashboard.analyze_zip(
-                    str(temp_zip),
-                    mode="bandlimited_segment",
+            append_metrics_trees_to_h5(
+                file_path,
+                ANGIOEYE_POSTPROCESS_ROOT,
+                [tree],
+                overwrite=True,
+            )
+
+        with temporary_zip_from_tree(
+            output_dir,
+            source_paths=context.processed_files,
+        ) as temp_zip:
+            results, metrics = variability_heterogeneity_dashboard.analyze_zip(
+                str(temp_zip),
+                mode="bandlimited_segment",
+            )
+            if not results:
+                raise ValueError(
+                    "No compatible by-segment metrics were found for the variability/heterogeneity tables."
                 )
-                if not results:
-                    raise ValueError(
-                        "No compatible by-segment metrics were found for the variability/heterogeneity tables."
-                    )
 
-                variability_heterogeneity_dashboard.export_group_tables(
-                    str(temp_zip),
-                    mode="bandlimited_segment",
-                )
-            finally:
-                os.chdir(cwd)
+            variability_heterogeneity_dashboard.export_group_tables(
+                str(temp_zip),
+                mode="bandlimited_segment",
+            )
 
-            table_paths = self._extract_prefix(
+            table_paths = extract_folder_from_zip(
                 zip_path=temp_zip,
                 member_prefix="latex_tables/",
                 output_dir=output_dir,
@@ -72,40 +78,3 @@ class GraphicsDashboardPostprocess(BatchPostprocess):
             f"Generated {len(table_paths)} variability/heterogeneity table file(s)."
         )
         return PostprocessResult(summary=summary, generated_paths=created_paths)
-
-    def _zip_folder(self, folder: Path, zip_path: Path) -> None:
-        files = sorted(
-            (path for path in folder.rglob("*") if path.is_file()),
-            key=lambda path: str(path.relative_to(folder)),
-        )
-        with zipfile.ZipFile(
-            zip_path,
-            "w",
-            compression=zipfile.ZIP_DEFLATED,
-            compresslevel=1,
-        ) as archive:
-            for file_path in files:
-                archive.write(file_path, file_path.relative_to(folder))
-
-    def _extract_prefix(
-        self,
-        zip_path: Path,
-        member_prefix: str,
-        output_dir: Path,
-    ) -> list[Path]:
-        target_dir = output_dir / member_prefix.rstrip("/")
-        if target_dir.exists():
-            shutil.rmtree(target_dir)
-
-        extracted: list[Path] = []
-        with zipfile.ZipFile(zip_path, "r") as archive:
-            for member in archive.namelist():
-                if not member.startswith(member_prefix) or member.endswith("/"):
-                    continue
-                rel_path = Path(member).relative_to(member_prefix.rstrip("/"))
-                target = target_dir / rel_path
-                target.parent.mkdir(parents=True, exist_ok=True)
-                with archive.open(member) as src, target.open("wb") as dest:
-                    shutil.copyfileobj(src, dest)
-                extracted.append(target)
-        return extracted

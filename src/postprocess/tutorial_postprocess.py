@@ -43,6 +43,7 @@ class PostprocessTutorial(BatchPostprocess):
             "context_fields": {
                 "output_dir": str(context.output_dir),
                 "processed_files": [str(path) for path in context.processed_files],
+                "input_h5_paths": [str(path) for path in context.input_h5_paths],
                 "selected_pipelines": list(context.selected_pipelines),
                 "input_path": str(context.input_path),
                 "zip_outputs": context.zip_outputs,

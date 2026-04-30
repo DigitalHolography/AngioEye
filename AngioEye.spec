@@ -2,7 +2,6 @@
 from PyInstaller.utils.hooks import collect_data_files
 from PyInstaller.utils.hooks import collect_submodules
 
-
 def _common_datas():
     datas = []
     datas += collect_data_files("pipelines")
@@ -12,6 +11,7 @@ def _common_datas():
     datas += [("Angioeye_logo.png", ".")]
     datas += [("AngioEye.ico", ".")]
     datas += [("default_settings.json", ".")]
+    datas += [("pyproject.toml", ".")]
     return datas
 
 

@@ -18,6 +18,7 @@ fake_pipelines = types.ModuleType("pipelines")
 fake_pipelines.PipelineDescriptor = object
 fake_pipelines.ProcessResult = object
 fake_pipelines.load_pipeline_catalog = lambda: ([], [])
+fake_pipelines.process_results_to_metric_trees = lambda *args, **kwargs: []
 sys.modules.setdefault("pipelines", fake_pipelines)
 sys.modules.setdefault("pipelines.core", types.ModuleType("pipelines.core"))
 
@@ -25,9 +26,11 @@ fake_pipeline_errors = types.ModuleType("pipelines.core.errors")
 fake_pipeline_errors.format_pipeline_exception = lambda exc, _pipeline: str(exc)
 sys.modules.setdefault("pipelines.core.errors", fake_pipeline_errors)
 
-fake_pipeline_utils = types.ModuleType("pipelines.core.utils")
-fake_pipeline_utils.write_combined_results_h5 = lambda *args, **kwargs: None
-sys.modules.setdefault("pipelines.core.utils", fake_pipeline_utils)
+fake_angioeye_io = types.ModuleType("angioeye_io")
+fake_angioeye_io.ANGIOEYE_PROCESSING_ROOT = "/AngioEye/Processing"
+fake_angioeye_io.create_h5_file = lambda *args, **kwargs: None
+fake_angioeye_io.write_metrics_trees_to_h5 = lambda *args, **kwargs: None
+sys.modules.setdefault("angioeye_io", fake_angioeye_io)
 
 fake_postprocess = types.ModuleType("postprocess")
 fake_postprocess.PostprocessContext = object
@@ -39,10 +42,10 @@ from angio_eye import ProcessApp  # noqa: E402
 
 for _module_name in (
     "h5py",
+    "angioeye_io",
     "pipelines",
     "pipelines.core",
     "pipelines.core.errors",
-    "pipelines.core.utils",
     "postprocess",
 ):
     _module = sys.modules.get(_module_name)

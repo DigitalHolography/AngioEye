@@ -11,13 +11,13 @@ class ArterialExample(ProcessPipeline):
     Tutorial pipeline showing the full surface area of a pipeline:
 
     - Subclass ProcessPipeline and implement `run(self, h5file) -> ProcessResult`.
-    - Return metrics (scalars, vectors, matrices, cubes) and optional artifacts.
+    - Return metrics (scalars, vectors, matrices, cubes).
     - Attach HDF5 attributes to any metric via `with_attrs(data, attrs_dict)`.
-    - Add attributes to the pipeline group (`attrs`) or root file (`file_attrs`).
+    - Add attributes to the pipeline group through `ProcessResult.attrs`.
     - No input data is required; this pipeline is purely illustrative.
     """
 
-    description = "Tutorial: metrics + artifacts + dataset attrs + file/pipeline attrs."
+    description = "Tutorial: metrics + dataset attrs + pipeline-group attrs."
     M0_input = "/moment0"
     M1_input = "/moment1"
     M2_input = "/moment2"

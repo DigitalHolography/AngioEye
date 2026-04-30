@@ -18,15 +18,18 @@ from app_settings import (  # noqa: E402
 
 
 class AppSettingsTests(unittest.TestCase):
-    def test_default_settings_path_prefers_appdata(self) -> None:
+    def test_default_settings_path_prefers_appdata_and_version(self) -> None:
         with mock.patch.dict(
             "os.environ",
-            {"APPDATA": r"C:\Users\Test\AppData\Roaming"},
+            {
+                "APPDATA": r"C:\Users\Test\AppData\Roaming",
+                "ANGIOEYE_VERSION": "9.9.9",
+            },
             clear=True,
         ):
             self.assertEqual(
                 default_settings_path(),
-                Path(r"C:\Users\Test\AppData\Roaming\AngioEye\settings.json"),
+                Path(r"C:\Users\Test\AppData\Roaming\AngioEye\9.9.9\settings.json"),
             )
 
     def test_normalize_pipeline_visibility_defaults_first_run_to_visible(self) -> None:

@@ -11,7 +11,7 @@ from matplotlib.ticker import FormatStrFormatter
 from tkinter import Tk, filedialog
 import base64
 
-PIPELINE_ROOT = "/Pipelines/waveform_shape_metrics"
+PIPELINE_ROOT = "/AngioEye/Processing/waveform_shape_metrics"
 VALID_METRIC_FOLDERS = ["raw", "bandlimited"]
 VALID_VESSELS = ["artery", "vein"]
 
@@ -146,7 +146,7 @@ def extract_metrics(h5_path):
                     data = np.array(dataset, dtype=float)
 
                     results[mode][vessel][metric_name] = {
-                        "mean": np.nanmedian(data),
+                        "median": np.nanmedian(data),
                         "std": np.nanstd(data),
                     }
 
@@ -180,7 +180,7 @@ def analyze_zip(zip_path):
                                 {
                                     "file": file,
                                     "group": group_name,
-                                    "mean": values["mean"],
+                                    "median": values["median"],
                                     "std": values["std"],
                                     "vessel": vessel,
                                 }
@@ -206,8 +206,8 @@ def plot_group_statistics(df, metric, vessel, out_path):
 
     x_pos = {g: i for i, g in enumerate(groups)}
 
-    grp_mean = df.groupby("group")["mean"].mean()
-    grp_std = df.groupby("group")["mean"].std()
+    grp_mean = df.groupby("group")["median"].mean()
+    grp_std = df.groupby("group")["median"].std()
 
     fig, ax = plt.subplots(figsize=(8, 6), dpi=200)
     ax.set_facecolor("#f2f2f2")
@@ -230,7 +230,7 @@ def plot_group_statistics(df, metric, vessel, out_path):
 
         ax.scatter(
             x,
-            gdf["mean"].values,
+            gdf["median"].values,
             color="black",
             s=20,
             edgecolors="none",
@@ -399,9 +399,13 @@ def generate_html_gallery(image_dir, html_dir, html_name="metric_dashboard.html"
         "        .group-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }",
         "        .group-toggle { cursor: pointer; font-size: 14px; color: #666; width: 18px; text-align: center; }",
         "        .filter-group-content.collapsed { display: none; }",
-        "        .image-modal { display: none; position: fixed; z-index: 9999; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); justify-content: center; align-items: center; padding: 20px; box-sizing: border-box; }",
-        "        .image-modal img { max-width: 95%; max-height: 95%; border-radius: 12px; background: white; }",
+        "        .image-thumbnail { width: 100%; border: 1px solid #cccccc; border-radius: 8px; cursor: pointer; outline: none; transition: transform 0.2s ease; }",
+        "        .image-thumbnail:focus, .image-thumbnail:active { outline: none; border: 1px solid #cccccc; }",
+        "        .image-thumbnail:hover { transform: scale(1.02); }",
+        "        .image-modal { display: none; position: fixed; z-index: 9999; left: 0; top: 0; width: 100vw; height: 100vh; background-color: rgba(0,0,0,0.9); justify-content: center; align-items: center; padding: 20px; box-sizing: border-box; }",
         "        .image-modal.open { display: flex; }",
+        "        .image-modal img { display: block; max-width: 90vw; max-height: 90vh; width: auto; height: auto; object-fit: contain; border-radius: 10px; background: white; }",
+        "        .image-modal-close { position: absolute; top: 20px; right: 35px; color: white; font-size: 40px; font-weight: bold; cursor: pointer; }",
         "        .card img { cursor: zoom-in; transition: transform 0.2s ease; }",
         "        .card img:hover { transform: scale(1.02); }",
         "        .toolbar { background: white; border-radius: 12px; padding: 15px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }",
@@ -587,14 +591,15 @@ def generate_html_gallery(image_dir, html_dir, html_name="metric_dashboard.html"
         html.extend([
             f"        <div class='card metric-card' data-metric='{filter_key}' data-search='{search_text}' data-vessel='{vessel.lower()}'>",
             f"            <h2>\\({display_title}\\) - {vessel.capitalize()}</h2>",
-            f"            <img src='data:image/png;base64,{encoded}' alt='{title}' onclick=\"openImageModal(this.src)\">",
+            f"            <img class='image-thumbnail' src='data:image/png;base64,{encoded}' alt='{title}' onclick=\"openImageModal(this.src)\">",
             "        </div>",
         ])
 
     html.extend([
     "    </div>",
     "    <div id='imageModal' class='image-modal' onclick='closeImageModal()'>",
-    "        <img id='modalImage' src=''>",
+    "        <span class='image-modal-close'>&times;</span>",
+    "        <img id='modalImage' src='' onclick='closeImageModal(); event.stopPropagation()'>",
     "    </div>",
     "    <script>",
     "        function toggleFilters() {",

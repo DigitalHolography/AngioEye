@@ -9,6 +9,7 @@ Inputs:
     --pipelines / -p   Text file listing pipeline names (one per line, '#' and blank lines ignored).
     --postprocess      Optional text file listing postprocess names (one per line, '#' and blank lines ignored).
     --output / -o      Base directory where results will be written (input subfolder layout is preserved).
+    --trim-source / -t When set, source HDF5 contents will not be copied into pipeline output files (reducing output size, but losing provenance).
     --zip / -z         When set, compress the outputs into a .zip archive after completion.
     --zip-name         Optional filename for the archive (default: outputs.zip).
 """
@@ -26,13 +27,18 @@ from pathlib import Path
 
 import h5py
 
+from angioeye_io import (
+    ANGIOEYE_PROCESSING_ROOT,
+    create_h5_file,
+    write_metrics_trees_to_h5,
+)
 from pipelines import (
     PipelineDescriptor,
     ProcessResult,
     load_pipeline_catalog,
+    process_results_to_metric_trees,
 )
 from pipelines.core.errors import format_pipeline_exception
-from pipelines.core.utils import write_combined_results_h5
 from postprocess import (
     PostprocessContext,
     PostprocessDescriptor,
@@ -155,6 +161,7 @@ def _run_pipelines_on_file(
     pipelines: Sequence[PipelineDescriptor],
     output_root: Path,
     output_relative_parent: Path = Path("."),
+    trim_source: bool = False,
 ) -> Path:
     target_dir = output_root / output_relative_parent
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -173,8 +180,16 @@ def _run_pipelines_on_file(
                 raise RuntimeError(format_pipeline_exception(exc, pipeline)) from exc
             pipeline_results.append((pipeline.name, result))
             print(f"[OK] {h5_path.name} -> {pipeline.name}")
-    write_combined_results_h5(
-        pipeline_results, combined_h5_out, source_file=str(h5_path)
+    create_h5_file(
+        combined_h5_out,
+        source_file=str(h5_path),
+        trim_source=trim_source,
+    )
+    write_metrics_trees_to_h5(
+        combined_h5_out,
+        ANGIOEYE_PROCESSING_ROOT,
+        process_results_to_metric_trees(pipeline_results),
+        overwrite=False,
     )
     for _, result in pipeline_results:
         result.output_h5_path = str(combined_h5_out)
@@ -232,6 +247,7 @@ def run_cli(
     pipelines_file: Path,
     postprocess_file: Path | None,
     output_dir: Path,
+    trim_source: bool = False,
     zip_outputs: bool = False,
     zip_name: str | None = None,
 ) -> int:
@@ -265,6 +281,7 @@ def run_cli(
 
         failures: list[str] = []
         processed_outputs: list[Path] = []
+        processed_input_paths: list[Path] = []
         for h5_path in inputs:
             try:
                 relative_parent = _relative_input_parent(h5_path, data_root)
@@ -273,8 +290,10 @@ def run_cli(
                     pipelines,
                     work_root,
                     output_relative_parent=relative_parent,
+                    trim_source=trim_source,
                 )
                 processed_outputs.append(combined_output)
+                processed_input_paths.append(h5_path)
             except Exception as exc:  # noqa: BLE001
                 failures.append(f"{h5_path}: {exc}")
                 print(f"[FAIL] {h5_path.name}: {exc}", file=sys.stderr)
@@ -286,6 +305,7 @@ def run_cli(
                 selected_pipelines=tuple(pipeline.name for pipeline in pipelines),
                 input_path=data_path,
                 zip_outputs=zip_outputs,
+                input_h5_paths=tuple(processed_input_paths),
             )
             for descriptor in postprocesses:
                 print(f"[POST] Running {descriptor.name}...")
@@ -389,6 +409,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Base output directory. Input subfolder layout is preserved for output files.",
     )
     parser.add_argument(
+        "-t",
+        "--trim-source",
+        action="store_true",
+        help="When set, source HDF5 contents will not be copied into pipeline output files (reducing output size, but losing provenance).",
+    )
+    parser.add_argument(
         "-z",
         "--zip",
         action="store_true",
@@ -408,6 +434,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.pipelines,
             args.postprocess,
             args.output,
+            trim_source=args.trim_source,
             zip_outputs=args.zip,
             zip_name=args.zip_name,
         )
