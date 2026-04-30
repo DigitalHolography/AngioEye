@@ -14,6 +14,11 @@ from tkinter import filedialog, messagebox, ttk
 
 import h5py
 
+from angioeye_io import (
+    ANGIOEYE_PROCESSING_ROOT,
+    create_h5_file,
+    write_metrics_trees_to_h5,
+)
 from app_settings import (
     LAST_BATCH_LOG_FILENAME,
     AppSettingsStore,
@@ -32,9 +37,13 @@ try:
 except ImportError:  #  optional dependency
     sv_ttk = None
 
-from pipelines import PipelineDescriptor, ProcessResult, load_pipeline_catalog
+from pipelines import (
+    PipelineDescriptor,
+    ProcessResult,
+    load_pipeline_catalog,
+    process_results_to_metric_trees,
+)
 from pipelines.core.errors import format_pipeline_exception
-from pipelines.core.utils import write_combined_results_h5
 from postprocess import (
     PostprocessContext,
     PostprocessDescriptor,
@@ -1736,11 +1745,16 @@ class ProcessApp(_BaseAppTk):
 
         def _worker() -> None:
             try:
-                write_combined_results_h5(
-                    pipeline_results,
+                create_h5_file(
                     combined_h5_out,
                     source_file=source_file,
                     trim_source=self._trim_h5source.get(),
+                )
+                write_metrics_trees_to_h5(
+                    combined_h5_out,
+                    ANGIOEYE_PROCESSING_ROOT,
+                    process_results_to_metric_trees(pipeline_results),
+                    overwrite=False,
                 )
             except Exception as exc:  # noqa: BLE001
                 errors.append(exc)
