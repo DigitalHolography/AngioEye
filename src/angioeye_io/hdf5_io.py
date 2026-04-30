@@ -8,6 +8,10 @@ from typing import Any
 import h5py
 import numpy as np
 
+VERSION_GROUP_NAME = "version"
+ANGIOEYE_VERSION_DATASET = "Angioeye"
+UNKNOWN_ANGIOEYE_VERSION = "unknown"
+
 
 @dataclass
 class MetricsTree:
@@ -43,11 +47,47 @@ def copy_h5_contents(source_file: Path | str | None, dest: h5py.File) -> None:
             src.copy(src[key], dest, name=key)
 
 
+def _resolve_angioeye_version(explicit_version: str | None = None) -> str:
+    if explicit_version is not None:
+        cleaned = explicit_version.strip()
+        if cleaned:
+            return cleaned
+
+    from app_settings import app_version
+
+    detected_version = app_version()
+    if detected_version is not None:
+        cleaned = detected_version.strip()
+        if cleaned:
+            return cleaned
+    return UNKNOWN_ANGIOEYE_VERSION
+
+
+def _write_angioeye_version(
+    h5file: h5py.File,
+    *,
+    angioeye_version: str | None = None,
+) -> None:
+    version_group = h5file.get(VERSION_GROUP_NAME)
+    if version_group is None:
+        version_group = h5file.create_group(VERSION_GROUP_NAME)
+    elif not isinstance(version_group, h5py.Group):
+        del h5file[VERSION_GROUP_NAME]
+        version_group = h5file.create_group(VERSION_GROUP_NAME)
+
+    write_value_dataset(
+        version_group,
+        ANGIOEYE_VERSION_DATASET,
+        _resolve_angioeye_version(angioeye_version),
+    )
+
+
 def create_h5_file(
     path: Path | str,
     *,
     source_file: Path | str | None = None,
     trim_source: bool = False,
+    angioeye_version: str | None = None,
 ) -> Path:
     out_path = Path(path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -56,6 +96,10 @@ def create_h5_file(
             copy_h5_contents(source_file, h5file)
         if source_file:
             h5file.attrs["source_file"] = str(source_file)
+        _write_angioeye_version(
+            h5file,
+            angioeye_version=angioeye_version,
+        )
     return out_path
 
 
