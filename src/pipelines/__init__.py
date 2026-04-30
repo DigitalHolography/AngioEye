@@ -7,12 +7,16 @@ from pathlib import Path
 # import inspect
 from .core.base import (
     PIPELINE_REGISTRY,
+    DatasetValue,
     MissingPipeline,
     PipelineDescriptor,
     ProcessPipeline,
     ProcessResult,
+    process_result_to_metrics_tree,
+    process_results_to_metric_trees,
+    registerPipeline,
+    with_attrs,
 )
-from .core.utils import write_combined_results_h5, write_result_h5
 
 
 def _extend_with_external_pipeline_dir() -> None:
@@ -70,7 +74,7 @@ def _discover_pipelines() -> tuple[list[PipelineDescriptor], list[PipelineDescri
             missing_deps=cls.missing_deps,
             pipeline_cls=cls,
         )
-        if getattr(cls, "is_available", True):
+        if getattr(cls, "available", True):
             available.append(desc)
         else:
             missing.append(desc)
@@ -87,18 +91,31 @@ def load_pipeline_catalog() -> tuple[
     return _discover_pipelines()
 
 
-# Expose pipeline classes at package level for convenience and star-imports.
+# Expose uniquely named pipeline classes at package level for convenience.
 _AVAILABLE, _MISSING = _discover_pipelines()
-for _cls in (p.__class__ for p in _AVAILABLE):
-    globals().setdefault(_cls.__name__, _cls)
+_EXPORTED_PIPELINE_CLASSES: dict[str, type[ProcessPipeline]] = {}
+for _descriptor in _AVAILABLE:
+    if _descriptor.pipeline_cls is None:
+        continue
+    _EXPORTED_PIPELINE_CLASSES.setdefault(
+        _descriptor.pipeline_cls.__name__,
+        _descriptor.pipeline_cls,
+    )
+
+for _name, _cls in _EXPORTED_PIPELINE_CLASSES.items():
+    globals().setdefault(_name, _cls)
 
 
 __all__ = [
     "ProcessPipeline",
     "ProcessResult",
-    "write_result_h5",
-    "write_combined_results_h5",
+    "PipelineDescriptor",
+    "DatasetValue",
+    "with_attrs",
+    "registerPipeline",
+    "process_result_to_metrics_tree",
+    "process_results_to_metric_trees",
     "load_pipeline_catalog",
     "MissingPipeline",
-    *[_cls.__name__ for _cls in (p.__class__ for p in _AVAILABLE)],
+    *_EXPORTED_PIPELINE_CLASSES.keys(),
 ]

@@ -11,7 +11,7 @@ from matplotlib.ticker import FormatStrFormatter
 from tkinter import Tk, filedialog
 import base64
 
-PIPELINE_ROOT = "/AngioEye/waveform_shape_metrics"
+PIPELINE_ROOT = "/AngioEye/Processing/waveform_shape_metrics"
 VALID_METRIC_FOLDERS = ["raw", "bandlimited"]
 VALID_VESSELS = ["artery", "vein"]
 
@@ -146,7 +146,7 @@ def extract_metrics(h5_path):
                     data = np.array(dataset, dtype=float)
 
                     results[mode][vessel][metric_name] = {
-                        "mean": np.nanmedian(data),
+                        "median": np.nanmedian(data),
                         "std": np.nanstd(data),
                     }
 
@@ -180,7 +180,7 @@ def analyze_zip(zip_path):
                                 {
                                     "file": file,
                                     "group": group_name,
-                                    "mean": values["mean"],
+                                    "median": values["median"],
                                     "std": values["std"],
                                     "vessel": vessel,
                                 }
@@ -206,8 +206,8 @@ def plot_group_statistics(df, metric, vessel, out_path):
 
     x_pos = {g: i for i, g in enumerate(groups)}
 
-    grp_mean = df.groupby("group")["mean"].mean()
-    grp_std = df.groupby("group")["mean"].std()
+    grp_mean = df.groupby("group")["median"].mean()
+    grp_std = df.groupby("group")["median"].std()
 
     fig, ax = plt.subplots(figsize=(8, 6), dpi=200)
     ax.set_facecolor("#f2f2f2")
@@ -230,7 +230,7 @@ def plot_group_statistics(df, metric, vessel, out_path):
 
         ax.scatter(
             x,
-            gdf["mean"].values,
+            gdf["median"].values,
             color="black",
             s=20,
             edgecolors="none",
@@ -599,7 +599,7 @@ def generate_html_gallery(image_dir, html_dir, html_name="metric_dashboard.html"
     "    </div>",
     "    <div id='imageModal' class='image-modal' onclick='closeImageModal()'>",
     "        <span class='image-modal-close'>&times;</span>",
-    "        <img id='modalImage' src='' onclick='event.stopPropagation()'>",
+    "        <img id='modalImage' src='' onclick='closeImageModal(); event.stopPropagation()'>",
     "    </div>",
     "    <script>",
     "        function toggleFilters() {",

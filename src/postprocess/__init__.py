@@ -13,6 +13,7 @@ from .core.base import (
     PostprocessContext,
     PostprocessDescriptor,
     PostprocessResult,
+    registerPostprocess,
 )
 
 
@@ -111,8 +112,17 @@ def load_postprocess_catalog() -> tuple[
 
 
 _AVAILABLE, _MISSING = _discover_postprocesses()
-for _cls in (postprocess.__class__ for postprocess in _AVAILABLE):
-    globals().setdefault(_cls.__name__, _cls)
+_EXPORTED_POSTPROCESS_CLASSES: dict[str, type[BatchPostprocess]] = {}
+for _descriptor in _AVAILABLE:
+    if _descriptor.postprocess_cls is None:
+        continue
+    _EXPORTED_POSTPROCESS_CLASSES.setdefault(
+        _descriptor.postprocess_cls.__name__,
+        _descriptor.postprocess_cls,
+    )
+
+for _name, _cls in _EXPORTED_POSTPROCESS_CLASSES.items():
+    globals().setdefault(_name, _cls)
 
 
 __all__ = [
@@ -121,6 +131,7 @@ __all__ = [
     "PostprocessContext",
     "PostprocessDescriptor",
     "PostprocessResult",
+    "registerPostprocess",
     "load_postprocess_catalog",
-    *[_cls.__name__ for _cls in (postprocess.__class__ for postprocess in _AVAILABLE)],
+    *_EXPORTED_POSTPROCESS_CLASSES.keys(),
 ]

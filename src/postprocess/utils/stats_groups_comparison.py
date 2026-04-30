@@ -1,16 +1,25 @@
 import os
-import tempfile
-import zipfile
 from collections import defaultdict
 import shutil
+from pathlib import Path
 import h5py
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib.ticker import FormatStrFormatter
 from tkinter import Tk, filedialog
+from angioeye_io.hdf5_io import find_first_existing_path
+from angioeye_io.hdf5_schema import pipeline_path_candidates
+from angioeye_io.archive_io import (
+    replace_folder_in_zip,
+    reset_output_dir,
+)
+from ..core.grouped_batch import (
+    find_control_group_name,
+    iter_grouped_h5_files_in_zip,
+)
 
-PIPELINE_ROOT = "/AngioEye/waveform_shape_metrics"
+WAVEFORM_SHAPE_METRICS_PIPELINE = "waveform_shape_metrics"
 VALID_METRIC_FOLDERS = ["raw", "bandlimited"]
 VALID_VESSELS = ["artery", "vein"]
 
@@ -107,19 +116,8 @@ LATEX_FORMULAS = {
     "N_h_over_H_minus_1": r"$N_{H}/(H-1)$",
 }
 
-
-def find_control_group_name(groups):
-    for g in groups:
-        if g is None:
-            continue
-        gl = str(g).lower()
-        if "control" in gl or gl in {"ctrl", "ctl", "controls"}:
-            return g
-    return None
-
-
-def get_metrics_base_path(vessel: str) -> str:
-    return f"{PIPELINE_ROOT}/{vessel}/global"
+def get_metrics_base_candidates(vessel: str) -> list[str]:
+    return pipeline_path_candidates(WAVEFORM_SHAPE_METRICS_PIPELINE, vessel, "global")
 
 
 def extract_metrics(h5_path):
@@ -127,9 +125,11 @@ def extract_metrics(h5_path):
 
     with h5py.File(h5_path, "r") as f:
         for vessel in VALID_VESSELS:
-            metrics_root_path = get_metrics_base_path(vessel)
+            metrics_root_path = find_first_existing_path(
+                f, get_metrics_base_candidates(vessel)
+            )
 
-            if metrics_root_path not in f:
+            if metrics_root_path is None or metrics_root_path not in f:
                 continue
 
             metrics_root = f[metrics_root_path]
@@ -155,43 +155,23 @@ def extract_metrics(h5_path):
 def analyze_zip(zip_path):
     all_results = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        with zipfile.ZipFile(zip_path, "r") as z:
-            z.extractall(tmpdir)
+    for grouped_file in iter_grouped_h5_files_in_zip(zip_path):
+        metrics = extract_metrics(grouped_file.file_path)
 
-        for root, _, files in os.walk(tmpdir):
-            h5_files = sorted(f for f in files if f.endswith(".h5"))
-            if not h5_files:
-                continue
-
-            group_name = os.path.basename(root)
-            if root == tmpdir:
-                group_name = "all"
-
-            for file in h5_files:
-                filepath = os.path.join(root, file)
-                metrics = extract_metrics(filepath)
-
-                for mode, vessel_dict in metrics.items():
-                    for vessel, metric_dict in vessel_dict.items():
-                        for metric_name, values in metric_dict.items():
-                            all_results[mode][vessel][metric_name].append(
-                                {
-                                    "file": file,
-                                    "group": group_name,
-                                    "mean": values["mean"],
-                                    "std": values["std"],
-                                    "vessel": vessel,
-                                }
-                            )
+        for mode, vessel_dict in metrics.items():
+            for vessel, metric_dict in vessel_dict.items():
+                for metric_name, values in metric_dict.items():
+                    all_results[mode][vessel][metric_name].append(
+                        {
+                            "file": grouped_file.file_name,
+                            "group": grouped_file.group_name,
+                            "mean": values["mean"],
+                            "std": values["std"],
+                            "vessel": vessel,
+                        }
+                    )
 
     return dict(all_results)
-
-
-def reset_output_dir(path):
-    if os.path.isdir(path):
-        shutil.rmtree(path)
-    os.makedirs(path, exist_ok=True)
 
 
 def plot_group_statistics(df, metric, vessel, out_path):
@@ -301,31 +281,6 @@ def choose_zip():
     root.withdraw()
     return filedialog.askopenfilename(filetypes=[("ZIP", "*.zip")])
 
-
-def replace_folder_in_zip(zip_path: str, folder_path: str, arc_folder: str):
-    """
-    Remplace complètement un dossier dans un zip.
-    Supprime toute ancienne version de arc_folder/ puis ajoute folder_path.
-    """
-    temp_zip = zip_path + ".tmp"
-
-    with zipfile.ZipFile(zip_path, "r") as zin:
-        with zipfile.ZipFile(temp_zip, "w", compression=zipfile.ZIP_DEFLATED) as zout:
-            for item in zin.infolist():
-                if not item.filename.startswith(arc_folder + "/"):
-                    buffer = zin.read(item.filename)
-                    zout.writestr(item, buffer)
-
-            for root, _, files in os.walk(folder_path):
-                for fn in files:
-                    fullpath = os.path.join(root, fn)
-                    rel = os.path.relpath(fullpath, folder_path)
-                    arcname = os.path.join(arc_folder, rel).replace("\\", "/")
-                    zout.write(fullpath, arcname)
-
-    os.replace(temp_zip, zip_path)
-
-
 def save_dashboard(zip_path, export_png_dir="export_png", export_eps_dir="export_eps"):
     all_results = analyze_zip(zip_path)
     reset_output_dir(export_png_dir)
@@ -342,8 +297,8 @@ def save_dashboard(zip_path, export_png_dir="export_png", export_eps_dir="export
         formats=("eps",),
     )
 
-    replace_folder_in_zip(zip_path, export_png_dir, arc_folder="export_png")
-    replace_folder_in_zip(zip_path, export_eps_dir, arc_folder="export_eps")
+    replace_folder_in_zip(zip_path, Path(export_png_dir), arc_folder="export_png")
+    replace_folder_in_zip(zip_path, Path(export_eps_dir), arc_folder="export_eps")
 
     if os.path.isdir(export_png_dir):
         shutil.rmtree(export_png_dir)
