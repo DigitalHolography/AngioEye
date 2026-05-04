@@ -91,7 +91,7 @@ python src/angio_eye.py
 
 When you run `angioeye` from inside the repository checkout, the launcher prefers the local `src/` tree so newly added or edited pipelines are picked up without needing a full reinstall.
 
-Installed builds expose editable `pipelines/` and `postprocess/` folders next to `AngioEye.exe`; use the Library tabs' Open folder and Reload buttons to edit and refresh them.
+Installed builds expose editable `pipelines/` and `postprocess/` folders next to `AngioEye.exe` and `AngioEyeCLI.exe`; use the Library tabs' Open folder and Reload buttons to edit and refresh them.
 
 ### CLI
 
@@ -104,6 +104,8 @@ angioeye-cli
 # Or via the script
 python src/cli.py
 ```
+
+Windows installer builds also ship `AngioEyeCLI.exe` alongside `AngioEye.exe`, so the installed release can be used headlessly without a Python environment.
 
 ---
 
