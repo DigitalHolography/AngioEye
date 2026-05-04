@@ -109,6 +109,10 @@ COLUMN_LABELS = {
     "IQR_seg_medbeat": r"$\mathrm{med}_{b}(\mathrm{IQR}_{seg})$",
     "MAD_seg_medbeat": r"$\mathrm{med}_{b}(\mathrm{MAD}_{seg})$",
     "CV_seg_medbeat": r"$\mathrm{med}_{b}(\mathrm{CV}_{seg})$",
+    "MED_beat_medseg": r"$\mathrm{med}_{seg}(\mathrm{med}_{b})$",
+    "STD_beat_medseg": r"$\mathrm{med}_{seg}(\mathrm{STD}_{b})$",
+    "IQR_beat_medseg": r"$\mathrm{med}_{seg}(\mathrm{IQR}_{b})$",
+    "MAD_beat_medseg": r"$\mathrm{med}_{seg}(\mathrm{MAD}_{b})$",
     "CV_beat_medseg": r"$\mathrm{med}_{seg}(\mathrm{CV}_{b})$",
 }
 
@@ -239,14 +243,26 @@ def compute_file_higher_metrics_from_segment_array(arr, eps=EPS):
 
     # 2) Variabilité temporelle par segment, puis médiane sur segments
     seg_cv_beat = []
+    seg_iqr=[]
+    seg_mad=[]
+    seg_std=[]
+    seg_median=[]
 
     for j in range(arr.shape[1]):
         for r in range(arr.shape[2]):
             x = arr[:, j, r]
             x = x[np.isfinite(x)]
             seg_cv_beat.append(cv_1d(x, eps=eps))
+            seg_iqr.append(iqr_1d(x))
+            seg_mad.append(mad_1d(x))
+            seg_std.append(std_1d(x))
+            seg_median.append(median_1d(x))
 
     seg_cv_beat = np.asarray(seg_cv_beat, dtype=float)
+    seg_iqr = np.asarray(seg_iqr, dtype=float)
+    seg_mad = np.asarray(seg_mad, dtype=float)
+    seg_median = np.asarray(seg_median, dtype=float)
+    seg_std = np.asarray(seg_std, dtype=float)
 
     return {
         "MED_seg_medbeat": (
@@ -267,6 +283,20 @@ def compute_file_higher_metrics_from_segment_array(arr, eps=EPS):
             float(np.nanmedian(beat_cv_seg))
             if np.any(np.isfinite(beat_cv_seg))
             else np.nan
+        ),
+        "MED_beat_medseg": (
+            float(np.nanmedian(seg_median))
+            if np.any(np.isfinite(seg_median))
+            else np.nan
+        ),
+        "STD_beat_medseg": (
+            float(np.nanmedian(seg_std)) if np.any(np.isfinite(seg_std)) else np.nan
+        ),
+        "IQR_beat_medseg": (
+            float(np.nanmedian(seg_iqr)) if np.any(np.isfinite(seg_iqr)) else np.nan
+        ),
+        "MAD_beat_medseg": (
+            float(np.nanmedian(seg_mad)) if np.any(np.isfinite(seg_mad)) else np.nan
         ),
         "CV_beat_medseg": (
             float(np.nanmedian(seg_cv_beat))
@@ -341,20 +371,29 @@ def format_mean_std(values, digits=3):
     return f"{mu:.{digits}f} $\\pm$ {sd:.{digits}f}"
 
 
-def build_group_table(results_for_group, metrics=INPUT_METRICS, digits=3):
-    higher_metric_order = [
-        "MED_seg_medbeat",
-        "STD_seg_medbeat",
-        "IQR_seg_medbeat",
-        "MAD_seg_medbeat",
-        "CV_seg_medbeat",
-        "CV_beat_medseg",
-    ]
+def build_group_table(results_for_group, metrics=INPUT_METRICS, digits=3, mode="spatial"):
+    if mode == "spatial":
+        higher_metric_order = [
+            "MED_seg_medbeat",
+            "STD_seg_medbeat",
+            "IQR_seg_medbeat",
+            "MAD_seg_medbeat",
+            "CV_seg_medbeat",
+        ]
+    elif mode == "temporal":
+        higher_metric_order = [
+            "MED_beat_medseg",
+            "STD_beat_medseg",
+            "IQR_beat_medseg",
+            "MAD_beat_medseg",
+            "CV_beat_medseg",
+        ]
+    else:
+        raise ValueError("mode must be 'spatial' or 'temporal'")
 
     rows = []
     for metric_name in metrics:
         metric_block = results_for_group.get(metric_name, {})
-        safe_metric = metric_name.replace("_", r"\_")
         row = {
             "Metric": METRIC_LABELS.get(metric_name, metric_name.replace("_", r"\_"))
         }
@@ -393,8 +432,12 @@ def dataframe_to_latex_table(df, caption=None, label=None):
 
 
 def export_group_tables(zip_path, metrics=INPUT_METRICS, mode=SEGMENT_MODE, digits=3):
-    out_dir = Path(zip_path).parent / "latex_tables"
-    out_dir.mkdir(parents=True, exist_ok=True)
+    base_dir = Path(zip_path).parent / "latex_tables"
+    csv_dir = base_dir / "csv"
+    tex_dir = base_dir / "tex"
+
+    csv_dir.mkdir(parents=True, exist_ok=True)
+    tex_dir.mkdir(parents=True, exist_ok=True)
 
     results = analyze_zip(zip_path, metrics=metrics, mode=mode)
 
@@ -403,28 +446,55 @@ def export_group_tables(zip_path, metrics=INPUT_METRICS, mode=SEGMENT_MODE, digi
     generated = []
 
     for group_name in sorted(results.keys()):
-        print("Building table for group:", group_name)
-        df = build_group_table(results[group_name], metrics=metrics, digits=digits)
+        print("Building tables for group:", group_name)
 
         safe_group = re.sub(r"[^A-Za-z0-9_-]+", "_", group_name)
 
-        csv_path = out_dir / f"{safe_group}_variability_table.csv"
-        tex_path = out_dir / f"{safe_group}_variability_table.tex"
+        # === SPATIAL ===
+        df_spatial = build_group_table(results[group_name], metrics, digits, mode="spatial")
 
-        df.to_csv(csv_path, index=False)
+        csv_spatial = csv_dir / f"{safe_group}_spatial_table.csv"
+        tex_spatial = tex_dir / f"{safe_group}_spatial_table.tex"
 
-        latex = dataframe_to_latex_table(
-            df,
-            caption=f"Higher-level variability metrics for group {group_name}",
-            label=f"tab:{safe_group}_variability",
+        df_spatial.to_csv(csv_spatial, index=False)
+
+        latex_spatial = dataframe_to_latex_table(
+            df_spatial,
+            caption=f"Spatial variability metrics for group {group_name}",
+            label=f"tab:{safe_group}_spatial",
         )
-        with open(tex_path, "w", encoding="utf-8") as f:
-            f.write(latex)
 
-        generated.extend([csv_path, tex_path])
-    replace_folder_in_zip(zip_path, out_dir, arc_folder="latex_tables")
-    if out_dir.is_dir():
-        shutil.rmtree(out_dir)
+        with open(tex_spatial, "w", encoding="utf-8") as f:
+            f.write(latex_spatial)
+
+        # === TEMPORAL ===
+        df_temporal = build_group_table(results[group_name], metrics, digits, mode="temporal")
+
+        csv_temporal = csv_dir / f"{safe_group}_temporal_table.csv"
+        tex_temporal = tex_dir / f"{safe_group}_temporal_table.tex"
+
+        df_temporal.to_csv(csv_temporal, index=False)
+
+        latex_temporal = dataframe_to_latex_table(
+            df_temporal,
+            caption=f"Temporal variability metrics for group {group_name}",
+            label=f"tab:{safe_group}_temporal",
+        )
+
+        with open(tex_temporal, "w", encoding="utf-8") as f:
+            f.write(latex_temporal)
+
+        generated.extend([
+            csv_spatial, tex_spatial,
+            csv_temporal, tex_temporal
+        ])
+
+    
+    replace_folder_in_zip(zip_path, base_dir, arc_folder="latex_tables")
+
+    
+    if base_dir.is_dir():
+        shutil.rmtree(base_dir)
 
 
 if __name__ == "__main__":
