@@ -16,6 +16,7 @@ class WomersleyModeling(ProcessPipeline):
     description = "Womersley Modeling Pipeline"
 
     v_profile_path = "/Artery/CrossSections/VelocityProfilesSegInterpOneBeat/value"
+    b_period_path = "/Artery/VelocityPerBeat/beatPeriodSeconds/value"
 
     def run(self, h5file: h5py.File) -> ProcessResult:
         """
@@ -27,6 +28,15 @@ class WomersleyModeling(ProcessPipeline):
                 f"Expected a dataset at {self.v_profile_path}, but found {type(obj)}"
             )
         dataset = obj[:]
+
+        # x_coord = np.linspace(0, R0, num=num_interp_points)
+
+        obj = h5file[self.b_period_path]
+        if not isinstance(obj, h5py.Dataset):
+            raise ValueError(
+                f"Expected a dataset at {self.b_period_path}, but found {type(obj)}"
+            )
+        # b_period = np.mean(obj[:])
 
         v_pulse_fft, v_pulse_meas, v_pulse_meas_dc = extract_v_pulse_meas(
             dataset=dataset, num_interp_points=num_interp_points, n_harmonic=n_harmonic
