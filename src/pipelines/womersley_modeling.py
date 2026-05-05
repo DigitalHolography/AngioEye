@@ -28,12 +28,13 @@ class WomersleyModeling(ProcessPipeline):
             )
         dataset = obj[:]
 
-        v_pulse_fft, v_pulse_meas = extract_v_pulse_meas(
+        v_pulse_fft, v_pulse_meas, v_pulse_meas_dc = extract_v_pulse_meas(
             dataset=dataset, num_interp_points=num_interp_points, n_harmonic=n_harmonic
         )
 
         metrics: dict = {}
         metrics["v_pulse_fft"] = np.asarray(v_pulse_fft)
         metrics["v_pulse_meas"] = np.asarray(v_pulse_meas)
+        metrics["v_pulse_meas_dc"] = np.asarray(v_pulse_meas_dc)
 
         return ProcessResult(metrics=metrics)

@@ -29,12 +29,13 @@ class VProfileModeling(ProcessPipeline):
         dataset = obj[:]
 
         # x_coord = np.linspace(0, R0, num=num_interp_points)
-        v_profile_fft, v_profile_meas = extract_v_profile_meas(
+        v_profile_fft, v_profile_meas, v_profile_meas_dc = extract_v_profile_meas(
             dataset=dataset, num_interp_points=num_interp_points, n_harmonic=n_harmonic
         )
 
         metrics: dict = {}
         metrics["v_profile_fft"] = np.asarray(v_profile_fft)
         metrics["v_profile_meas"] = np.asarray(v_profile_meas)
+        metrics["v_profile_meas_dc"] = np.asarray(v_profile_meas_dc)
 
         return ProcessResult(metrics=metrics)

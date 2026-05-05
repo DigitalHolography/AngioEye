@@ -31,9 +31,12 @@ def preprocess_and_interpolate(num_interp_points, v_pulse):
 def extract_v_pulse_meas(dataset, num_interp_points, n_harmonic):
     # Expected shape: (n_t, n_x, n_branches, n_radii) -> (128, 33, 14, 10)
     n_t, n_x, n_branches, n_radii = dataset.shape
-    v_pulse_fft = np.zeros((num_interp_points, n_x, n_branches, n_radii), dtype=complex)
-    v_pulse_meas = np.zeros(
-        (num_interp_points, n_x, n_branches, n_radii), dtype=complex
+    v_pulse_fft = np.zeros(
+        (num_interp_points // 2 + 1, n_x, n_branches, n_radii), dtype=complex
+    )
+    v_pulse_meas = np.zeros((num_interp_points, n_x, n_branches, n_radii), dtype=float)
+    v_pulse_meas_dc = np.zeros(
+        (num_interp_points, n_x, n_branches, n_radii), dtype=float
     )
 
     for branch_idx in range(n_branches):
@@ -46,12 +49,17 @@ def extract_v_pulse_meas(dataset, num_interp_points, n_harmonic):
                     v_pulse=v_pulse,
                 )
 
-                v_fft = np.fft.fft(np.asarray(v_interp), n=num_interp_points)
+                v_fft = np.fft.rfft(np.asarray(v_interp), n=num_interp_points)
                 v_pulse_fft[:, x_idx, branch_idx, radii_idx] = v_fft
 
                 v_meas = np.zeros_like(v_fft)
                 v_meas[1] = v_fft[n_harmonic]
-                v_meas[-1] = v_fft[-n_harmonic]
-                v_pulse_meas[:, x_idx, branch_idx, radii_idx] = np.fft.ifft(v_meas)
+                v_pulse_meas[:, x_idx, branch_idx, radii_idx] = np.fft.irfft(v_meas)
 
-    return v_pulse_fft, v_pulse_meas
+                v_meas_dc = np.zeros_like(v_fft)
+                v_meas_dc[0] = v_fft[0]
+                v_pulse_meas_dc[:, x_idx, branch_idx, radii_idx] = np.fft.irfft(
+                    v_meas_dc
+                )
+
+    return v_pulse_fft, v_pulse_meas, v_pulse_meas_dc
