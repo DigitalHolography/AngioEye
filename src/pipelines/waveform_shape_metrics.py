@@ -866,7 +866,7 @@ class ArterialSegExample(ProcessPipeline):
     def _compute_graphics_support_block(
         self, v_global: np.ndarray, T: np.ndarray
     ) -> dict:
-        n_beats = int(T.shape[1])
+        n_beats = int(T.shape[0])
         v_global = self._ensure_time_by_beat(v_global, n_beats)
         v_global = self._rectify_keep_nan(v_global)
 
@@ -923,7 +923,7 @@ class ArterialSegExample(ProcessPipeline):
             out[k[0]] = np.full((n_beats,), np.nan, dtype=float)
 
         for beat_idx in range(n_beats):
-            Tbeat = float(T[0][beat_idx])
+            Tbeat = float(T[beat_idx])
             v = v_global[:, beat_idx]
             s = self._compute_graphics_support_1d(v, Tbeat)
 
@@ -1265,7 +1265,7 @@ class ArterialSegExample(ProcessPipeline):
         }
 
         for beat_idx in range(n_beats):
-            Tbeat = float(T[0][beat_idx])
+            Tbeat = float(T[beat_idx])
 
             gl_vals = {k[0]: [] for k in self._metric_keys()}
 
@@ -1302,7 +1302,7 @@ class ArterialSegExample(ProcessPipeline):
         v_global: (n_t, n_beats) after _ensure_time_by_beat
         Returns dict of arrays each shaped (n_beats,)
         """
-        n_beats = int(T.shape[1])
+        n_beats = int(T.shape[0])
         v_global = self._ensure_time_by_beat(v_global, n_beats)
         v_global = self._rectify_keep_nan(v_global)
 
@@ -1311,7 +1311,7 @@ class ArterialSegExample(ProcessPipeline):
         }
 
         for beat_idx in range(n_beats):
-            Tbeat = float(T[0][beat_idx])
+            Tbeat = float(T[beat_idx])
             v = v_global[:, beat_idx]
             m = self._compute_metrics_1d(v, Tbeat)
             for k in self._metric_keys():
