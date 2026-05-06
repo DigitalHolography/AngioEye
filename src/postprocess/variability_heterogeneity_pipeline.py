@@ -53,7 +53,7 @@ class VariabilityHeterogeneityPostprocess(BatchPostprocess):
             output_dir,
             source_paths=context.processed_files,
         ) as temp_zip:
-            results, metrics = variability_heterogeneity_dashboard.analyze_zip(
+            results = variability_heterogeneity_dashboard.analyze_zip(
                 str(temp_zip),
                 mode="bandlimited_segment",
             )

@@ -116,6 +116,13 @@ COLUMN_LABELS = {
     "CV_beat_medseg": r"$\mathrm{med}_{seg}(\mathrm{CV}_{b})$",
 }
 
+CONTROL_ALIASES = [
+    "ctrl",
+    "control",
+    "controls",
+    "CTRL",
+    "Control"
+]
 
 def choose_zip():
     root = Tk()
@@ -335,6 +342,12 @@ def write_variability_tree(file_path):
             },
         )
 
+def get_clean_values(results_for_group, metric, col):
+    vals = results_for_group.get(metric, {}).get(col, [])
+    x = np.asarray(vals, dtype=float)
+    return x[np.isfinite(x)]
+
+
 def analyze_zip(zip_path, metrics=INPUT_METRICS, mode=SEGMENT_MODE):
     """
     results[group][metric][higher_metric] = [values over files]
@@ -406,29 +419,243 @@ def build_group_table(results_for_group, metrics=INPUT_METRICS, digits=3, mode="
 
     return pd.DataFrame(rows)
 
+def format_group_name(name):
+    if name.lower() == "ctrl":
+        return "Control"
+    return name.capitalize()
 
-def dataframe_to_latex_table(df, caption=None, label=None):
+def format_group_list(groups, ctrl_group):
+    others = [format_group_name(g) for g in groups if g != ctrl_group]
+
+    if len(others) == 0:
+        return ""
+
+    if len(others) == 1:
+        return others[0]
+
+    return ", ".join(others[:-1]) + " and " + others[-1]
+
+def dataframe_to_latex_table(
+    df,
+    caption=None,
+    label=None,
+    column_format=None,
+    longtable=False
+):
+    if column_format is None:
+        column_format = "l" + "c" * (df.shape[1] - 1)
+
     latex = df.to_latex(
         index=False,
         escape=False,
-        longtable=False,
-        column_format="l" + "c" * (df.shape[1] - 1),
+        longtable=longtable,
+        column_format=column_format,
     )
 
-    if caption or label:
-        lines = latex.splitlines()
-        if lines and lines[0].startswith("\\begin{tabular}"):
-            new_lines = ["\\begin{table}[ht]"]
-            new_lines.append("\\centering")
-            if caption:
-                new_lines.append(f"\\caption{{{caption}}}")
-            if label:
-                new_lines.append(f"\\label{{{label}}}")
-            new_lines.extend(lines)
-            new_lines.append("\\end{table}")
-            latex = "\n".join(new_lines)
+    if not caption and not label:
+        return latex
+
+    lines = latex.splitlines()
+
+    if lines and lines[0].startswith("\\begin{tabular}"):
+        new_lines = ["\\begin{table}[ht]"]
+        new_lines.append("\\centering")
+
+        if caption:
+            new_lines.append(f"\\caption{{{caption}}}")
+        if label:
+            new_lines.append(f"\\label{{{label}}}")
+
+        new_lines.extend(lines)
+        new_lines.append("\\end{table}")
+
+        latex = "\n".join(new_lines)
 
     return latex
+
+
+
+def compute_stability_scores(results_for_group, metrics, columns):
+    rows = []
+
+    for metric in metrics:
+        means = []
+
+        for col in columns:
+            x = get_clean_values(results_for_group, metric, col)
+            if x.size == 0:
+                break
+
+            means.append(np.nanmean(x))
+
+        if len(means) != len(columns):
+            continue
+
+        rows.append({
+            "metric": metric,
+            "score": float(np.mean(means))
+        })
+
+    df = pd.DataFrame(rows).sort_values("score")
+    return df
+
+def get_interfile_mean(results_for_group, metric, col):
+    vals = results_for_group.get(metric, {}).get(col, [])
+    x = np.asarray(vals, dtype=float)
+    x = x[np.isfinite(x)]
+
+    if x.size == 0:
+        return np.nan
+
+    return float(np.nanmean(x))
+
+def find_control_group(results):
+    for g in results.keys():
+        if g.lower() in CONTROL_ALIASES:
+            return g
+    raise ValueError("No control group found")
+
+
+def compute_variability_score(results_for_group, metric, mode="spatial", eps=EPS):
+
+    if mode == "spatial":
+        cols = [
+            "MED_seg_medbeat",
+            "STD_seg_medbeat",
+            "IQR_seg_medbeat",
+            "MAD_seg_medbeat",
+            "CV_seg_medbeat",
+        ]
+    elif mode == "temporal":
+        cols = [
+            "MED_seg_medbeat",
+            "STD_beat_medseg",
+            "IQR_beat_medseg",
+            "MAD_beat_medseg",
+            "CV_beat_medseg",
+        ]
+    else:
+        raise ValueError
+
+    data = {col: get_interfile_mean(results_for_group, metric, col) for col in cols}
+
+    if any(np.isnan(v) for v in data.values()):
+        return np.nan
+
+    denom = abs(data["MED_seg_medbeat"]) + eps
+
+    score = (
+        data[cols[1]] / denom +
+        data[cols[2]] / denom +
+        data[cols[3]] / denom +
+        data[cols[4]] 
+    ) / 4
+
+    return float(score)
+
+def build_variability_tables(scores, metrics, groups, mode, top_n=10):
+
+    rows = []
+
+    for metric in metrics:
+        row = {"Metric": METRIC_LABELS.get(metric, metric)}
+
+        vals = []
+        for g in groups:
+            v = scores[g][metric]
+            row[f"$V_{{{g}}}^{{{mode}}}$"] = v
+            vals.append(v)
+
+        row["mean"] = np.nanmean(vals)
+        rows.append(row)
+
+    df = pd.DataFrame(rows)
+
+    # tri global
+    df = df.sort_values("mean", ascending=False).drop(columns="mean")
+
+    df_high = df.head(top_n)
+    df_low = df.tail(top_n).iloc[::-1]
+
+    return df_low, df_high
+
+def format_sig(x, sig=3):
+    if np.isnan(x):
+        return "NA"
+    return f"{x:.{sig}g}"
+    
+def precompute_scores(results, metrics, mode):
+    scores = defaultdict(dict)
+
+    for g in results:
+        for m in metrics:
+            scores[g][m] = compute_variability_score(results[g], m, mode)
+
+    return scores
+
+def build_directional_ratio_tables(scores, metrics, groups, ctrl_group, mode, top_n=10):
+
+    tables = {}
+
+    other_groups = [g for g in groups if g != ctrl_group]
+
+    for g in other_groups:
+
+        rows = []
+
+        for m in metrics:
+
+            v_ctrl = scores[ctrl_group].get(m, np.nan)
+            v_other = scores[g].get(m, np.nan)
+
+            if np.isnan(v_ctrl) or np.isnan(v_other):
+                ratio = np.nan
+                log_ratio = np.nan
+                trend = "NA"
+                more_variable = "NA"
+            else:
+                ratio = v_other / (v_ctrl + EPS)
+                log_ratio = np.log(ratio)
+
+                if v_other > v_ctrl:
+                    more_variable = g
+                elif v_other < v_ctrl:
+                    more_variable = ctrl_group
+                else:
+                    more_variable = "Equal"
+
+                trend = "↑" if ratio > 1 else "↓" if ratio < 1 else "≈"
+
+            rows.append({
+                "Metric": METRIC_LABELS.get(m, m),
+                "More variable group": more_variable,
+                f"$V_{{{ctrl_group}}}^{{{mode}}}$": v_ctrl,
+                f"$V_{{{g}}}^{{{mode}}}$": v_other,
+                "Ratio": ratio,
+                "Log-ratio": log_ratio,
+                "Trend": trend,
+            })
+
+        df = pd.DataFrame(rows)
+
+        # tri par importance
+        df["abs_log"] = df["Log-ratio"].abs()
+        df = df.sort_values("abs_log", ascending=False).drop(columns="abs_log")
+
+        df.insert(0, "Rank", range(1, len(df) + 1))
+
+        tables[g] = df.head(top_n)
+
+    return tables
+
+def format_dataframe(df, sig=3):
+    df = df.copy()
+
+    for col in df.columns:
+        if pd.api.types.is_numeric_dtype(df[col]):
+            df[col] = df[col].apply(lambda x: format_sig(x, sig))
+
+    return df
 
 
 def export_group_tables(zip_path, metrics=INPUT_METRICS, mode=SEGMENT_MODE, digits=3):
@@ -443,54 +670,107 @@ def export_group_tables(zip_path, metrics=INPUT_METRICS, mode=SEGMENT_MODE, digi
 
     print("Groups found:", list(results.keys()))
 
-    generated = []
+    ctrl_group = find_control_group(results)
+    groups = list(results.keys())
 
+    modes = ["spatial", "temporal"]
+
+    scores = {
+        mode: precompute_scores(results, metrics, mode)
+        for mode in modes
+    }
+
+    # =========================
+    # TABLES PAR GROUPE
+    # =========================
     for group_name in sorted(results.keys()):
-        print("Building tables for group:", group_name)
 
         safe_group = re.sub(r"[^A-Za-z0-9_-]+", "_", group_name)
 
-        # === SPATIAL ===
-        df_spatial = build_group_table(results[group_name], metrics, digits, mode="spatial")
+        for mode in modes:
 
-        csv_spatial = csv_dir / f"{safe_group}_spatial_table.csv"
-        tex_spatial = tex_dir / f"{safe_group}_spatial_table.tex"
+            df = build_group_table(results[group_name], metrics, mode=mode)
+            df = format_dataframe(df)
 
-        df_spatial.to_csv(csv_spatial, index=False)
+            name = f"{safe_group}_{mode}"
 
-        latex_spatial = dataframe_to_latex_table(
-            df_spatial,
-            caption=f"Spatial variability metrics for group {group_name}",
-            label=f"tab:{safe_group}_spatial",
+            df.to_csv(csv_dir/f"{name}.csv", index=False)
+
+            with open(tex_dir/f"{name}.tex", "w", encoding="utf-8") as f:
+                f.write(dataframe_to_latex_table(
+                    df,
+                    caption=f"{mode.capitalize()} variability ({group_name})",
+                    label=f"tab:{name}",
+                ))
+
+    # =========================
+    # TABLES GLOBAL VARIABILITY
+    # =========================
+    for mode in modes:
+
+        df_low, df_high = build_variability_tables(
+            scores[mode],
+            metrics,
+            groups,
+            mode=mode,
+            top_n=10
         )
 
-        with open(tex_spatial, "w", encoding="utf-8") as f:
-            f.write(latex_spatial)
+        df_low = format_dataframe(df_low)
+        df_high = format_dataframe(df_high)
 
-        # === TEMPORAL ===
-        df_temporal = build_group_table(results[group_name], metrics, digits, mode="temporal")
+        df_low.to_csv(csv_dir/f"{mode}_low.csv", index=False)
+        df_high.to_csv(csv_dir/f"{mode}_high.csv", index=False)
 
-        csv_temporal = csv_dir / f"{safe_group}_temporal_table.csv"
-        tex_temporal = tex_dir / f"{safe_group}_temporal_table.tex"
 
-        df_temporal.to_csv(csv_temporal, index=False)
+        with open(tex_dir/f"{mode}_low.tex", "w", encoding="utf-8") as f:
+            f.write(dataframe_to_latex_table(
+                df_low,
+                caption=f"Least {mode} variability (most stable)",
+                label=f"tab:{mode}_low"
+            ))
 
-        latex_temporal = dataframe_to_latex_table(
-            df_temporal,
-            caption=f"Temporal variability metrics for group {group_name}",
-            label=f"tab:{safe_group}_temporal",
+        with open(tex_dir/f"{mode}_high.tex", "w", encoding="utf-8") as f:
+            f.write(dataframe_to_latex_table(
+                df_high,
+                caption=f"Most {mode} variability",
+                label=f"tab:{mode}_high"
+            ))
+
+    # =========================
+    # TABLES RATIO (direction)
+    # =========================
+    for mode in modes:
+
+        ratio_tables = build_directional_ratio_tables(
+            scores[mode],
+            metrics,
+            groups,
+            ctrl_group,
+            mode=mode,
+            top_n=10
         )
 
-        with open(tex_temporal, "w", encoding="utf-8") as f:
-            f.write(latex_temporal)
+        for g, df_ratio in ratio_tables.items():
 
-        generated.extend([
-            csv_spatial, tex_spatial,
-            csv_temporal, tex_temporal
-        ])
+            df_ratio = format_dataframe(df_ratio)
+
+            name = f"{mode}_ratio_{g}"
+
+            df_ratio.to_csv(csv_dir/f"{name}.csv", index=False)
+
+            with open(tex_dir/f"{name}.tex", "w", encoding="utf-8") as f:
+                f.write(dataframe_to_latex_table(
+                    df_ratio,
+                    caption=(
+                        f"{mode.capitalize()} variability: {g} vs {ctrl_group}"
+                    ),
+                    label=f"tab:{name}"
+                ))
+
 
     
-    replace_folder_in_zip(zip_path, base_dir, arc_folder="latex_tables")
+    replace_folder_in_zip(zip_path, str(base_dir), arc_folder="latex_tables")
 
     
     if base_dir.is_dir():
