@@ -26,23 +26,31 @@ fake_pipeline_errors = types.ModuleType("pipelines.core.errors")
 fake_pipeline_errors.format_pipeline_exception = lambda exc, _pipeline: str(exc)
 sys.modules.setdefault("pipelines.core.errors", fake_pipeline_errors)
 
-fake_angioeye_io = types.ModuleType("angioeye_io")
-fake_angioeye_io.ANGIOEYE_PROCESSING_ROOT = "/AngioEye/Processing"
-fake_angioeye_io.create_h5_file = lambda *args, **kwargs: None
-fake_angioeye_io.write_metrics_trees_to_h5 = lambda *args, **kwargs: None
-sys.modules.setdefault("angioeye_io", fake_angioeye_io)
-
 fake_postprocess = types.ModuleType("postprocess")
 fake_postprocess.PostprocessContext = object
 fake_postprocess.PostprocessDescriptor = object
 fake_postprocess.load_postprocess_catalog = lambda: ([], [])
 sys.modules.setdefault("postprocess", fake_postprocess)
 
-from angio_eye import ProcessApp  # noqa: E402
+from angioeye_io import (  # noqa: E402
+    default_output_dir_for_input,
+    default_work_h5_name_for_input,
+    get_h5_stem,
+)
+from angio_eye import (  # noqa: E402
+    ProcessApp,
+)
+
+for _module_name in (
+    "angioeye_io",
+    "angioeye_io.archive_io",
+    "angioeye_io.hdf5_io",
+    "angioeye_io.hdf5_schema",
+):
+    sys.modules.pop(_module_name, None)
 
 for _module_name in (
     "h5py",
-    "angioeye_io",
     "pipelines",
     "pipelines.core",
     "pipelines.core.errors",
@@ -64,6 +72,98 @@ class _Var:
         self._value = value
 
 
+class AngioEyeOutputNamingTests(unittest.TestCase):
+    def test_get_h5_stem_strips_eyeflow_result_suffix(self) -> None:
+        self.assertEqual(
+            "251031_ALA_L_1",
+            get_h5_stem(Path("251031_ALA_L_1_eyeflow_pipelines_result.h5")),
+        )
+
+    def test_default_work_h5_name_for_eyeflow_result(self) -> None:
+        self.assertEqual(
+            "251031_ALA_L_1_AE.h5",
+            default_work_h5_name_for_input(
+                Path("251031_ALA_L_1_eyeflow_pipelines_result.h5")
+            ),
+        )
+
+    def test_default_output_dir_for_h5_input(self) -> None:
+        input_path = Path("root") / "251031_ALA_L_1.h5"
+
+        self.assertEqual(
+            Path("root") / "251031_ALA_L_1" / "251031_ALA_L_1_AE",
+            default_output_dir_for_input(input_path),
+        )
+
+    def test_default_output_dir_for_ef_sibling_input(self) -> None:
+        input_path = (
+            Path("root")
+            / "251031_ALA_L_1"
+            / "251031_ALA_L_1_EF"
+            / "251031_ALA_L_1_EF.h5"
+        )
+
+        self.assertEqual(
+            Path("root") / "251031_ALA_L_1" / "251031_ALA_L_1_AE",
+            default_output_dir_for_input(input_path),
+        )
+
+    def test_default_output_dir_climbs_to_base_folder(self) -> None:
+        input_path = (
+            Path("root")
+            / "251031_ALA_L_1"
+            / "251031_ALA_L_1_EF"
+            / "nested"
+            / "251031_ALA_L_1_EF.h5"
+        )
+
+        self.assertEqual(
+            Path("root") / "251031_ALA_L_1" / "251031_ALA_L_1_AE",
+            default_output_dir_for_input(input_path),
+        )
+
+    @mock.patch("angio_eye.h5py.File")
+    def test_run_pipelines_on_file_overwrites_ae_h5_path(self, h5_file) -> None:
+        class _H5Context:
+            def __enter__(self):
+                return object()
+
+            def __exit__(self, *_args):
+                return False
+
+        pipeline_result = SimpleNamespace(output_h5_path=None)
+        pipeline = SimpleNamespace(name="Demo", run=lambda _h5file: pipeline_result)
+        pipeline_desc = SimpleNamespace(instantiate=lambda: pipeline)
+        written_paths: list[Path] = []
+
+        h5_file.return_value = _H5Context()
+        app = SimpleNamespace(
+            _log_batch=lambda _message: None,
+            _advance_progress=lambda: None,
+            _write_combined_results_with_ui_pump=lambda **kwargs: written_paths.append(
+                kwargs["combined_h5_out"]
+            ),
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "251031_ALA_L_1_AE"
+            output_root.mkdir()
+            existing_output = output_root / "251031_ALA_L_1_AE.h5"
+            existing_output.write_text("old", encoding="utf-8")
+
+            result_path = ProcessApp._run_pipelines_on_file(
+                app,
+                Path(tmp_dir) / "251031_ALA_L_1_eyeflow_pipelines_result.h5",
+                [pipeline_desc],
+                output_root,
+            )
+
+            self.assertEqual(existing_output, result_path)
+            self.assertEqual([existing_output], written_paths)
+            self.assertFalse((output_root / "251031_ALA_L_1_AE_1.h5").exists())
+            self.assertEqual(str(existing_output), pipeline_result.output_h5_path)
+
+
 class BatchZipCleanupTests(unittest.TestCase):
     def _make_fake_app(
         self,
@@ -73,17 +173,17 @@ class BatchZipCleanupTests(unittest.TestCase):
         zip_should_fail: bool,
     ):
         logs: list[str] = []
+        pipeline_target_dirs: list[Path] = []
         data_root = input_path.parent / "extracted"
         h5_path = data_root / "sample.h5"
 
         def _run_pipelines_on_file(
             _h5_path,
             _pipelines,
-            output_dir,
-            output_relative_parent=Path("."),
+            target_dir,
             output_filename=None,
         ):
-            target_dir = output_dir / output_relative_parent
+            pipeline_target_dirs.append(target_dir)
             target_dir.mkdir(parents=True, exist_ok=True)
             result_path = target_dir / (output_filename or "sample_pipelines_result.h5")
             result_path.write_text("result", encoding="utf-8")
@@ -106,6 +206,8 @@ class BatchZipCleanupTests(unittest.TestCase):
             ui_mode="advanced",
             _progress_total_units=1.0,
             _progress_completed_units=0.0,
+            _progress_primary_style="primary",
+            _progress_final_style="final",
             pipeline_rows=[SimpleNamespace(name="Demo", available=True)],
             postprocess_rows=[],
             pipeline_visibility={"Demo": True},
@@ -123,12 +225,14 @@ class BatchZipCleanupTests(unittest.TestCase):
             _log_batch=logs.append,
             _show_batch_error_dialog=lambda *args, **kwargs: None,
             _reset_progress=lambda: None,
-            _start_progress=lambda total_units: None,
+            _start_progress=lambda total_units, **_kwargs: None,
             _set_progress_units=lambda completed_units: None,
             _advance_progress=lambda units=1.0: None,
+            _set_minimal_status=lambda _message: None,
             _minimal_output_filename_for_run=lambda _data_path, _inputs: None,
             update=lambda: None,
             logs=logs,
+            pipeline_target_dirs=pipeline_target_dirs,
         )
 
     @mock.patch("angio_eye.messagebox.showwarning")
@@ -136,7 +240,7 @@ class BatchZipCleanupTests(unittest.TestCase):
     @mock.patch("angio_eye.messagebox.showinfo")
     def test_run_batch_removes_temp_output_dir_after_successful_zip(
         self,
-        showinfo,
+        _showinfo,
         _showerror,
         _showwarning,
     ) -> None:
@@ -160,14 +264,16 @@ class BatchZipCleanupTests(unittest.TestCase):
                 [base_output_dir / "outputs.zip"],
                 sorted(base_output_dir.iterdir()),
             )
-            self.assertIn("outputs.zip", showinfo.call_args.args[1])
+            self.assertTrue(
+                any("Completed. ZIP archive:" in message for message in app.logs),
+            )
 
     @mock.patch("angio_eye.messagebox.showwarning")
     @mock.patch("angio_eye.messagebox.showerror")
     @mock.patch("angio_eye.messagebox.showinfo")
     def test_run_batch_keeps_work_dir_when_zip_creation_fails(
         self,
-        showinfo,
+        _showinfo,
         showerror,
         _showwarning,
     ) -> None:
@@ -192,8 +298,40 @@ class BatchZipCleanupTests(unittest.TestCase):
                 (work_dirs[0] / "sample_pipelines_result.h5").exists(),
             )
             self.assertFalse((base_output_dir / "outputs.zip").exists())
-            self.assertIn(str(work_dirs[0]), showinfo.call_args.args[1])
+            self.assertTrue(
+                any(str(work_dirs[0]) in message for message in app.logs),
+            )
             self.assertEqual("Zip failed", showerror.call_args.args[0])
+
+    @mock.patch("angio_eye.messagebox.showwarning")
+    @mock.patch("angio_eye.messagebox.showerror")
+    @mock.patch("angio_eye.messagebox.showinfo")
+    def test_run_batch_resolves_target_dir_before_pipeline_run(
+        self,
+        _showinfo,
+        _showerror,
+        _showwarning,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            input_path = tmp_path / "input.zip"
+            input_path.write_text("dummy", encoding="utf-8")
+            base_output_dir = tmp_path / "outputs"
+            base_output_dir.mkdir()
+
+            app = self._make_fake_app(
+                input_path=input_path,
+                base_output_dir=base_output_dir,
+                zip_should_fail=False,
+            )
+            nested_parent = Path("nested")
+            app._relative_input_parent = lambda *_args, **_kwargs: nested_parent
+
+            ProcessApp.run_batch(app)
+
+            self.assertEqual(1, len(app.pipeline_target_dirs))
+            self.assertEqual(nested_parent.name, app.pipeline_target_dirs[0].name)
+            self.assertTrue(app.pipeline_target_dirs[0].parent.parent == base_output_dir)
 
     def test_apply_input_defaults_for_zip_input(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -205,16 +343,40 @@ class BatchZipCleanupTests(unittest.TestCase):
                 batch_output_var=_Var(""),
                 batch_zip_var=_Var(False),
                 batch_zip_name_var=_Var("outputs.zip"),
-                _default_output_stem=lambda input_path: f"{input_path.stem}_angioeye",
-                _default_archive_name=lambda input_path: f"{input_path.stem}_angioeye.zip",
+                _default_archive_name=lambda path: f"{path.stem}_AE.zip",
                 _reset_progress=lambda: None,
+                _set_minimal_status=lambda _message: None,
             )
 
             ProcessApp._apply_input_defaults(app, input_path)
 
             self.assertEqual(str(tmp_path), app.batch_output_var.get())
             self.assertTrue(app.batch_zip_var.get())
-            self.assertEqual("sample_angioeye.zip", app.batch_zip_name_var.get())
+            self.assertEqual("sample_AE.zip", app.batch_zip_name_var.get())
+
+    def test_apply_input_defaults_for_h5_input_uses_ae_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            input_path = tmp_path / "sample.h5"
+            input_path.write_text("dummy", encoding="utf-8")
+
+            app = SimpleNamespace(
+                batch_output_var=_Var(""),
+                batch_zip_var=_Var(True),
+                batch_zip_name_var=_Var("outputs.zip"),
+                _default_archive_name=lambda path: f"{path.stem}_AE.zip",
+                _reset_progress=lambda: None,
+                _set_minimal_status=lambda _message: None,
+            )
+
+            ProcessApp._apply_input_defaults(app, input_path)
+
+            self.assertEqual(
+                str(tmp_path / "sample" / "sample_AE"),
+                app.batch_output_var.get(),
+            )
+            self.assertFalse(app.batch_zip_var.get())
+            self.assertEqual("sample_AE.zip", app.batch_zip_name_var.get())
 
     def test_minimal_output_filename_for_single_h5(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -224,7 +386,7 @@ class BatchZipCleanupTests(unittest.TestCase):
             app = SimpleNamespace(
                 ui_mode="minimal",
                 batch_zip_var=_Var(False),
-                _default_output_artifact_name=lambda path: f"{path.stem}_angioeye.h5",
+                _default_output_artifact_name=lambda path: f"{path.stem}_AE.h5",
             )
 
             output_name = ProcessApp._minimal_output_filename_for_run(
@@ -233,7 +395,7 @@ class BatchZipCleanupTests(unittest.TestCase):
                 [input_path],
             )
 
-            self.assertEqual("sample_angioeye.h5", output_name)
+            self.assertEqual("sample_AE.h5", output_name)
 
     def test_handle_dropped_paths_accepts_supported_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

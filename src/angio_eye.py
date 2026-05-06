@@ -17,6 +17,8 @@ import h5py
 from angioeye_io import (
     ANGIOEYE_PROCESSING_ROOT,
     create_h5_file,
+    default_output_dir_for_input,
+    default_work_h5_name_for_input,
     write_metrics_trees_to_h5,
 )
 from app_settings import (
@@ -662,12 +664,7 @@ class ProcessApp(_BaseAppTk):
         )
 
     def _default_output_stem(self, input_path: Path) -> str:
-        if input_path.is_file():
-            base_name = input_path.stem
-        else:
-            base_name = input_path.name
-        base_name = base_name or "output"
-        return f"{base_name}_angioeye"
+        return Path(default_work_h5_name_for_input(input_path)).stem
 
     def _default_archive_name(self, input_path: Path) -> str:
         return f"{self._default_output_stem(input_path)}.zip"
@@ -675,7 +672,7 @@ class ProcessApp(_BaseAppTk):
     def _default_output_artifact_name(self, input_path: Path) -> str:
         if input_path.is_file() and input_path.suffix.lower() == ".zip":
             return self._default_archive_name(input_path)
-        return f"{self._default_output_stem(input_path)}.h5"
+        return default_work_h5_name_for_input(input_path)
 
     def _update_minimal_path_labels(self) -> None:
         raw_value = (self.batch_input_var.get() or "").strip()
@@ -753,7 +750,7 @@ class ProcessApp(_BaseAppTk):
         self._set_progress_units(self._progress_completed_units + units)
 
     def _apply_input_defaults(self, input_path: Path) -> None:
-        output_dir = input_path if input_path.is_dir() else input_path.parent
+        output_dir = default_output_dir_for_input(input_path)
 
         self.batch_output_var.set(str(output_dir))
         self.batch_zip_name_var.set(self._default_archive_name(input_path))
@@ -1488,11 +1485,11 @@ class ProcessApp(_BaseAppTk):
             for h5_path in inputs:
                 try:
                     relative_parent = self._relative_input_parent(h5_path, data_root)
+                    target_dir = output_dir / relative_parent
                     combined_output = self._run_pipelines_on_file(
                         h5_path,
                         pipelines,
-                        output_dir,
-                        output_relative_parent=relative_parent,
+                        target_dir,
                         output_filename=minimal_output_filename,
                     )
                     processed_outputs.append(combined_output)
@@ -1686,29 +1683,13 @@ class ProcessApp(_BaseAppTk):
         self,
         h5_path: Path,
         pipelines: Sequence[PipelineDescriptor],
-        output_root: Path,
-        output_relative_parent: Path = Path("."),
+        target_dir: Path,
         output_filename: str | None = None,
     ) -> Path:
-        target_dir = output_root / output_relative_parent
         target_dir.mkdir(parents=True, exist_ok=True)
-        if output_filename:
-            base_output_path = target_dir / output_filename
-            combined_h5_out = base_output_path
-        else:
-            combined_h5_out = target_dir / f"{h5_path.stem}_pipelines_result.h5"
-        suffix = 1
-        while combined_h5_out.exists():
-            if output_filename:
-                combined_h5_out = (
-                    target_dir
-                    / f"{base_output_path.stem}_{suffix}{base_output_path.suffix}"
-                )
-            else:
-                combined_h5_out = (
-                    target_dir / f"{h5_path.stem}_{suffix}_pipelines_result.h5"
-                )
-            suffix += 1
+
+        output_name = output_filename or default_work_h5_name_for_input(h5_path)
+        combined_h5_out = target_dir / output_name
 
         pipeline_results: list[tuple[str, ProcessResult]] = []
         with h5py.File(h5_path, "r") as h5file:

@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+import re
 from typing import Any
 
 import h5py
@@ -14,6 +15,37 @@ class MetricsTree:
     name: str
     metrics: dict[str, Any]
     attrs: dict[str, Any] | None = None
+
+
+H5_STEM_PATTERN = re.compile(r"^(\d{6}_[A-Z0-9]{3,}(?:_[A-Z0-9]+){1,2})")
+
+
+def get_h5_stem(h5_path: Path | str) -> str:
+    stem = Path(h5_path).stem
+    match = H5_STEM_PATTERN.match(stem)
+    return match.group(1) if match else stem
+
+
+def default_work_h5_name_for_input(input_path: Path | None) -> str:
+    base_name = get_h5_stem(input_path) if input_path is not None else "output"
+    return f"{base_name}_AE.h5"
+
+
+def default_output_dir_for_input(input_path: Path) -> Path:
+    is_h5_input = input_path.suffix.lower() in {".h5", ".hdf5"}
+    output_dir = (
+        input_path.parent if input_path.is_file() or is_h5_input else input_path
+    )
+    if is_h5_input:
+        base_name = get_h5_stem(input_path)
+        parent = input_path.parent
+        output_root = parent
+        while output_root.name != base_name and output_root.parent != output_root:
+            output_root = output_root.parent
+        if output_root.name != base_name:
+            output_root = parent / base_name
+        output_dir = output_root / f"{base_name}_AE"
+    return output_dir
 
 
 def safe_h5_key(name: str) -> str:
