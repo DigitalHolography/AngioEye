@@ -1381,37 +1381,22 @@ class ArterialSegExample(ProcessPipeline):
             {"definition": ["median over all branch-radius segment values per beat"]},
         )
 
-        metrics[f"{vessel_prefix}/by_segment/params/ratio_R_VTI"] = np.asarray(
-            self.ratio_R_VTI, dtype=float
-        )
-        metrics[f"{vessel_prefix}/by_segment/params/ratio_SF_VTI"] = np.asarray(
-            self.ratio_SF_VTI, dtype=float
-        )
-        metrics[f"{vessel_prefix}/by_segment/params/ratio_vend_start"] = np.asarray(
+    def _pack_params(self, metrics: dict) -> None:
+        metrics["params/ratio_R_VTI"] = np.asarray(self.ratio_R_VTI, dtype=float)
+        metrics["params/ratio_SF_VTI"] = np.asarray(self.ratio_SF_VTI, dtype=float)
+        metrics["params/ratio_vend_start"] = np.asarray(
             self.ratio_vend_start, dtype=float
         )
-        metrics[f"{vessel_prefix}/by_segment/params/ratio_vend_end"] = np.asarray(
-            self.ratio_vend_end, dtype=float
-        )
-        metrics[f"{vessel_prefix}/by_segment/params/eps"] = np.asarray(
-            self.eps, dtype=float
-        )
-        metrics[f"{vessel_prefix}/by_segment/params/ratio_W50"] = np.asarray(
-            self.ratio_W50, dtype=float
-        )
-        metrics[f"{vessel_prefix}/by_segment/params/ratio_W80"] = np.asarray(
-            self.ratio_W80, dtype=float
-        )
-        metrics[f"{vessel_prefix}/by_segment/params/H_LOW_MAX"] = np.asarray(
-            self.H_LOW_MAX, dtype=int
-        )
-        metrics[f"{vessel_prefix}/by_segment/params/H_MAX"] = np.asarray(
-            self.H_MAX, dtype=int
-        )
-        metrics[f"{vessel_prefix}/by_segment/params/H_PHASE_RESIDUAL"] = np.asarray(
+        metrics["params/ratio_vend_end"] = np.asarray(self.ratio_vend_end, dtype=float)
+        metrics["params/eps"] = np.asarray(self.eps, dtype=float)
+        metrics["params/ratio_W50"] = np.asarray(self.ratio_W50, dtype=float)
+        metrics["params/ratio_W80"] = np.asarray(self.ratio_W80, dtype=float)
+        metrics["params/H_LOW_MAX"] = np.asarray(self.H_LOW_MAX, dtype=int)
+        metrics["params/H_MAX"] = np.asarray(self.H_MAX, dtype=int)
+        metrics["params/H_PHASE_RESIDUAL"] = np.asarray(
             self.H_PHASE_RESIDUAL, dtype=int
         )
-        metrics[f"{vessel_prefix}/by_segment/params/phase_weight_threshold"] = np.asarray(
+        metrics["params/phase_weight_threshold"] = np.asarray(
             self.phase_weight_threshold, dtype=float
         )
 
@@ -1445,40 +1430,6 @@ class ArterialSegExample(ProcessPipeline):
                     "latex_formula": [latex_formulas[k[0]]],
                 },
             )
-
-        metrics[f"{vessel_prefix}/global/params/ratio_R_VTI"] = np.asarray(
-            self.ratio_R_VTI, dtype=float
-        )
-        metrics[f"{vessel_prefix}/global/params/ratio_SF_VTI"] = np.asarray(
-            self.ratio_SF_VTI, dtype=float
-        )
-        metrics[f"{vessel_prefix}/global/params/ratio_vend_start"] = np.asarray(
-            self.ratio_vend_start, dtype=float
-        )
-        metrics[f"{vessel_prefix}/global/params/ratio_vend_end"] = np.asarray(
-            self.ratio_vend_end, dtype=float
-        )
-        metrics[f"{vessel_prefix}/global/params/eps"] = np.asarray(
-            self.eps, dtype=float
-        )
-        metrics[f"{vessel_prefix}/global/params/ratio_W50"] = np.asarray(
-            self.ratio_W50, dtype=float
-        )
-        metrics[f"{vessel_prefix}/global/params/ratio_W80"] = np.asarray(
-            self.ratio_W80, dtype=float
-        )
-        metrics[f"{vessel_prefix}/global/params/H_LOW_MAX"] = np.asarray(
-            self.H_LOW_MAX, dtype=int
-        )
-        metrics[f"{vessel_prefix}/global/params/H_MAX"] = np.asarray(
-            self.H_MAX, dtype=int
-        )
-        metrics[f"{vessel_prefix}/global/params/H_PHASE_RESIDUAL"] = np.asarray(
-            self.H_PHASE_RESIDUAL, dtype=int
-        )
-        metrics[f"{vessel_prefix}/global/params/phase_weight_threshold"] = np.asarray(
-            self.phase_weight_threshold, dtype=float
-        )
 
         graphics_raw = self._compute_graphics_support_block(v_raw_gl, T)
         graphics_band = self._compute_graphics_support_block(v_band_gl, T)
@@ -1541,6 +1492,7 @@ class ArterialSegExample(ProcessPipeline):
 
         T = np.asarray(h5file[self.T_input])
         metrics = {}
+        self._pack_params(metrics)
 
         vessel_configs = [
             {
