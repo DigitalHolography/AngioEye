@@ -8,6 +8,10 @@ import h5py
 import numpy as np
 import pandas as pd
 
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
 try:
     from scipy.stats import mannwhitneyu
 except ImportError as exc:
@@ -29,6 +33,7 @@ DEFAULT_TOP_N = 10
 
 CONTROL_GROUP_PATTERNS = [
     r"^control$",
+    r"^controls$",
     r"^controle$",
     r"^ctrl$",
     r"^ctl$",
@@ -170,7 +175,6 @@ SUMMARY_PVALUE_METRICS = [
 # Basic IO and metric extraction
 # -----------------------------------------------------------------------------
 
-
 def choose_zip():
     root = Tk()
     root.withdraw()
@@ -214,7 +218,6 @@ def extract_segment_metric(h5_path, metric_name, mode=SEGMENT_MODE):
 # -----------------------------------------------------------------------------
 # Robust 1D statistics
 # -----------------------------------------------------------------------------
-
 
 def finite_1d(x):
     x = np.asarray(x, dtype=float)
@@ -276,7 +279,6 @@ def clean_values(values):
 # -----------------------------------------------------------------------------
 # Per-file higher-order metrics
 # -----------------------------------------------------------------------------
-
 
 def compute_file_higher_metrics_from_segment_array(arr, eps=EPS):
     """
@@ -405,7 +407,6 @@ def write_variability_tree(file_path):
 # Zip analysis
 # -----------------------------------------------------------------------------
 
-
 def analyze_zip(zip_path, metrics=INPUT_METRICS, mode=SEGMENT_MODE):
     """
     Returns
@@ -485,7 +486,6 @@ def find_control_group(results):
 # Formatting and raw tables
 # -----------------------------------------------------------------------------
 
-
 def format_mean_std(values, digits=3):
     x = clean_values(values)
     if x.size == 0:
@@ -551,7 +551,6 @@ def build_temporal_group_table(results_for_group, metrics=INPUT_METRICS, digits=
 # -----------------------------------------------------------------------------
 # Comparison helpers
 # -----------------------------------------------------------------------------
-
 
 def combine_variability_score(
     results_for_group,
@@ -739,11 +738,7 @@ def build_contrast_table(
         sy = summarize_values(y)
 
         diff = sy["median"] - sx["median"]
-        ratio = (
-            sy["median"] / (abs(sx["median"]) + EPS)
-            if np.isfinite(sx["median"])
-            else np.nan
-        )
+        ratio = sy["median"] / (abs(sx["median"]) + EPS) if np.isfinite(sx["median"]) else np.nan
 
         rows.append(
             {
@@ -763,12 +758,7 @@ def build_contrast_table(
     df = df[np.isfinite(df["Abs median difference"])]
     df = df.sort_values("Abs median difference", ascending=False).head(n)
 
-    for col in [
-        f"Median {control_name}",
-        f"Median {group_name}",
-        "Median difference",
-        "Median ratio",
-    ]:
+    for col in [f"Median {control_name}", f"Median {group_name}", "Median difference", "Median ratio"]:
         df[col] = df[col].apply(lambda v: format_float(v, digits=digits))
 
     return df[
@@ -827,12 +817,7 @@ def build_mannwhitney_ranking_table(
     if n is not None:
         df = df.head(n)
 
-    for col in [
-        f"Median {control_name}",
-        f"Median {group_name}",
-        "Median difference",
-        "Rank-biserial effect",
-    ]:
+    for col in [f"Median {control_name}", f"Median {group_name}", "Median difference", "Rank-biserial effect"]:
         df[col] = df[col].apply(lambda v: format_float(v, digits=digits))
 
     df["Mann-Whitney p-value"] = df["Mann-Whitney p-value"].apply(
@@ -985,10 +970,125 @@ TEMPORAL_DESCRIPTOR_MAP = {
 }
 
 
+def descriptor_axis_label(descriptor_name, high_name):
+    if high_name.startswith("CV_"):
+        return f"{descriptor_name}"
+    return f"{descriptor_name} / |median metric value|"
+
+
+def export_variability_value_plots(
+    results,
+    out_dir,
+    descriptor_map,
+    domain_name,
+    metrics=SUMMARY_PVALUE_METRICS,
+    dpi=300,
+):
+    """
+    Exports PNG figures showing individual variability values by cohort.
+
+    One PNG is generated for each metric and each variability descriptor.
+    Example:
+        spatial_IQR_RI_by_group.png
+
+    Values are exactly the same values as those used in the descriptor-specific
+    Mann-Whitney tests:
+        - STD, IQR and MAD are normalized by MED_seg_medbeat.
+        - CV is kept as-is.
+
+    Parameters
+    ----------
+    results : dict
+        Output of analyze_zip.
+    out_dir : Path-like
+        Folder where PNG files are written.
+    descriptor_map : dict
+        Example spatial map:
+            {"STD": "STD_seg_medbeat", "IQR": "IQR_seg_medbeat", ...}
+    domain_name : str
+        Usually "spatial" or "temporal".
+    metrics : list[str]
+        Base metrics to plot, e.g. RI, PI, N_t_over_T, N_eff_over_T.
+    """
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    generated = []
+    group_names = sorted(results.keys())
+    rng = np.random.default_rng(12345)
+
+    for metric_name in metrics:
+        for descriptor_name, high_name in descriptor_map.items():
+            group_values = []
+            non_empty_group_names = []
+
+            for group_name in group_names:
+                values = get_descriptor_values_for_test(
+                    results[group_name],
+                    metric_name,
+                    high_name,
+                )
+                values = clean_values(values)
+
+                if values.size == 0:
+                    continue
+
+                group_values.append(values)
+                non_empty_group_names.append(group_name)
+
+            if not group_values:
+                continue
+
+            fig, ax = plt.subplots(figsize=(max(6, 1.2 * len(group_values)), 4.5))
+
+            positions = np.arange(1, len(group_values) + 1)
+
+            ax.boxplot(
+                group_values,
+                positions=positions,
+                widths=0.45,
+                showfliers=False,
+            )
+
+            for pos, values in zip(positions, group_values):
+                jitter = rng.normal(loc=0.0, scale=0.045, size=len(values))
+                ax.scatter(
+                    np.full(len(values), pos) + jitter,
+                    values,
+                    s=18,
+                    alpha=0.75,
+                )
+
+            xlabels = [
+                "{}\\n(n={})".format(name, len(values))
+                for name, values in zip(non_empty_group_names, group_values)
+            ]
+            ax.set_xticks(positions)
+            ax.set_xticklabels(xlabels, rotation=0)
+            ax.set_ylabel(descriptor_axis_label(descriptor_name, high_name))
+            ax.set_xlabel("Cohort")
+            ax.set_title(
+                f"{domain_name.capitalize()} {descriptor_name} variability for {metric_name}"
+            )
+            ax.grid(axis="y", alpha=0.25)
+            fig.tight_layout()
+
+            filename = (
+                f"{safe_name(domain_name)}_"
+                f"{safe_name(descriptor_name)}_"
+                f"{safe_name(metric_name)}_by_group.png"
+            )
+            path = out_dir / filename
+            fig.savefig(path, dpi=dpi, bbox_inches="tight")
+            plt.close(fig)
+            generated.append(path)
+
+    return generated
+
+
 # -----------------------------------------------------------------------------
 # LaTeX export
 # -----------------------------------------------------------------------------
-
 
 def dataframe_to_latex_table(
     df,
@@ -1035,7 +1135,10 @@ def save_table(df, csv_path, tex_path, caption, label, digits=3):
     df.to_csv(csv_path, index=False)
 
     latex = dataframe_to_latex_table(
-        df, caption=caption, label=label, font_size=r"\scriptsize"
+        df,
+        caption=caption,
+        label=label,
+        font_size=r"\scriptsize"
     )
 
     with open(tex_path, "w", encoding="utf-8") as f:
@@ -1047,7 +1150,6 @@ def save_table(df, csv_path, tex_path, caption, label, digits=3):
 # -----------------------------------------------------------------------------
 # Main export
 # -----------------------------------------------------------------------------
-
 
 def export_group_tables(
     zip_path,
@@ -1084,11 +1186,20 @@ def export_group_tables(
     temporal_raw_dir = out_dir / "temporal" / "raw"
     spatial_cmp_dir = out_dir / "spatial" / "comparisons_vs_control"
     temporal_cmp_dir = out_dir / "temporal" / "comparisons_vs_control"
+    spatial_fig_dir = out_dir / "spatial" / "figures"
+    temporal_fig_dir = out_dir / "temporal" / "figures"
 
     if out_dir.is_dir():
         shutil.rmtree(out_dir)
 
-    for d in [spatial_raw_dir, temporal_raw_dir, spatial_cmp_dir, temporal_cmp_dir]:
+    for d in [
+        spatial_raw_dir,
+        temporal_raw_dir,
+        spatial_cmp_dir,
+        temporal_cmp_dir,
+        spatial_fig_dir,
+        temporal_fig_dir,
+    ]:
         d.mkdir(parents=True, exist_ok=True)
 
     results = analyze_zip(zip_path, metrics=metrics, mode=mode)
@@ -1099,6 +1210,28 @@ def export_group_tables(
     print("Control group detected:", control_group)
 
     generated = []
+
+    # ------------------------------------------------------------------
+    # PNG figures: individual variability values by cohort.
+    # ------------------------------------------------------------------
+    generated.extend(
+        export_variability_value_plots(
+            results,
+            spatial_fig_dir,
+            descriptor_map=SPATIAL_DESCRIPTOR_MAP,
+            domain_name="spatial",
+            metrics=SUMMARY_PVALUE_METRICS,
+        )
+    )
+    generated.extend(
+        export_variability_value_plots(
+            results,
+            temporal_fig_dir,
+            descriptor_map=TEMPORAL_DESCRIPTOR_MAP,
+            domain_name="temporal",
+            metrics=SUMMARY_PVALUE_METRICS,
+        )
+    )
 
     # ------------------------------------------------------------------
     # Raw tables for every group, including control.
@@ -1248,11 +1381,13 @@ def export_group_tables(
         generated.extend(
             save_table(
                 df,
-                spatial_cmp_dir
-                / f"{pair}_spatial_descriptor_pvalue_summary_RI_PI_Nt_Neff.csv",
-                spatial_cmp_dir
-                / f"{pair}_spatial_descriptor_pvalue_summary_RI_PI_Nt_Neff.tex",
-                caption=f"Spatial descriptor-specific Mann-Whitney p-values between {control_group} and {group_name} for RI, PI, N_t/T and N_eff/T",
+                spatial_cmp_dir / f"{pair}_spatial_descriptor_pvalue_summary_RI_PI_Nt_Neff.csv",
+                spatial_cmp_dir / f"{pair}_spatial_descriptor_pvalue_summary_RI_PI_Nt_Neff.tex",
+                caption=(
+                    f"Spatial descriptor-specific Mann-Whitney p-values between "
+                    f"{control_group} and {group_name} for $\rm RI$, $\rm PI$, "
+                    f"$N_t/T$ and $N_{{\mathrm{{eff}}}}/T$"
+                ),
                 label=f"tab:{pair}_spatial_descriptor_pvalue_summary",
                 digits=digits,
             )
@@ -1312,10 +1447,8 @@ def export_group_tables(
         generated.extend(
             save_table(
                 df,
-                temporal_cmp_dir
-                / f"{pair}_strongest_temporal_variability_contrast.csv",
-                temporal_cmp_dir
-                / f"{pair}_strongest_temporal_variability_contrast.tex",
+                temporal_cmp_dir / f"{pair}_strongest_temporal_variability_contrast.csv",
+                temporal_cmp_dir / f"{pair}_strongest_temporal_variability_contrast.tex",
                 caption=f"Top {top_n} strongest temporal variability contrasts between {group_name} and {control_group}",
                 label=f"tab:{pair}_strongest_temporal_contrast",
                 digits=digits,
@@ -1355,11 +1488,13 @@ def export_group_tables(
         generated.extend(
             save_table(
                 df,
-                temporal_cmp_dir
-                / f"{pair}_temporal_descriptor_pvalue_summary_RI_PI_Nt_Neff.csv",
-                temporal_cmp_dir
-                / f"{pair}_temporal_descriptor_pvalue_summary_RI_PI_Nt_Neff.tex",
-                caption=f"Temporal descriptor-specific Mann-Whitney p-values between {control_group} and {group_name} for RI, PI, N_t/T and N_eff/T",
+                temporal_cmp_dir / f"{pair}_temporal_descriptor_pvalue_summary_RI_PI_Nt_Neff.csv",
+                temporal_cmp_dir / f"{pair}_temporal_descriptor_pvalue_summary_RI_PI_Nt_Neff.tex",
+                caption=(
+                    f"Temporal descriptor-specific Mann-Whitney p-values between "
+                    f"{control_group} and {group_name} for $\rm RI$, $\rm PI$, "
+                    f"$N_t/T$ and $N_{{\mathrm{{eff}}}}/T$"
+                ),
                 label=f"tab:{pair}_temporal_descriptor_pvalue_summary",
                 digits=digits,
             )
@@ -1370,9 +1505,7 @@ def export_group_tables(
     if out_dir.is_dir():
         shutil.rmtree(out_dir)
 
-    print(
-        f"Generated {len(generated)} files and inserted them into {zip_path} under latex_tables/."
-    )
+    print(f"Generated {len(generated)} files and inserted them into {zip_path} under latex_tables/.")
     return generated
 
 
