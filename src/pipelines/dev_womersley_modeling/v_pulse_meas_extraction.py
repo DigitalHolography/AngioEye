@@ -2,7 +2,7 @@ import numpy as np
 from scipy.interpolate import interp1d
 
 
-def preprocess_and_interpolate(num_interp_points, v_pulse):
+def preprocess_and_interpolate(num_interp_points_t, v_pulse):
     valid_mask = ~np.isnan(v_pulse)
     valid_indices = np.where(valid_mask)[0]
 
@@ -14,7 +14,7 @@ def preprocess_and_interpolate(num_interp_points, v_pulse):
 
     v_valid = v_pulse[min_idx : max_idx + 1].copy()
     x_valid = np.arange(len(v_valid))
-    x_interp = np.linspace(0, len(v_valid) - 1, num=num_interp_points)
+    x_interp = np.linspace(0, len(v_valid) - 1, num=num_interp_points_t)
 
     interpolator = interp1d(
         x_valid,
@@ -28,15 +28,17 @@ def preprocess_and_interpolate(num_interp_points, v_pulse):
     return np.asanyarray(v_interp)
 
 
-def extract_v_pulse_meas(dataset, num_interp_points, n_harmonic):
+def extract_v_pulse_meas(dataset, num_interp_points_t, n_harmonic):
     # Expected shape: (n_t, n_x, n_branches, n_radii) -> (128, 33, 14, 10)
     n_t, n_x, n_branches, n_radii = dataset.shape
     v_pulse_fft = np.zeros(
-        (num_interp_points // 2 + 1, n_x, n_branches, n_radii), dtype=complex
+        (num_interp_points_t // 2 + 1, n_x, n_branches, n_radii), dtype=complex
     )
-    v_pulse_meas = np.zeros((num_interp_points, n_x, n_branches, n_radii), dtype=float)
+    v_pulse_meas = np.zeros(
+        (num_interp_points_t, n_x, n_branches, n_radii), dtype=float
+    )
     v_pulse_meas_dc = np.zeros(
-        (num_interp_points, n_x, n_branches, n_radii), dtype=float
+        (num_interp_points_t, n_x, n_branches, n_radii), dtype=float
     )
 
     for branch_idx in range(n_branches):
@@ -45,11 +47,11 @@ def extract_v_pulse_meas(dataset, num_interp_points, n_harmonic):
                 v_pulse = np.asarray(dataset[:, x_idx, branch_idx, radii_idx])
 
                 v_interp = preprocess_and_interpolate(
-                    num_interp_points=num_interp_points,
+                    num_interp_points_t=num_interp_points_t,
                     v_pulse=v_pulse,
                 )
 
-                v_fft = np.fft.rfft(np.asarray(v_interp), n=num_interp_points)
+                v_fft = np.fft.rfft(np.asarray(v_interp), n=num_interp_points_t)
                 v_pulse_fft[:, x_idx, branch_idx, radii_idx] = v_fft
 
                 v_meas = np.zeros_like(v_fft)
