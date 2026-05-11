@@ -33,11 +33,10 @@ DEFAULT_TOP_N = 10
 
 CONTROL_GROUP_PATTERNS = [
     r"^control$",
-    r"^controls$",
     r"^controle$",
     r"^ctrl$",
     r"^ctl$",
-    r"^healthy$",
+    r"^controls$",
     r"^healthy_control$",
     r"^healthy_controls$",
 ]
@@ -155,7 +154,6 @@ SPATIAL_VARIABILITY_COLUMNS = [
 
 TEMPORAL_VARIABILITY_COLUMNS = [
     "STD_beat_medseg",
-    "IQR_beat_medseg",
     "MAD_beat_medseg",
     "CV_beat_medseg",
 ]
@@ -964,7 +962,6 @@ SPATIAL_DESCRIPTOR_MAP = {
 
 TEMPORAL_DESCRIPTOR_MAP = {
     "STD": "STD_beat_medseg",
-    "IQR": "IQR_beat_medseg",
     "MAD": "MAD_beat_medseg",
     "CV": "CV_beat_medseg",
 }
@@ -1060,7 +1057,7 @@ def export_variability_value_plots(
                 )
 
             xlabels = [
-                "{}\\n(n={})".format(name, len(values))
+                "{}\n(n={})".format(name, len(values))
                 for name, values in zip(non_empty_group_names, group_values)
             ]
             ax.set_xticks(positions)
