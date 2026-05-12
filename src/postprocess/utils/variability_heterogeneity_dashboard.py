@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
@@ -171,6 +172,7 @@ SUMMARY_PVALUE_METRICS = [
 SPATIAL_SELECTED_METRICS = [
     "RI",
     "PI",
+    "w_t",
 ]
 
 TEMPORAL_SELECTED_METRICS = [
@@ -182,6 +184,7 @@ TEMPORAL_SELECTED_METRICS = [
 # -----------------------------------------------------------------------------
 # Basic IO and metric extraction
 # -----------------------------------------------------------------------------
+
 
 def choose_zip():
     root = Tk()
@@ -226,6 +229,7 @@ def extract_segment_metric(h5_path, metric_name, mode=SEGMENT_MODE):
 # -----------------------------------------------------------------------------
 # Robust 1D statistics
 # -----------------------------------------------------------------------------
+
 
 def finite_1d(x):
     x = np.asarray(x, dtype=float)
@@ -287,6 +291,7 @@ def clean_values(values):
 # -----------------------------------------------------------------------------
 # Per-file higher-order metrics
 # -----------------------------------------------------------------------------
+
 
 def compute_file_higher_metrics_from_segment_array(arr, eps=EPS):
     """
@@ -415,6 +420,7 @@ def write_variability_tree(file_path):
 # Zip analysis
 # -----------------------------------------------------------------------------
 
+
 def analyze_zip(zip_path, metrics=INPUT_METRICS, mode=SEGMENT_MODE):
     """
     Returns
@@ -494,6 +500,7 @@ def find_control_group(results):
 # Formatting and raw tables
 # -----------------------------------------------------------------------------
 
+
 def format_mean_std(values, digits=3):
     x = clean_values(values)
     if x.size == 0:
@@ -529,7 +536,7 @@ def format_pvalue_latex(value, sig_digits=3, threshold=1e-3):
 
     if abs(value) < threshold:
         exponent = int(np.floor(np.log10(abs(value))))
-        mantissa = value / (10 ** exponent)
+        mantissa = value / (10**exponent)
         return rf"${mantissa:.{sig_digits}g} \times 10^{{{exponent}}}$"
 
     return f"{value:.{sig_digits}g}"
@@ -616,6 +623,7 @@ def build_temporal_group_table(results_for_group, metrics=INPUT_METRICS, digits=
 # -----------------------------------------------------------------------------
 # Comparison helpers
 # -----------------------------------------------------------------------------
+
 
 def combine_variability_score(
     results_for_group,
@@ -803,7 +811,11 @@ def build_contrast_table(
         sy = summarize_values(y)
 
         diff = sy["median"] - sx["median"]
-        ratio = sy["median"] / (abs(sx["median"]) + EPS) if np.isfinite(sx["median"]) else np.nan
+        ratio = (
+            sy["median"] / (abs(sx["median"]) + EPS)
+            if np.isfinite(sx["median"])
+            else np.nan
+        )
 
         rows.append(
             {
@@ -823,7 +835,12 @@ def build_contrast_table(
     df = df[np.isfinite(df["Abs median difference"])]
     df = df.sort_values("Abs median difference", ascending=False).head(n)
 
-    for col in [f"Median {control_name}", f"Median {group_name}", "Median difference", "Median ratio"]:
+    for col in [
+        f"Median {control_name}",
+        f"Median {group_name}",
+        "Median difference",
+        "Median ratio",
+    ]:
         df[col] = df[col].apply(lambda v: format_float(v, digits=digits))
 
     return df[
@@ -882,7 +899,12 @@ def build_mannwhitney_ranking_table(
     if n is not None:
         df = df.head(n)
 
-    for col in [f"Median {control_name}", f"Median {group_name}", "Median difference", "Rank-biserial effect"]:
+    for col in [
+        f"Median {control_name}",
+        f"Median {group_name}",
+        "Median difference",
+        "Rank-biserial effect",
+    ]:
         df[col] = df[col].apply(lambda v: format_float(v, digits=digits))
 
     df["Mann-Whitney p-value"] = df["Mann-Whitney p-value"].apply(
@@ -1203,7 +1225,9 @@ def build_group_separation_metrics_table(
         diff, ci_low, ci_high = mean_difference_ci95(x, y)
         auc = auc_from_scores(x, y)
         auc_sep = max(auc, 1.0 - auc) if np.isfinite(auc) else np.nan
-        threshold, sensitivity, specificity, direction = best_threshold_sensitivity_specificity(x, y)
+        threshold, sensitivity, specificity, direction = (
+            best_threshold_sensitivity_specificity(x, y)
+        )
         ovl = overlap_from_cohen_d(d)
 
         more_variable_group = group_tex if sy["median"] > sx["median"] else control_tex
@@ -1397,6 +1421,7 @@ def export_variability_value_plots(
 # LaTeX export
 # -----------------------------------------------------------------------------
 
+
 def dataframe_to_latex_table(
     df,
     caption=None,
@@ -1442,10 +1467,7 @@ def save_table(df, csv_path, tex_path, caption, label, digits=3):
     df.to_csv(csv_path, index=False)
 
     latex = dataframe_to_latex_table(
-        df,
-        caption=caption,
-        label=label,
-        font_size=r"\scriptsize"
+        df, caption=caption, label=label, font_size=r"\scriptsize"
     )
 
     with open(tex_path, "w", encoding="utf-8") as f:
@@ -1457,6 +1479,7 @@ def save_table(df, csv_path, tex_path, caption, label, digits=3):
 # -----------------------------------------------------------------------------
 # Main export
 # -----------------------------------------------------------------------------
+
 
 def export_group_tables(
     zip_path,
@@ -1715,7 +1738,7 @@ def export_group_tables(
                 spatial_cmp_dir / f"{pair}_spatial_group_separation_metrics_RI_PI.tex",
                 caption=(
                     f"Spatial group-separation metrics between {control_group} and "
-                    f"{group_name}$"
+                    f"{group_name}"
                 ),
                 label=f"tab:{pair}_spatial_group_separation_metrics",
                 digits=digits,
@@ -1776,8 +1799,10 @@ def export_group_tables(
         generated.extend(
             save_table(
                 df,
-                temporal_cmp_dir / f"{pair}_strongest_temporal_variability_contrast.csv",
-                temporal_cmp_dir / f"{pair}_strongest_temporal_variability_contrast.tex",
+                temporal_cmp_dir
+                / f"{pair}_strongest_temporal_variability_contrast.csv",
+                temporal_cmp_dir
+                / f"{pair}_strongest_temporal_variability_contrast.tex",
                 caption=f"Top {top_n} strongest temporal variability contrasts between {latex_escape_text(group_name)} and {latex_escape_text(control_group)}",
                 label=f"tab:{pair}_strongest_temporal_contrast",
                 digits=digits,
@@ -1822,8 +1847,10 @@ def export_group_tables(
         generated.extend(
             save_table(
                 df,
-                temporal_cmp_dir / f"{pair}_temporal_descriptor_pvalue_summary_Nt_Neff.csv",
-                temporal_cmp_dir / f"{pair}_temporal_descriptor_pvalue_summary_Nt_Neff.tex",
+                temporal_cmp_dir
+                / f"{pair}_temporal_descriptor_pvalue_summary_Nt_Neff.csv",
+                temporal_cmp_dir
+                / f"{pair}_temporal_descriptor_pvalue_summary_Nt_Neff.tex",
                 caption=(
                     f"Temporal descriptor-specific Mann-Whitney p-values between "
                     f"{control_group} and {group_name} for $N_t/T$ and "
@@ -1846,11 +1873,13 @@ def export_group_tables(
         generated.extend(
             save_table(
                 df,
-                temporal_cmp_dir / f"{pair}_temporal_group_separation_metrics_Nt_Neff.csv",
-                temporal_cmp_dir / f"{pair}_temporal_group_separation_metrics_Nt_Neff.tex",
+                temporal_cmp_dir
+                / f"{pair}_temporal_group_separation_metrics_Nt_Neff.csv",
+                temporal_cmp_dir
+                / f"{pair}_temporal_group_separation_metrics_Nt_Neff.tex",
                 caption=(
                     f"Temporal group-separation metrics between {control_group} and "
-                    f"{group_name}$"
+                    f"{group_name}"
                 ),
                 label=f"tab:{pair}_temporal_group_separation_metrics",
                 digits=digits,
@@ -1862,7 +1891,9 @@ def export_group_tables(
     if out_dir.is_dir():
         shutil.rmtree(out_dir)
 
-    print(f"Generated {len(generated)} files and inserted them into {zip_path} under latex_tables/.")
+    print(
+        f"Generated {len(generated)} files and inserted them into {zip_path} under latex_tables/."
+    )
     return generated
 
 
