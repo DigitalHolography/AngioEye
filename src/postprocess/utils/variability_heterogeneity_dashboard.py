@@ -172,7 +172,6 @@ SUMMARY_PVALUE_METRICS = [
 SPATIAL_SELECTED_METRICS = [
     "RI",
     "PI",
-    "w_t",
 ]
 
 TEMPORAL_SELECTED_METRICS = [
@@ -1287,6 +1286,126 @@ def build_group_separation_metrics_table(
     return pd.DataFrame(rows)
 
 
+def build_auc_separability_ranking_table(
+    control_results,
+    group_results,
+    higher_metrics,
+    control_name,
+    group_name,
+    metrics=INPUT_METRICS,
+    digits=4,
+):
+    """
+    Ranks all metrics by AUC separability for the composite variability score.
+
+    AUC separability is max(AUC, 1 - AUC), so it measures separation strength
+    independently of direction. The direction is reported through the more variable
+    group, Cohen's d and the mean difference.
+    """
+    rows = []
+    control_tex = latex_escape_text(control_name)
+    group_tex = latex_escape_text(group_name)
+
+    for metric_name in metrics:
+        x = combine_variability_score(
+            control_results,
+            metric_name,
+            higher_metrics=higher_metrics,
+        )
+        y = combine_variability_score(
+            group_results,
+            metric_name,
+            higher_metrics=higher_metrics,
+        )
+
+        sx = summarize_values(x)
+        sy = summarize_values(y)
+
+        if sx["n"] == 0 or sy["n"] == 0:
+            continue
+
+        p = mann_whitney_pvalue(x, y)
+        d = cohen_d(x, y)
+        diff, ci_low, ci_high = mean_difference_ci95(x, y)
+        auc = auc_from_scores(x, y)
+        auc_sep = max(auc, 1.0 - auc) if np.isfinite(auc) else np.nan
+        threshold, sensitivity, specificity, direction = (
+            best_threshold_sensitivity_specificity(x, y)
+        )
+        ovl = overlap_from_cohen_d(d)
+        more_variable_group = group_tex if sy["median"] > sx["median"] else control_tex
+        decision_rule = format_decision_rule(
+            threshold,
+            direction,
+            group_name=group_name,
+            digits=digits,
+        )
+
+        rows.append(
+            {
+                "Metric": metric_label(metric_name),
+                f"n {control_tex}": sx["n"],
+                f"n {group_tex}": sy["n"],
+                f"Median {control_tex}": sx["median"],
+                f"Median {group_tex}": sy["median"],
+                "More variable group": more_variable_group,
+                "AUC separability": auc_sep,
+                "Mann--Whitney p-value": p,
+                "Cohen's $d$": d,
+                f"Mean difference ({group_tex} $-$ {control_tex})": diff,
+                "Sensitivity": sensitivity,
+                "Specificity": specificity,
+                "Overlap OVL": ovl,
+                "Best decision rule": decision_rule,
+            }
+        )
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+
+    df = df[np.isfinite(df["AUC separability"])]
+    df = df.sort_values("AUC separability", ascending=False)
+    df.insert(0, "Rank", np.arange(1, len(df) + 1))
+
+    numeric_cols = [
+        f"Median {control_tex}",
+        f"Median {group_tex}",
+        "AUC separability",
+        "Cohen's $d$",
+        f"Mean difference ({group_tex} $-$ {control_tex})",
+        "Sensitivity",
+        "Specificity",
+        "Overlap OVL",
+    ]
+    for col in numeric_cols:
+        df[col] = df[col].apply(lambda v: format_float(v, digits=digits))
+
+    df["Mann--Whitney p-value"] = df["Mann--Whitney p-value"].apply(
+        lambda v: format_pvalue_latex(v, sig_digits=digits)
+    )
+
+    return df[
+        [
+            "Rank",
+            "Metric",
+            f"n {control_tex}",
+            f"n {group_tex}",
+            f"Median {control_tex}",
+            f"Median {group_tex}",
+            "More variable group",
+            "AUC separability",
+            "Mann--Whitney p-value",
+            "Cohen's $d$",
+            f"Mean difference ({group_tex} $-$ {control_tex})",
+            "Sensitivity",
+            "Specificity",
+            "Overlap OVL",
+            "Best decision rule",
+        ]
+    ]
+
+
 SPATIAL_DESCRIPTOR_MAP = {
     "STD": "STD_seg_medbeat",
     "IQR": "IQR_seg_medbeat",
@@ -1738,7 +1857,7 @@ def export_group_tables(
                 spatial_cmp_dir / f"{pair}_spatial_group_separation_metrics_RI_PI.tex",
                 caption=(
                     f"Spatial group-separation metrics between {control_group} and "
-                    f"{group_name}"
+                    f"{group_name} for $\rm RI$ and $\rm PI$"
                 ),
                 label=f"tab:{pair}_spatial_group_separation_metrics",
                 digits=digits,
@@ -1879,7 +1998,7 @@ def export_group_tables(
                 / f"{pair}_temporal_group_separation_metrics_Nt_Neff.tex",
                 caption=(
                     f"Temporal group-separation metrics between {control_group} and "
-                    f"{group_name}"
+                    f"{group_name} for $N_t/T$ and $N_{{\mathrm{{eff}}}}/T$"
                 ),
                 label=f"tab:{pair}_temporal_group_separation_metrics",
                 digits=digits,
