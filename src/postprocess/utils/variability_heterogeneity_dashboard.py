@@ -3,7 +3,14 @@ import shutil
 from collections import defaultdict
 from pathlib import Path
 from tkinter import Tk, filedialog
+import matplotlib.pyplot as plt
+import seaborn as sns
 
+
+from scipy.stats import (
+    norm,
+    rankdata,
+)
 import h5py
 import numpy as np
 import pandas as pd
@@ -27,9 +34,10 @@ EPS = 1e-12
 
 DEFAULT_TOP_N = 10
 
-CONTROL_GROUP_PATTERNS = [
+CONTROL_GROUP_PATTERNS = [  
     r"^control$",
     r"^controle$",
+    r"^controls$",
     r"^ctrl$",
     r"^ctl$",
     r"^healthy$",
@@ -150,7 +158,7 @@ SPATIAL_VARIABILITY_COLUMNS = [
 
 TEMPORAL_VARIABILITY_COLUMNS = [
     "STD_beat_medseg",
-    "IQR_beat_medseg",
+    #"IQR_beat_medseg",
     "MAD_beat_medseg",
     "CV_beat_medseg",
 ]
@@ -858,6 +866,12 @@ def build_mannwhitney_ranking_table(
         ]
     ]
 
+DESCRIPTOR_LABELS = {
+    "STD": r"$\mathrm{STD}$",
+    "IQR": r"$\mathrm{IQR}$",
+    "MAD": r"$\mathrm{MAD}$",
+    "CV": r"$\mathrm{CV}$",
+}
 
 def get_descriptor_values_for_test(
     results_for_group,
@@ -889,6 +903,231 @@ def get_descriptor_values_for_test(
     normalized = x[:min_len] / (np.abs(median_level[:min_len]) + eps)
     return clean_values(normalized)
 
+def cohens_d(control_values, group_values):
+    """
+    Standardized effect size.
+
+    Positive value means the compared group tends to have larger values.
+    """
+    x = clean_values(control_values)
+    y = clean_values(group_values)
+
+    if x.size < 2 or y.size < 2:
+        return np.nan
+
+    mx = np.mean(x)
+    my = np.mean(y)
+
+    sx = np.std(x, ddof=1)
+    sy = np.std(y, ddof=1)
+
+    pooled_sd = np.sqrt(
+        ((x.size - 1) * sx**2 + (y.size - 1) * sy**2)
+        / (x.size + y.size - 2)
+    )
+
+    if pooled_sd <= 0:
+        return np.nan
+
+    return float((my - mx) / pooled_sd)
+
+
+
+def bootstrap_ci_difference(
+    control_values,
+    group_values,
+    n_boot=5000,
+    ci=95,
+    random_state=0,
+):
+
+    rng = np.random.default_rng(random_state)
+
+    x = clean_values(control_values)
+    y = clean_values(group_values)
+
+    if x.size == 0 or y.size == 0:
+        return np.nan, np.nan
+
+    diffs = []
+
+    for _ in range(n_boot):
+
+        xb = rng.choice(
+            x,
+            size=x.size,
+            replace=True,
+        )
+
+        yb = rng.choice(
+            y,
+            size=y.size,
+            replace=True,
+        )
+
+        diffs.append(
+            np.mean(yb) - np.mean(xb)
+        )
+
+    alpha = (100 - ci) / 2
+
+    low = np.percentile(
+        diffs,
+        alpha,
+    )
+
+    high = np.percentile(
+        diffs,
+        100 - alpha,
+    )
+
+    return float(low), float(high)
+
+
+
+def compute_auc(control_values, group_values):
+    """
+    ROC AUC computed from Mann-Whitney relation.
+    Uses only numpy/scipy.
+    """
+
+    x = clean_values(control_values)
+    y = clean_values(group_values)
+
+    if x.size == 0 or y.size == 0:
+        return np.nan
+
+    combined = np.concatenate([
+        x,
+        y,
+    ])
+
+    ranks = rankdata(combined)
+
+    ranks_y = ranks[x.size:]
+
+    u = (
+        np.sum(ranks_y)
+        - (y.size * (y.size + 1)) / 2
+    )
+
+    auc = u / (x.size * y.size)
+
+    return float(auc)
+
+
+def overlap_from_cohens_d(d):
+    """
+    Approximate overlap coefficient from Cohen's d.
+
+    OVL = 1 -> complete overlap
+    OVL = 0 -> perfect separation
+    """
+    if not np.isfinite(d):
+        return np.nan
+
+    return float(2.0 * norm.cdf(-abs(d) / 2.0))
+
+def build_advanced_statistics_table(
+    control_results,
+    group_results,
+    higher_metrics,
+    selected_metrics,
+    control_name,
+    group_name,
+    digits=4,
+):
+
+    statistic_rows = [
+        f"Median subject variability {control_name}",
+        f"Median subject variability {group_name}",
+        "Most variable group",
+        "Difference in mean subject variability",
+        "CI95",
+        "Cohen d",
+        "ROC AUC",
+        "Overlap OVL",
+        "Rank-biserial",
+        "Mann-Whitney p",
+    ]
+
+    table = {
+        "Statistic": statistic_rows,
+    }
+
+    for metric_name in selected_metrics:
+
+        x = combine_variability_score(
+            control_results,
+            metric_name,
+            higher_metrics,
+        )
+
+        y = combine_variability_score(
+            group_results,
+            metric_name,
+            higher_metrics,
+        )
+
+        if len(x) == 0 or len(y) == 0:
+            continue
+
+        median_x = np.median(x)
+        median_y = np.median(y)
+
+        if median_y > median_x:
+            most_variable_group = group_name
+        elif median_x > median_y:
+            most_variable_group = control_name
+        else:
+            most_variable_group = "Equal"
+
+        mean_diff = np.mean(y) - np.mean(x)
+
+        ci_low, ci_high = bootstrap_ci_difference(
+            x,
+            y,
+        )
+
+        d = cohens_d(x, y)
+
+        auc = compute_auc(x, y)
+
+        ovl = overlap_from_cohens_d(d)
+
+        rbc = rank_biserial_effect_size(x, y)
+
+        pvalue = mann_whitney_pvalue(x, y)
+
+        metric_values = [
+
+            format_float(median_x, digits),
+
+            format_float(median_y, digits),
+
+            most_variable_group,
+
+            format_float(mean_diff, digits),
+
+            (
+                f"[{format_float(ci_low, digits)}, "
+                f"{format_float(ci_high, digits)}]"
+            ),
+
+            format_float(d, digits),
+
+            format_float(auc, digits),
+
+            format_float(ovl, digits),
+
+            format_float(rbc, digits),
+
+            format_float(pvalue, digits),
+        ]
+
+        table[metric_label(metric_name)] = metric_values
+
+    return pd.DataFrame(table)
 
 def build_descriptor_pvalue_summary_table(
     control_results,
@@ -1050,6 +1289,70 @@ def save_table(df, csv_path, tex_path, caption, label, digits=3):
     return [csv_path, tex_path]
 
 
+
+def save_descriptor_plot(
+    control_values,
+    group_values,
+    descriptor_name,
+    metric_name,
+    control_name,
+    group_name,
+    output_path,
+):
+    control_values = clean_values(control_values)
+    group_values = clean_values(group_values)
+
+    if len(control_values) == 0 or len(group_values) == 0:
+        return
+
+    pvalue = mann_whitney_pvalue(control_values, group_values)
+    effect = rank_biserial_effect_size(control_values, group_values)
+
+    fig, ax = plt.subplots(figsize=(5, 5))
+
+    data = [control_values, group_values]
+
+    sns.boxplot(
+        data=data,
+        width=0.2,
+        showcaps=True,
+        showfliers=False,
+        boxprops={"facecolor": "white"},
+        ax=ax,
+    )
+
+    sns.stripplot(
+        data=data,
+        color="black",
+        alpha=0.7,
+        jitter=0.15,
+        size=4,
+        ax=ax,
+    )
+
+    ax.set_xticks([0, 1])
+    ax.set_xticklabels([control_name, group_name])
+
+    ax.set_ylabel("Normalized variability")
+
+    metric_display = metric_label(metric_name)
+
+    descriptor_display = DESCRIPTOR_LABELS.get(
+        descriptor_name,
+        descriptor_name,
+    )
+
+    ax.set_title(
+        rf"{metric_display} --- {descriptor_display}" "\n"
+        rf"$p = {pvalue:.3e}$" "\n"
+
+    )
+
+    plt.tight_layout()
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path, dpi=300)
+    plt.close(fig)
 # -----------------------------------------------------------------------------
 # Main export
 # -----------------------------------------------------------------------------
@@ -1264,6 +1567,68 @@ def export_group_tables(
             )
         )
 
+        df = build_advanced_statistics_table(
+            control_results,
+            group_results,
+            higher_metrics=SPATIAL_VARIABILITY_COLUMNS,
+            selected_metrics=[
+                "RI",
+                "PI",
+            ],
+            control_name=control_group,
+            group_name=group_name,
+            digits=digits,
+        )
+
+        generated.extend(
+            save_table(
+                df,
+                spatial_cmp_dir / f"{pair}_advanced_spatial_statistics.csv",
+                spatial_cmp_dir / f"{pair}_advanced_spatial_statistics.tex",
+                caption=(
+                    f"Advanced spatial statistical comparison between "
+                    f"{control_group} and {group_name}"
+                ),
+                label=f"tab:{pair}_advanced_spatial_statistics",
+                digits=digits,
+            )
+        )
+        # ---------------------------------------------------------
+        # Spatial descriptor figures
+        # ---------------------------------------------------------
+        for descriptor_name, high_name in SPATIAL_DESCRIPTOR_MAP.items():
+
+            for metric_name in SUMMARY_PVALUE_METRICS:
+
+                x = get_descriptor_values_for_test(
+                    control_results,
+                    metric_name,
+                    high_name,
+                )
+
+                y = get_descriptor_values_for_test(
+                    group_results,
+                    metric_name,
+                    high_name,
+                )
+
+                fig_path = (
+                    out_dir
+                    / "figures"
+                    / "spatial"
+                    / f"{pair}_{metric_name}_{descriptor_name}.png"
+                )
+
+                save_descriptor_plot(
+                    x,
+                    y,
+                    descriptor_name=descriptor_name,
+                    metric_name=metric_name,
+                    control_name=control_group,
+                    group_name=group_name,
+                    output_path=fig_path,
+                )
+
         # ------------------------------
         # Temporal comparison tables
         # ------------------------------
@@ -1370,6 +1735,68 @@ def export_group_tables(
                 digits=digits,
             )
         )
+
+        df = build_advanced_statistics_table(
+            control_results,
+            group_results,
+            higher_metrics=TEMPORAL_VARIABILITY_COLUMNS,
+            selected_metrics=[
+                "N_eff_over_T",
+                "N_t_over_T",
+            ],
+            control_name=control_group,
+            group_name=group_name,
+            digits=digits,
+        )
+
+        generated.extend(
+            save_table(
+                df,
+                temporal_cmp_dir / f"{pair}_advanced_temporal_statistics.csv",
+                temporal_cmp_dir / f"{pair}_advanced_temporal_statistics.tex",
+                caption=(
+                    f"Advanced temporal statistical comparison between "
+                    f"{control_group} and {group_name}"
+                ),
+                label=f"tab:{pair}_advanced_temporal_statistics",
+                digits=digits,
+            )
+        )
+        # ---------------------------------------------------------
+        # Temporal descriptor figures
+        # ---------------------------------------------------------
+        for descriptor_name, high_name in TEMPORAL_DESCRIPTOR_MAP.items():
+
+            for metric_name in SUMMARY_PVALUE_METRICS:
+
+                x = get_descriptor_values_for_test(
+                    control_results,
+                    metric_name,
+                    high_name,
+                )
+
+                y = get_descriptor_values_for_test(
+                    group_results,
+                    metric_name,
+                    high_name,
+                )
+
+                fig_path = (
+                    out_dir
+                    / "figures"
+                    / "temporal"
+                    / f"{pair}_{metric_name}_{descriptor_name}.png"
+                )
+
+                save_descriptor_plot(
+                    x,
+                    y,
+                    descriptor_name=descriptor_name,
+                    metric_name=metric_name,
+                    control_name=control_group,
+                    group_name=group_name,
+                    output_path=fig_path,
+                )
 
     replace_folder_in_zip(zip_path, out_dir, arc_folder="latex_tables")
 
