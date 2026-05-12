@@ -48,7 +48,7 @@ def extract_v_profile_meas(dataset, num_interp_points_x, n_harmonic):
     for branch_idx in range(n_branches):
         for radii_idx in range(n_radii):
             for t_idx in range(n_t):
-                v_profile = np.asarray(dataset[t_idx, :, branch_idx, radii_idx])
+                v_profile = np.asarray(dataset[t_idx, :, branch_idx, radii_idx]) * 1e-3
 
                 v_interp = preprocess_and_interpolate(
                     num_interp_points_x=num_interp_points_x,
