@@ -118,23 +118,58 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
         if v2.shape[0] == n_beats and v2.shape[1] != n_beats:
             return v2.T
 
-        return v2
+        raise ValueError(
+            "Expected global waveform with one axis matching the beat-period "
+            f"count ({n_beats}), got shape {v2.shape}"
+        )
 
     @staticmethod
-    def _n_beats_from_T(T: np.ndarray) -> int:
-        T = np.asarray(T)
+    def _Tbeat_values(T: np.ndarray) -> np.ndarray:
+        original_shape = np.asarray(T).shape
+        T = np.squeeze(np.asarray(T, dtype=float))
+        if T.ndim == 0:
+            return np.asarray([float(T)], dtype=float)
         if T.ndim == 1:
-            return int(T.shape[0])
-        if T.ndim >= 2:
-            return int(T.shape[1])
-        raise ValueError(f"Expected beat-period array with at least 1 dimension, got {T.shape}")
+            return T.astype(float, copy=False)
+        raise ValueError(
+            "Expected beat-period array to be scalar, 1D, or singleton-padded "
+            f"1D, got shape {original_shape}"
+        )
+
+    @classmethod
+    def _n_beats_from_T(cls, T: np.ndarray) -> int:
+        return int(cls._Tbeat_values(T).size)
+
+    @classmethod
+    def _get_Tbeat(cls, T: np.ndarray, beat_idx: int) -> float:
+        Tbeats = cls._Tbeat_values(T)
+        if beat_idx < 0 or beat_idx >= Tbeats.size:
+            raise IndexError(
+                f"Beat index {beat_idx} is outside beat-period array of length {Tbeats.size}"
+            )
+        return float(Tbeats[beat_idx])
 
     @staticmethod
-    def _get_Tbeat(T: np.ndarray, beat_idx: int) -> float:
-        T = np.asarray(T)
-        if T.ndim == 1:
-            return float(T[beat_idx])
-        return float(T[0][beat_idx])
+    def _gradient_keep_nan(v: np.ndarray, dt: float) -> np.ndarray:
+        v = np.asarray(v, dtype=float)
+        dvdt = np.full(v.shape, np.nan, dtype=float)
+        finite = np.isfinite(v)
+        if np.count_nonzero(finite) < 2:
+            return dvdt
+
+        idx = np.flatnonzero(finite)
+        t = idx.astype(float) * float(dt)
+        dvdt[finite] = np.gradient(v[finite], t)
+        return dvdt
+
+    @staticmethod
+    def _rfft_amplitude_factors(n: int, H: int) -> np.ndarray:
+        factors = np.ones((H + 1,), dtype=float)
+        if H >= 1:
+            factors[1:] = 2.0
+            if n % 2 == 0 and H >= n // 2:
+                factors[n // 2] = 1.0
+        return factors
 
     @staticmethod
     def _window_indices(n: int, start_ratio: float, end_ratio: float) -> tuple[int, int]:
@@ -179,7 +214,10 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
         k0, k1 = self._window_indices(v.size, a, b)
         if k1 <= k0:
             return np.nan
-        return float(np.nansum(v[k0:k1]) * dt)
+        window = v[k0:k1]
+        if not np.any(np.isfinite(window)):
+            return np.nan
+        return float(np.nansum(window) * dt)
 
     def _window_mean(self, v: np.ndarray, a: float, b: float) -> float:
         k0, k1 = self._window_indices(v.size, a, b)
@@ -327,23 +365,23 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
         # Absolute derivative / kinetic metrics
         # -------------------------------------------------------------
         if n >= 2:
-            dvdt = np.gradient(vf, dt)
+            dvdt = self._gradient_keep_nan(vv, dt)
+            if np.any(np.isfinite(dvdt)):
+                out["dvdt_max"] = float(np.nanmax(dvdt))
+                out["dvdt_min"] = float(np.nanmin(dvdt))
+                out["dvdt_fall_abs_max"] = float(abs(np.nanmin(dvdt)))
+                out["dvdt_rms"] = float(np.sqrt(np.nanmean(dvdt * dvdt)))
+                out["dvdt_abs_mean"] = float(np.nanmean(np.abs(dvdt)))
+                out["dvdt_std"] = float(np.nanstd(dvdt))
+                out["dvdt_energy"] = float(np.nansum(dvdt * dvdt) * dt)
+                out["total_variation"] = float(np.nansum(np.abs(dvdt)) * dt)
+                out["positive_variation"] = float(np.nansum(np.maximum(dvdt, 0.0)) * dt)
+                out["negative_variation"] = float(np.nansum(np.maximum(-dvdt, 0.0)) * dt)
 
-            out["dvdt_max"] = float(np.nanmax(dvdt))
-            out["dvdt_min"] = float(np.nanmin(dvdt))
-            out["dvdt_fall_abs_max"] = float(abs(np.nanmin(dvdt)))
-            out["dvdt_rms"] = float(np.sqrt(np.nanmean(dvdt * dvdt)))
-            out["dvdt_abs_mean"] = float(np.nanmean(np.abs(dvdt)))
-            out["dvdt_std"] = float(np.nanstd(dvdt))
-            out["dvdt_energy"] = float(np.nansum(dvdt * dvdt) * dt)
-            out["total_variation"] = float(np.nansum(np.abs(dvdt)) * dt)
-            out["positive_variation"] = float(np.nansum(np.maximum(dvdt, 0.0)) * dt)
-            out["negative_variation"] = float(np.nansum(np.maximum(-dvdt, 0.0)) * dt)
-
-            idx_up = int(np.nanargmax(dvdt))
-            idx_down = int(np.nanargmin(dvdt))
-            out["t_upstroke_max"] = float(idx_up * dt)
-            out["t_downstroke_max"] = float(idx_down * dt)
+                idx_up = int(np.nanargmax(dvdt))
+                idx_down = int(np.nanargmin(dvdt))
+                out["t_upstroke_max"] = float(idx_up * dt)
+                out["t_downstroke_max"] = float(idx_down * dt)
 
         # -------------------------------------------------------------
         # Absolute harmonic-amplitude metrics
@@ -351,6 +389,7 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
         if n >= 2:
             Vfull = np.fft.rfft(vf) / float(n)
             H = int(min(self.H_MAX, Vfull.size - 1))
+            amp_factors = self._rfft_amplitude_factors(n, H)
 
             coeff_abs = np.full((self.H_MAX + 1,), np.nan, dtype=float)
             harmonic_power = np.full((self.H_MAX + 1,), np.nan, dtype=float)
@@ -363,16 +402,22 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
             harmonic_power[: H + 1] = power
 
             if H >= 1:
-                harmonic_amp[:H] = 2.0 * coeff[1 : H + 1]
+                harmonic_amp[:H] = amp_factors[1 : H + 1] * coeff[1 : H + 1]
 
             out["harmonic_coeff_abs"] = coeff_abs
             out["harmonic_amp"] = harmonic_amp
             out["harmonic_power"] = harmonic_power
 
             out["dc_level"] = float(np.real(Vfull[0]))
-            out["fundamental_amp"] = float(2.0 * coeff[1]) if H >= 1 else np.nan
-            out["second_harmonic_amp"] = float(2.0 * coeff[2]) if H >= 2 else np.nan
-            out["third_harmonic_amp"] = float(2.0 * coeff[3]) if H >= 3 else np.nan
+            out["fundamental_amp"] = (
+                float(amp_factors[1] * coeff[1]) if H >= 1 else np.nan
+            )
+            out["second_harmonic_amp"] = (
+                float(amp_factors[2] * coeff[2]) if H >= 2 else np.nan
+            )
+            out["third_harmonic_amp"] = (
+                float(amp_factors[3] * coeff[3]) if H >= 3 else np.nan
+            )
 
             pulsatile_harmonic_power = (
                 float(np.nansum(power[1 : H + 1])) if H >= 1 else np.nan
@@ -390,8 +435,11 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
             out["low_harmonic_power"] = low_harmonic_power
 
             if np.isfinite(pulsatile_harmonic_power) and pulsatile_harmonic_power >= 0:
+                ac_mean_square = float(
+                    np.nansum(amp_factors[1 : H + 1] * power[1 : H + 1])
+                )
                 out["bandlimited_ac_rms_from_harmonics"] = float(
-                    np.sqrt(2.0 * pulsatile_harmonic_power)
+                    np.sqrt(ac_mean_square)
                 )
 
         # -------------------------------------------------------------
@@ -409,7 +457,12 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
         return out
 
     def _compute_qc_metrics_1d(
-        self, v_raw: np.ndarray, v_band: np.ndarray, Tbeat: float
+        self,
+        v_raw: np.ndarray,
+        v_band: np.ndarray,
+        Tbeat: float,
+        *,
+        rectify: bool = False,
     ) -> dict:
         """
         Compute raw-vs-bandlimited agreement metrics from a pair of aligned waveforms.
@@ -419,15 +472,24 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
         if (not np.isfinite(Tbeat)) or Tbeat <= 0:
             return out
 
-        v_raw = self._rectify_keep_nan(v_raw)
-        v_band = self._rectify_keep_nan(v_band)
+        v_raw = np.asarray(v_raw, dtype=float)
+        v_band = np.asarray(v_band, dtype=float)
+        if v_raw.size != v_band.size:
+            raise ValueError(
+                f"Raw and bandlimited waveforms have different lengths: "
+                f"{v_raw.size} vs {v_band.size}. Resample before QC."
+            )
 
-        n = int(min(v_raw.size, v_band.size))
+        if rectify:
+            v_raw = self._rectify_keep_nan(v_raw)
+            v_band = self._rectify_keep_nan(v_band)
+
+        n = int(v_raw.size)
         if n <= 0:
             return out
 
-        raw = v_raw[:n]
-        band = v_band[:n]
+        raw = v_raw
+        band = v_band
 
         mask = np.isfinite(raw) & np.isfinite(band)
         if not np.any(mask):
@@ -552,7 +614,12 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
         return seg, br, gl, n_branches, n_radii, seg_order_note
 
     def _compute_qc_block_segment(
-        self, v_raw_block: np.ndarray, v_band_block: np.ndarray, T: np.ndarray
+        self,
+        v_raw_block: np.ndarray,
+        v_band_block: np.ndarray,
+        T: np.ndarray,
+        *,
+        rectify: bool = False,
     ):
         """
         Raw-vs-bandlimited QC for segment waveforms.
@@ -595,7 +662,9 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
                 for radius_idx in range(n_radii):
                     v_raw = v_raw_block[:, beat_idx, branch_idx, radius_idx]
                     v_band = v_band_block[:, beat_idx, branch_idx, radius_idx]
-                    m = self._compute_qc_metrics_1d(v_raw, v_band, Tbeat)
+                    m = self._compute_qc_metrics_1d(
+                        v_raw, v_band, Tbeat, rectify=rectify
+                    )
 
                     for k in self._qc_metric_keys():
                         key = k[0]
@@ -648,7 +717,12 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
         return out
 
     def _compute_qc_block_global(
-        self, v_raw_global: np.ndarray, v_band_global: np.ndarray, T: np.ndarray
+        self,
+        v_raw_global: np.ndarray,
+        v_band_global: np.ndarray,
+        T: np.ndarray,
+        *,
+        rectify: bool = False,
     ):
         """
         Raw-vs-bandlimited QC for global waveforms.
@@ -666,7 +740,9 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
             Tbeat = self._get_Tbeat(T, beat_idx)
             v_raw = v_raw_global[:, beat_idx]
             v_band = v_band_global[:, beat_idx]
-            m = self._compute_qc_metrics_1d(v_raw, v_band, Tbeat)
+            m = self._compute_qc_metrics_1d(
+                v_raw, v_band, Tbeat, rectify=rectify
+            )
 
             for k in self._qc_metric_keys():
                 out[k[0]][beat_idx] = m[k[0]]
@@ -676,29 +752,241 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
     # ---------------------------------------------------------------------
     # Packing helpers
     # ---------------------------------------------------------------------
+    @staticmethod
+    def _audit_metric_names() -> dict[str, str]:
+        return {
+            "vmax": "maximum_velocity",
+            "vmin": "minimum_velocity",
+            "vmean": "mean_velocity",
+            "vmedian": "median_velocity",
+            "vrms": "rms_velocity",
+            "vstd": "velocity_standard_deviation",
+            "v_range": "velocity_range",
+            "v_peak_above_mean": "peak_velocity_above_mean",
+            "v_mean_above_min": "mean_velocity_above_minimum",
+            "v_p05": "velocity_percentile_05",
+            "v_p10": "velocity_percentile_10",
+            "v_p25": "velocity_percentile_25",
+            "v_p50": "velocity_percentile_50",
+            "v_p75": "velocity_percentile_75",
+            "v_p90": "velocity_percentile_90",
+            "v_p95": "velocity_percentile_95",
+            "v_iqr": "velocity_interquartile_range",
+            "v_mad": "velocity_median_absolute_deviation",
+            "vti_total": "total_velocity_time_integral",
+            "vti_0_10": "velocity_time_integral_first_10_percent",
+            "vti_0_25": "velocity_time_integral_first_25_percent",
+            "vti_0_33": "velocity_time_integral_first_third",
+            "vti_0_50": "velocity_time_integral_first_half",
+            "vti_0_75": "velocity_time_integral_first_75_percent",
+            "vti_75_90": "velocity_time_integral_75_to_90_percent",
+            "vti_90_100": "velocity_time_integral_final_10_percent",
+            "vti_late_half": "velocity_time_integral_late_half",
+            "vti_above_min": "velocity_time_integral_above_minimum",
+            "vti_above_mean_pos": "positive_velocity_time_integral_above_mean",
+            "vti_below_mean_abs": "negative_velocity_time_integral_below_mean",
+            "v_start_mean": "mean_velocity_first_10_percent",
+            "v_early_mean": "mean_velocity_first_third",
+            "v_mid_mean": "mean_velocity_middle_third",
+            "v_late_mean": "mean_velocity_final_third",
+            "vend_mean": "mean_velocity_end_window",
+            "v_final_mean": "mean_velocity_final_10_percent",
+            "v_early_max": "maximum_velocity_first_third",
+            "v_late_min": "minimum_velocity_late_half",
+            "v_ac_rms": "rms_pulsatile_velocity",
+            "v_ac_abs_mean": "mean_absolute_pulsatile_velocity",
+            "v_ac_abs_integral": "integrated_absolute_pulsatile_velocity",
+            "v_positive_pulsatile_integral": "positive_pulsatile_velocity_integral",
+            "v_negative_pulsatile_integral": "negative_pulsatile_velocity_integral",
+            "v_peak_to_peak": "peak_to_peak_velocity",
+            "t_vmax": "time_of_maximum_velocity",
+            "t_vmin": "time_of_minimum_velocity",
+            "t_upstroke_max": "time_of_maximum_acceleration",
+            "t_downstroke_max": "time_of_maximum_deceleration",
+            "peak_to_trough_time": "time_from_peak_velocity_to_trough",
+            "beat_period": "beat_period",
+            "dvdt_max": "maximum_acceleration",
+            "dvdt_min": "minimum_acceleration",
+            "dvdt_fall_abs_max": "maximum_deceleration_magnitude",
+            "dvdt_rms": "rms_acceleration",
+            "dvdt_abs_mean": "mean_absolute_acceleration",
+            "dvdt_std": "acceleration_standard_deviation",
+            "dvdt_energy": "acceleration_energy",
+            "total_variation": "total_velocity_change",
+            "positive_variation": "integrated_positive_acceleration",
+            "negative_variation": "integrated_deceleration_magnitude",
+            "dc_level": "fourier_dc_velocity_level",
+            "fundamental_amp": "fundamental_harmonic_velocity_amplitude",
+            "second_harmonic_amp": "second_harmonic_velocity_amplitude",
+            "third_harmonic_amp": "third_harmonic_velocity_amplitude",
+            "pulsatile_harmonic_power": "pulsatile_harmonic_power",
+            "higher_harmonic_power": "higher_harmonic_power",
+            "low_harmonic_power": "low_harmonic_power",
+            "bandlimited_ac_rms_from_harmonics": "rms_pulsatile_velocity_from_harmonics",
+            "signal_energy": "velocity_signal_energy",
+            "signal_mean_square": "velocity_mean_square",
+            "pulsatile_energy": "pulsatile_velocity_energy",
+            "pulsatile_mean_square": "pulsatile_velocity_mean_square",
+            "absolute_deviation_energy": "absolute_pulsatile_deviation_integral",
+            "vti_squared_over_T": "velocity_time_integral_squared_per_period",
+            "harmonic_coeff_abs": "harmonic_velocity_coefficient_magnitude",
+            "harmonic_amp": "harmonic_velocity_amplitude",
+            "harmonic_power": "harmonic_velocity_power",
+            "raw_minus_band_mean": "mean_raw_minus_bandlimited_velocity",
+            "raw_minus_band_bias": "raw_minus_bandlimited_velocity_bias",
+            "raw_minus_band_rms": "rms_raw_minus_bandlimited_velocity",
+            "raw_minus_band_mae": "mean_absolute_raw_minus_bandlimited_velocity",
+            "raw_minus_band_max_abs": "maximum_absolute_raw_minus_bandlimited_velocity",
+            "raw_minus_band_energy": "raw_minus_bandlimited_residual_energy",
+            "raw_minus_band_vti_abs": "absolute_raw_minus_bandlimited_vti",
+            "raw_band_corr": "raw_bandlimited_velocity_correlation",
+            "raw_band_vti_difference": "raw_minus_bandlimited_vti_difference",
+        }
+
+    @staticmethod
+    def _rectified_qc_metric_names() -> dict[str, str]:
+        return {
+            "raw_minus_band_mean": (
+                "mean_rectified_raw_minus_rectified_bandlimited_velocity"
+            ),
+            "raw_minus_band_bias": (
+                "rectified_raw_minus_rectified_bandlimited_velocity_bias"
+            ),
+            "raw_minus_band_rms": (
+                "rms_rectified_raw_minus_rectified_bandlimited_velocity"
+            ),
+            "raw_minus_band_mae": (
+                "mean_absolute_rectified_raw_minus_rectified_bandlimited_velocity"
+            ),
+            "raw_minus_band_max_abs": (
+                "maximum_absolute_rectified_raw_minus_rectified_bandlimited_velocity"
+            ),
+            "raw_minus_band_energy": (
+                "rectified_raw_minus_rectified_bandlimited_residual_energy"
+            ),
+            "raw_minus_band_vti_abs": (
+                "absolute_rectified_raw_minus_rectified_bandlimited_vti"
+            ),
+            "raw_band_corr": "rectified_raw_bandlimited_velocity_correlation",
+            "raw_band_vti_difference": (
+                "rectified_raw_minus_rectified_bandlimited_vti_difference"
+            ),
+        }
+
+    @staticmethod
+    def _expected_range_note(key: str) -> str:
+        nonnegative = (
+            "Expected mathematical range: >= 0 or NaN. This is not a "
+            "physiological reference interval."
+        )
+        signed = (
+            "Expected mathematical range: any finite signed value or NaN. "
+            "This is not a physiological reference interval."
+        )
+
+        if key in {"raw_band_corr"}:
+            return "Expected mathematical range: [-1, 1] or NaN."
+        if key in {"beat_period"}:
+            return "Expected mathematical range: > 0 seconds."
+        if key.startswith("t_") or key in {"peak_to_trough_time"}:
+            return (
+                "Expected mathematical range: [0, beat_period) seconds or NaN; "
+                "peak_to_trough_time is NaN when peak and trough coincide."
+            )
+        if key in {
+            "dvdt_max",
+            "dvdt_min",
+            "raw_minus_band_mean",
+            "raw_minus_band_bias",
+            "raw_band_vti_difference",
+        }:
+            return signed
+        return nonnegative
+
+    def _rectified_qc_meta(self) -> dict:
+        meta = {}
+        output_names = self._rectified_qc_metric_names()
+        for k in self._qc_metric_keys():
+            meta[k[0]] = {
+                "output_name": [output_names.get(k[0], k[0])],
+                "source_metric_id": [k[0]],
+                "definition": [
+                    k[1].replace("raw", "rectified raw").replace(
+                        "bandlimited", "rectified bandlimited"
+                    )
+                ],
+                "unit": [k[2]],
+                "latex_formula": [
+                    k[3]
+                    .replace(r"v_{\mathrm{raw}}", r"\max(v_{\mathrm{raw}},0)")
+                    .replace(
+                        r"v_{\mathrm{band}}",
+                        r"\max(v_{\mathrm{band}},0)",
+                    )
+                ],
+                "expected_range": [self._expected_range_note(k[0])],
+                "range_basis": [
+                    "Mathematical sanity range for rectified raw-vs-rectified "
+                    "bandlimited agreement; not a clinical normal range."
+                ],
+                "metric_type": ["raw_vs_bandlimited_qc_rectified"],
+                "qc_waveform_comparison": [
+                    "Compares finite raw and bandlimited samples after clipping "
+                    "negative values to zero; NaNs are excluded from paired comparisons."
+                ],
+            }
+        return meta
+
     def _metric_meta(self) -> dict:
         meta = {}
+        output_names = self._audit_metric_names()
         for k in self._scalar_metric_keys():
             meta[k[0]] = {
+                "output_name": [output_names.get(k[0], k[0])],
+                "source_metric_id": [k[0]],
                 "definition": [k[1]],
                 "unit": [k[2]],
                 "latex_formula": [k[4]],
+                "expected_range": [self._expected_range_note(k[0])],
+                "range_basis": [
+                    "Mathematical sanity range after rectifying finite velocities to >= 0; "
+                    "not a clinical normal range."
+                ],
                 "metric_type": ["absolute_gain_sensitive"],
             }
         for k in self._array_metric_keys():
             meta[k[0]] = {
+                "output_name": [output_names.get(k[0], k[0])],
+                "source_metric_id": [k[0]],
                 "definition": [k[1]],
                 "unit": [k[2]],
                 "latex_formula": [k[4]],
+                "expected_range": [self._expected_range_note(k[0])],
+                "range_basis": [
+                    "Mathematical sanity range after rectifying finite velocities to >= 0; "
+                    "not a clinical normal range."
+                ],
                 "metric_type": ["absolute_gain_sensitive"],
                 "array_axis": [k[5]],
             }
         for k in self._qc_metric_keys():
             meta[k[0]] = {
-                "definition": [k[1]],
+                "output_name": [output_names.get(k[0], k[0])],
+                "source_metric_id": [k[0]],
+                "definition": [f"unrectified {k[1]}"],
                 "unit": [k[2]],
                 "latex_formula": [k[3]],
-                "metric_type": ["raw_vs_bandlimited_qc"],
+                "expected_range": [self._expected_range_note(k[0])],
+                "range_basis": [
+                    "Mathematical sanity range for unrectified raw-vs-bandlimited "
+                    "agreement; not a clinical normal range."
+                ],
+                "metric_type": ["raw_vs_bandlimited_qc_unrectified"],
+                "qc_waveform_comparison": [
+                    "Compares original finite raw and bandlimited samples directly; "
+                    "negative values are preserved and NaNs are excluded from paired "
+                    "comparisons."
+                ],
             }
         return meta
 
@@ -708,15 +996,21 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
         path_prefix: str,
         d: dict,
         attrs_common: dict | None = None,
+        meta_overrides: dict | None = None,
     ) -> None:
         meta = self._metric_meta()
         attrs_common = attrs_common or {}
+        meta_overrides = meta_overrides or {}
 
         for key, arr in d.items():
             attrs = {}
             attrs.update(meta.get(key, {}))
+            attrs.update(meta_overrides.get(key, {}))
             attrs.update(attrs_common)
-            metrics[f"{path_prefix}/{key}"] = with_attrs(arr, attrs)
+            output_name = attrs.get("output_name", [key])
+            if isinstance(output_name, (list, tuple, np.ndarray)):
+                output_name = output_name[0]
+            metrics[f"{path_prefix}/{output_name}"] = with_attrs(arr, attrs)
 
     def _pack_params(self, metrics: dict, vessel_prefix: str, scope: str) -> None:
         metrics[f"{vessel_prefix}/{scope}/params/eps"] = np.asarray(self.eps, dtype=float)
@@ -815,7 +1109,7 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
         )
 
         qc_seg, qc_br, qc_gl, _, _, qc_note = self._compute_qc_block_segment(
-            v_raw_seg, v_band_seg, T
+            v_raw_seg, v_band_seg, T, rectify=False
         )
         self._pack_dict(
             metrics,
@@ -839,6 +1133,37 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
             {"definition_scope": ["median over all branch-radius segment values per beat"]},
         )
 
+        rectified_qc_meta = self._rectified_qc_meta()
+        qc_seg, qc_br, qc_gl, _, _, qc_note = self._compute_qc_block_segment(
+            v_raw_seg, v_band_seg, T, rectify=True
+        )
+        self._pack_dict(
+            metrics,
+            f"{vessel_prefix}/by_segment/rectified_raw_vs_rectified_bandlimited_segment",
+            qc_seg,
+            {
+                "definition_scope": [
+                    "per-segment rectified raw-vs-rectified bandlimited QC metrics"
+                ],
+                "segment_indexing": [qc_note],
+            },
+            meta_overrides=rectified_qc_meta,
+        )
+        self._pack_dict(
+            metrics,
+            f"{vessel_prefix}/by_segment/rectified_raw_vs_rectified_bandlimited_branch",
+            qc_br,
+            {"definition_scope": ["median over radii per branch"]},
+            meta_overrides=rectified_qc_meta,
+        )
+        self._pack_dict(
+            metrics,
+            f"{vessel_prefix}/by_segment/rectified_raw_vs_rectified_bandlimited_global",
+            qc_gl,
+            {"definition_scope": ["median over all branch-radius segment values per beat"]},
+            meta_overrides=rectified_qc_meta,
+        )
+
         self._pack_params(metrics, vessel_prefix, "by_segment")
 
     def _pack_global_outputs(
@@ -851,7 +1176,10 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
     ) -> None:
         out_raw = self._compute_block_global(v_raw_gl, T)
         out_band = self._compute_block_global(v_band_gl, T)
-        out_qc = self._compute_qc_block_global(v_raw_gl, v_band_gl, T)
+        out_qc = self._compute_qc_block_global(v_raw_gl, v_band_gl, T, rectify=False)
+        out_qc_rectified = self._compute_qc_block_global(
+            v_raw_gl, v_band_gl, T, rectify=True
+        )
 
         self._pack_dict(
             metrics,
@@ -873,6 +1201,17 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
             f"{vessel_prefix}/global/raw_vs_bandlimited",
             out_qc,
             {"definition_scope": ["global raw-vs-bandlimited QC metrics"]},
+        )
+        self._pack_dict(
+            metrics,
+            f"{vessel_prefix}/global/rectified_raw_vs_rectified_bandlimited",
+            out_qc_rectified,
+            {
+                "definition_scope": [
+                    "global rectified raw-vs-rectified bandlimited QC metrics"
+                ]
+            },
+            meta_overrides=self._rectified_qc_meta(),
         )
 
         self._pack_params(metrics, vessel_prefix, "global")
@@ -938,32 +1277,57 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
             # Absolute-time event metrics
             ["t_vmax", "time of maximum v(t)", "seconds", None, r"$t_{v_{\max}}$"],
             ["t_vmin", "time of minimum v(t)", "seconds", None, r"$t_{v_{\min}}$"],
-            ["t_upstroke_max", "time of maximum dv/dt", "seconds", None, r"$t_{\max(dv/dt)}$"],
-            ["t_downstroke_max", "time of minimum dv/dt", "seconds", None, r"$t_{\min(dv/dt)}$"],
+            ["t_upstroke_max", "time of maximum acceleration dv/dt", "seconds", None, r"$t_{\max(dv/dt)}$"],
+            ["t_downstroke_max", "time of maximum deceleration (minimum dv/dt)", "seconds", None, r"$t_{\min(dv/dt)}$"],
             ["peak_to_trough_time", "circular forward time from peak to trough", "seconds", None, r"$(t_{\min}-t_{\max})\bmod T$"],
             ["beat_period", "beat period T", "seconds", None, r"$T$"],
 
             # Absolute derivative / kinetic metrics
-            ["dvdt_max", "max_t dv/dt", "velocity/s", None, r"$\max_t\,dv/dt$"],
-            ["dvdt_min", "min_t dv/dt", "velocity/s", None, r"$\min_t\,dv/dt$"],
-            ["dvdt_fall_abs_max", "|min_t dv/dt|", "velocity/s", None, r"$|\min_t\,dv/dt|$"],
-            ["dvdt_rms", "RMS of dv/dt", "velocity/s", None, r"$\sqrt{T^{-1}\int_0^T(dv/dt)^2\,dt}$"],
-            ["dvdt_abs_mean", "mean absolute dv/dt", "velocity/s", None, r"$T^{-1}\int_0^T|dv/dt|\,dt$"],
-            ["dvdt_std", "standard deviation of dv/dt", "velocity/s", None, r"$\mathrm{std}_t(dv/dt)$"],
-            ["dvdt_energy", "int_0^T (dv/dt)^2 dt", "velocity^2/s", None, r"$\int_0^T(dv/dt)^2\,dt$"],
-            ["total_variation", "int_0^T |dv/dt| dt", "velocity", None, r"$\int_0^T|dv/dt|\,dt$"],
-            ["positive_variation", "int_0^T max(dv/dt,0) dt", "velocity", None, r"$\int_0^T\max(dv/dt,0)\,dt$"],
-            ["negative_variation", "int_0^T max(-dv/dt,0) dt", "velocity", None, r"$\int_0^T\max(-dv/dt,0)\,dt$"],
+            ["dvdt_max", "maximum acceleration dv/dt", "velocity/s", None, r"$\max_t\,dv/dt$"],
+            ["dvdt_min", "minimum acceleration dv/dt", "velocity/s", None, r"$\min_t\,dv/dt$"],
+            ["dvdt_fall_abs_max", "maximum deceleration magnitude |min_t dv/dt|", "velocity/s", None, r"$|\min_t\,dv/dt|$"],
+            ["dvdt_rms", "RMS acceleration from dv/dt", "velocity/s", None, r"$\sqrt{T^{-1}\int_0^T(dv/dt)^2\,dt}$"],
+            ["dvdt_abs_mean", "mean absolute acceleration |dv/dt|", "velocity/s", None, r"$T^{-1}\int_0^T|dv/dt|\,dt$"],
+            ["dvdt_std", "standard deviation of acceleration dv/dt", "velocity/s", None, r"$\mathrm{std}_t(dv/dt)$"],
+            ["dvdt_energy", "integral of squared acceleration", "velocity^2/s", None, r"$\int_0^T(dv/dt)^2\,dt$"],
+            ["total_variation", "total velocity change accumulated from |dv/dt|", "velocity", None, r"$\int_0^T|dv/dt|\,dt$"],
+            ["positive_variation", "velocity gain accumulated from positive acceleration", "velocity", None, r"$\int_0^T\max(dv/dt,0)\,dt$"],
+            ["negative_variation", "velocity drop accumulated from deceleration magnitude", "velocity", None, r"$\int_0^T\max(-dv/dt,0)\,dt$"],
 
             # Absolute harmonic-amplitude scalar metrics
             ["dc_level", "DC Fourier coefficient V0", "velocity", None, r"$V_0$"],
-            ["fundamental_amp", "2*abs(V1)", "velocity", None, r"$2|V_1|$"],
-            ["second_harmonic_amp", "2*abs(V2)", "velocity", None, r"$2|V_2|$"],
-            ["third_harmonic_amp", "2*abs(V3)", "velocity", None, r"$2|V_3|$"],
+            [
+                "fundamental_amp",
+                "one-sided amplitude of V1",
+                "velocity",
+                None,
+                r"$a_1$",
+            ],
+            [
+                "second_harmonic_amp",
+                "one-sided amplitude of V2",
+                "velocity",
+                None,
+                r"$a_2$",
+            ],
+            [
+                "third_harmonic_amp",
+                "one-sided amplitude of V3",
+                "velocity",
+                None,
+                r"$a_3$",
+            ],
             ["pulsatile_harmonic_power", "sum_{h=1}^H |Vh|^2", "velocity^2", None, r"$\sum_{h=1}^H |V_h|^2$"],
             ["higher_harmonic_power", "sum_{h=2}^H |Vh|^2", "velocity^2", None, r"$\sum_{h=2}^H |V_h|^2$"],
             ["low_harmonic_power", "sum_{h=1}^{H_LOW_MAX} |Vh|^2", "velocity^2", None, r"$\sum_{h=1}^{H_{\mathrm{low}}}|V_h|^2$"],
-            ["bandlimited_ac_rms_from_harmonics", "sqrt(2*sum_{h=1}^H |Vh|^2)", "velocity", None, r"$\sqrt{2\sum_{h=1}^H |V_h|^2}$"],
+            [
+                "bandlimited_ac_rms_from_harmonics",
+                "sqrt(sum_{h=1}^H c_h |Vh|^2), "
+                "with c_h=2 except c_h=1 for Nyquist",
+                "velocity",
+                None,
+                r"$\sqrt{\sum_{h=1}^H c_h|V_h|^2}$",
+            ],
 
             # Absolute signal-energy metrics
             ["signal_energy", "int_0^T v(t)^2 dt", "velocity^2*s", None, r"$\int_0^T v(t)^2\,dt$"],
@@ -986,10 +1350,10 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
             ],
             [
                 "harmonic_amp",
-                "2*abs(Vh) for h=1..H_MAX",
+                "one-sided amplitude for h=1..H_MAX; Nyquist is not doubled",
                 "velocity",
                 self.H_MAX,
-                r"$2|V_h|,\ h=1,\ldots,H_{\max}$",
+                r"$a_h,\ h=1,\ldots,H_{\max}$",
                 "harmonic index h=1..H_MAX stored at index h-1",
             ],
             [
