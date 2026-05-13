@@ -1864,6 +1864,31 @@ def export_group_tables(
             )
         )
 
+        df = build_auc_separability_ranking_table(
+            control_results,
+            group_results,
+            higher_metrics=SPATIAL_VARIABILITY_COLUMNS,
+            control_name=control_group,
+            group_name=group_name,
+            metrics=metrics,
+            digits=digits,
+        )
+        generated.extend(
+            save_table(
+                df,
+                spatial_cmp_dir
+                / f"{pair}_spatial_auc_separability_ranking_all_metrics.csv",
+                spatial_cmp_dir
+                / f"{pair}_spatial_auc_separability_ranking_all_metrics.tex",
+                caption=(
+                    f"Spatial variability metrics between {latex_escape_text(control_group)} "
+                    f"and {latex_escape_text(group_name)}, ranked by AUC separability"
+                ),
+                label=f"tab:{pair}_spatial_auc_separability_ranking",
+                digits=digits,
+            )
+        )
+
         # ------------------------------
         # Temporal comparison tables
         # ------------------------------
@@ -2001,6 +2026,31 @@ def export_group_tables(
                     f"{group_name} for $N_t/T$ and $N_{{\mathrm{{eff}}}}/T$"
                 ),
                 label=f"tab:{pair}_temporal_group_separation_metrics",
+                digits=digits,
+            )
+        )
+
+        df = build_auc_separability_ranking_table(
+            control_results,
+            group_results,
+            higher_metrics=TEMPORAL_VARIABILITY_COLUMNS,
+            control_name=control_group,
+            group_name=group_name,
+            metrics=metrics,
+            digits=digits,
+        )
+        generated.extend(
+            save_table(
+                df,
+                temporal_cmp_dir
+                / f"{pair}_temporal_auc_separability_ranking_all_metrics.csv",
+                temporal_cmp_dir
+                / f"{pair}_temporal_auc_separability_ranking_all_metrics.tex",
+                caption=(
+                    f"Temporal variability metrics between {latex_escape_text(control_group)} "
+                    f"and {latex_escape_text(group_name)}, ranked by AUC separability"
+                ),
+                label=f"tab:{pair}_temporal_auc_separability_ranking",
                 digits=digits,
             )
         )
