@@ -17,10 +17,10 @@ num_interp_points_t = 128  # Number of temporal points for interpolation
 num_interp_points_x = 16  # Number of spatial points for interpolation
 model_points_x = 32
 fwhm = 10 * 1e-6  # Full width at half maximum for Gaussian PSF in m
-dx = R0 / model_points_x  # Spatial resolution of Womersley model in m
-Cn = 2000.0 - 20j
-Dn = 200.0 - 5j
-Nu = 35 * 1e-6  # Viscosity in m^2/s
+dx = 2 * R0 / model_points_x  # Spatial resolution of Womersley model in m
+Cn = -10000.0 - 500j
+Dn = 20.0 + 5j
+Nu = 3.5 * 1e-6  # Viscosity in m^2/s
 
 
 @registerPipeline(name="WomersleyModeling")
@@ -50,6 +50,7 @@ class WomersleyModeling(ProcessPipeline):
                 f"Expected a dataset at {self.b_period_path}, but found {type(obj)}"
             )
         b_period = np.mean(obj[:])
+        print(f"b_period: {b_period}")
 
         dataset_x, v_profile_fft, v_profile_meas, v_profile_meas_dc = (
             extract_v_profile_meas(
