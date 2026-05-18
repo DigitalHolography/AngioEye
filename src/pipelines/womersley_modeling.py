@@ -12,14 +12,24 @@ from .dev_womersley_modeling.v_pulse_meas_extraction import (
     extract_v_pulse_meas,
 )
 
-R0 = 40 * 1e-6  # Vessel radius in m
+R0 = 100 * 1e-6  # Vessel radius in m
 num_interp_points_t = 128  # Number of temporal points for interpolation
 num_interp_points_x = 16  # Number of spatial points for interpolation
 model_points_x = 32
 fwhm = 10 * 1e-6  # Full width at half maximum for Gaussian PSF in m
 dx = 2 * R0 / model_points_x  # Spatial resolution of Womersley model in m
-Cn = -10000.0 - 500j
-Dn = 20.0 + 5j
+Cn = np.zeros(num_interp_points_t // 2 + 1, dtype=complex)
+Dn = np.zeros(num_interp_points_t // 2 + 1, dtype=complex)
+Cn[0] = -8000.0 - 500j
+Cn[1] = -4000.0 - 250j
+Cn[2] = -1000.0 - 60j
+Cn[3] = -200.0 - 12j
+
+Dn[0] = 20.0 + 5j
+Dn[1] = 10.0 + 2.5j
+Dn[2] = 2.0 + 0.5j
+Dn[3] = 1.0 + 0.255j
+
 Nu = 3.5 * 1e-6  # Viscosity in m^2/s
 
 
@@ -68,7 +78,7 @@ class WomersleyModeling(ProcessPipeline):
 
         harmonics = np.arange(0, num_interp_points_t // 2 + 1)
 
-        v_model, v_model_freq = generate_harmonic_flow_profile(
+        v_model = generate_harmonic_flow_profile(
             Cn,
             Dn,
             harmonics,
@@ -91,6 +101,5 @@ class WomersleyModeling(ProcessPipeline):
         metrics["v_pulse_meas"] = np.asarray(v_pulse_meas)
         metrics["v_pulse_meas_dc"] = np.asarray(v_pulse_meas_dc)
         metrics["v_model"] = np.asarray(v_model)
-        metrics["v_model_freq"] = np.asarray(v_model_freq)
 
         return ProcessResult(metrics=metrics)

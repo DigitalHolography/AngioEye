@@ -52,29 +52,24 @@ def generate_harmonic_flow_profile(
     Cn, Dn, harmonics, b_period, R0, Nu, x_coord, r_coord, fwhm, dx, v_pulse_n_dc
 ):
     v_model_freq = np.zeros((len(harmonics), len(x_coord)), dtype=complex)
-
     psf_kernel = psf_gaussian(fwhm, dx)
-    n = 1
-
-    lambda_n, j0_val, j1_val, _ = get_womersley_physics(n, b_period, R0, Nu)
     x_rad = r_coord.copy() / R0
+    for n in harmonics:
+        lambda_n, j0_val, j1_val, _ = get_womersley_physics(n, b_period, R0, Nu)
+        bn = 1.0 - (jv(0, lambda_n * x_rad) / j0_val)
+        psin = (-lambda_n * j1_val) / (j0_val**2) * jv(0, lambda_n * x_rad)
+        print(f"bn: {bn}")
+        print(f"psin: {psin}")
 
-    bn = 1.0 - (jv(0, lambda_n * x_rad) / j0_val)
-    psin = (-lambda_n * j1_val) / (j0_val**2) * jv(0, lambda_n * x_rad)
-    print(f"bn: {bn}")
-    print(f"psin: {psin}")
+        u_n = (Cn[n] * bn) + (Dn[n] * psin)
+        print(f"u_n: {u_n}")
 
-    u_n = (Cn * bn) + (Dn * psin)
-    print(f"u_n: {u_n}")
-
-    v_prof = apply_abel_projection(u_n, r_coord, x_coord, R0)
-    v_blurred = convolve(v_prof, psf_kernel, mode="same")
-    v_downsampled = v_blurred[::2]
-    print(f"v_downsampled: {v_downsampled}")
-    v_model_freq[0, :] = v_pulse_n_dc
-    print(f"v_pulse_n_dc: {v_pulse_n_dc}")
-    v_model_freq[n, :] = v_downsampled
+        v_prof = apply_abel_projection(u_n, r_coord, x_coord, R0)
+        v_blurred = convolve(v_prof, psf_kernel, mode="same")
+        v_downsampled = v_blurred[::2]
+        print(f"v_downsampled: {v_downsampled}")
+        v_model_freq[n, :] = v_downsampled
 
     v_model = np.fft.irfft(v_model_freq, axis=0)
 
-    return v_model, v_model_freq
+    return v_model
