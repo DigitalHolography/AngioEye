@@ -21,8 +21,7 @@ def apply_abel_projection(radial_profile, r_coord, x_coord, R0):
         x_abs = float(xi)
         for j in range(len(r_gird) - 1):
             K_half[i, j] = _abel_cell_integral(x_abs, r_gird[j], r_gird[j + 1])
-    K = np.concatenate([np.flip(K_half), K_half])
-    print(f"K: {K}")
+    K = np.concatenate([np.flip(K_half, axis=0), K_half], axis=0)
     v_model = K @ radial_profile
     return v_model
 
@@ -43,13 +42,18 @@ def get_womersley_physics(n, b_period, R0, Nu):
     lambda_n = np.exp(1j * 3.0 * np.pi / 4.0) * alpha_n
     j0_val = jv(0, lambda_n)
     j1_val = jv(1, lambda_n)
-    kn = 1.0 - (2.0 * j1_val) / (lambda_n * j0_val)
-    print(f"alpha_n: {alpha_n}")
+    if n == 0:
+        kn = 0.0
+    else:
+        kn = 1.0 - (2.0 * j1_val) / (lambda_n * j0_val)
+
+    if n < 4:
+        print(f"alpha_n: {alpha_n}")
     return lambda_n, j0_val, j1_val, kn
 
 
 def generate_harmonic_flow_profile(
-    Cn, Dn, harmonics, b_period, R0, Nu, x_coord, r_coord, fwhm, dx, v_pulse_n_dc
+    Cn, Dn, harmonics, b_period, R0, Nu, x_coord, r_coord, fwhm, dx
 ):
     v_model_freq = np.zeros((len(harmonics), len(x_coord)), dtype=complex)
     psf_kernel = psf_gaussian(fwhm, dx)
@@ -58,17 +62,20 @@ def generate_harmonic_flow_profile(
         lambda_n, j0_val, j1_val, _ = get_womersley_physics(n, b_period, R0, Nu)
         bn = 1.0 - (jv(0, lambda_n * x_rad) / j0_val)
         psin = (-lambda_n * j1_val) / (j0_val**2) * jv(0, lambda_n * x_rad)
-        print(f"bn: {bn}")
-        print(f"psin: {psin}")
 
         u_n = (Cn[n] * bn) + (Dn[n] * psin)
-        print(f"u_n: {u_n}")
 
         v_prof = apply_abel_projection(u_n, r_coord, x_coord, R0)
         v_blurred = convolve(v_prof, psf_kernel, mode="same")
-        v_downsampled = v_blurred[::2]
-        print(f"v_downsampled: {v_downsampled}")
+        v_downsampled = (v_blurred[::2] + v_blurred[1::2]) / 2.0
         v_model_freq[n, :] = v_downsampled
+
+        if n < 4:
+            print(f"n: {n}")
+            print(f"bn: {bn}")
+            print(f"psin: {psin}")
+            print(f"u_n: {u_n}")
+            print(f"v_downsampled: {v_downsampled}")
 
     v_model = np.fft.irfft(v_model_freq, axis=0)
 

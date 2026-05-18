@@ -20,15 +20,15 @@ fwhm = 10 * 1e-6  # Full width at half maximum for Gaussian PSF in m
 dx = 2 * R0 / model_points_x  # Spatial resolution of Womersley model in m
 Cn = np.zeros(num_interp_points_t // 2 + 1, dtype=complex)
 Dn = np.zeros(num_interp_points_t // 2 + 1, dtype=complex)
-Cn[0] = -8000.0 - 500j
-Cn[1] = -4000.0 - 250j
-Cn[2] = -1000.0 - 60j
-Cn[3] = -200.0 - 12j
+Cn[0] = -800.0 - 500j
+Cn[1] = -400.0 - 250j
+Cn[2] = -100.0 - 60j
+Cn[3] = -20.0 - 12j
 
-Dn[0] = 20.0 + 5j
-Dn[1] = 10.0 + 2.5j
-Dn[2] = 2.0 + 0.5j
-Dn[3] = 1.0 + 0.255j
+Dn[0] = 2.0 + 5j
+Dn[1] = 1.0 + 2.5j
+Dn[2] = 0.2 + 0.5j
+Dn[3] = 0.1 + 0.255j
 
 Nu = 3.5 * 1e-6  # Viscosity in m^2/s
 
@@ -89,7 +89,6 @@ class WomersleyModeling(ProcessPipeline):
             r_coord,
             fwhm,
             dx,
-            v_pulse_fft[[0], :, 3, 2],
         )
 
         metrics: dict = {}
