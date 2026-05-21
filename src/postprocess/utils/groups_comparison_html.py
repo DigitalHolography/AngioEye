@@ -255,6 +255,7 @@ def plot_group_statistics(df, metric, vessel, out_path):
             )
 
     ax.set_xticks([x_pos[g] for g in groups])
+    ax.set_xlim(-0.5, len(groups) - 0.5)
     ax.set_xticklabels(groups, fontsize=14)
     ax.tick_params(axis="y", labelsize=13)
     ax.yaxis.set_major_formatter(FormatStrFormatter("%.3g"))
