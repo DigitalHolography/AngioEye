@@ -4,8 +4,8 @@ import json
 import os
 import re
 import sys
-from importlib import metadata as importlib_metadata
 from collections.abc import Iterable, Mapping
+from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any
 
@@ -215,11 +215,17 @@ class AppSettingsStore:
 
     def load_ui_mode(self) -> str:
         mode = self.load().get("ui_mode")
-        return mode if mode in {"minimal", "advanced"} else "minimal"
+        return (
+            mode
+            if mode in {"minimal", "advanced", "sandbox_advanced"}
+            else "minimal"
+        )
 
     def save_ui_mode(self, mode: str) -> None:
         settings = self.load()
-        settings["ui_mode"] = "advanced" if mode == "advanced" else "minimal"
+        settings["ui_mode"] = (
+            mode if mode in {"advanced", "sandbox_advanced"} else "minimal"
+        )
         self.save(settings)
 
     def load_trim_h5source(self) -> bool:
