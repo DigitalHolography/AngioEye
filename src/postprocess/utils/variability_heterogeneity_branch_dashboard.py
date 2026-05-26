@@ -433,6 +433,113 @@ def analyze_zip(zip_path, metrics=INPUT_METRICS, mode=BRANCH_MODE):
 
     return results
 
+def analyze_direct_branch_metrics(
+    zip_path,
+    metrics=INPUT_METRICS,
+    mode=BRANCH_MODE,
+):
+
+    results = defaultdict(
+        lambda: defaultdict(list)
+    )
+
+    for grouped_file in iter_grouped_h5_files_in_zip(
+        zip_path,
+        sort_key=lambda record: (
+            record.group_name,
+            extract_sort_key(record.file_name),
+        ),
+    ):
+
+        for metric_name in metrics:
+
+            arr = extract_branch_metric(
+                grouped_file.file_path,
+                metric_name,
+                mode=mode,
+            )
+
+            if arr is None:
+                continue
+
+            if arr.ndim != 2:
+                continue
+
+            # ==========================================================
+            # SPATIAL FIRST
+            # median over branches
+            # then median over beats
+            # ==========================================================
+
+            beat_values = []
+
+            for beat_idx in range(arr.shape[0]):
+
+                x = arr[beat_idx, :]
+                x = clean_values(x)
+
+                if x.size == 0:
+                    continue
+
+                beat_values.append(
+                    np.nanmedian(x)
+                )
+
+            beat_values = np.asarray(
+                beat_values,
+                dtype=float,
+            )
+
+            if beat_values.size > 0:
+
+                spatial_value = float(
+                    np.nanmedian(beat_values)
+                )
+
+                results[
+                    grouped_file.group_name
+                ][f"{metric_name}_spatial"].append(
+                    spatial_value
+                )
+
+            # ==========================================================
+            # TEMPORAL FIRST
+            # median over beats
+            # then median over branches
+            # ==========================================================
+
+            branch_values = []
+
+            for branch_idx in range(arr.shape[1]):
+
+                x = arr[:, branch_idx]
+                x = clean_values(x)
+
+                if x.size == 0:
+                    continue
+
+                branch_values.append(
+                    np.nanmedian(x)
+                )
+
+            branch_values = np.asarray(
+                branch_values,
+                dtype=float,
+            )
+
+            if branch_values.size > 0:
+
+                temporal_value = float(
+                    np.nanmedian(branch_values)
+                )
+
+                results[
+                    grouped_file.group_name
+                ][f"{metric_name}_temporal"].append(
+                    temporal_value
+                )
+
+    return results
 
 def normalize_group_name(group_name):
     s = str(group_name).strip().lower()
@@ -530,6 +637,119 @@ def build_temporal_group_table(results_for_group, metrics=INPUT_METRICS, digits=
         digits=digits,
     )
 
+def build_direct_metric_pvalue_table(
+    results,
+    control_group,
+    group_name,
+    metrics=INPUT_METRICS,
+    digits=4,
+):
+
+    rows = []
+
+    for metric_name in metrics:
+
+        # ==========================================================
+        # SPATIAL
+        # ==========================================================
+
+        x_spatial = clean_values(
+            results[control_group].get(
+                f"{metric_name}_spatial",
+                [],
+            )
+        )
+
+        y_spatial = clean_values(
+            results[group_name].get(
+                f"{metric_name}_spatial",
+                [],
+            )
+        )
+
+        p_spatial = mann_whitney_pvalue(
+            x_spatial,
+            y_spatial,
+        )
+
+        # ==========================================================
+        # TEMPORAL
+        # ==========================================================
+
+        x_temporal = clean_values(
+            results[control_group].get(
+                f"{metric_name}_temporal",
+                [],
+            )
+        )
+
+        y_temporal = clean_values(
+            results[group_name].get(
+                f"{metric_name}_temporal",
+                [],
+            )
+        )
+
+        p_temporal = mann_whitney_pvalue(
+            x_temporal,
+            y_temporal,
+        )
+
+        rows.append({
+
+            "Metric":
+                metric_label(metric_name),
+
+            # ------------------------------------------------------
+            # spatial
+            # ------------------------------------------------------
+
+            f"Median spatial {control_group}":
+                format_float(
+                    np.nanmedian(x_spatial),
+                    digits=digits,
+                )
+                if len(x_spatial) else "NA",
+
+            f"Median spatial {group_name}":
+                format_float(
+                    np.nanmedian(y_spatial),
+                    digits=digits,
+                )
+                if len(y_spatial) else "NA",
+
+            "Spatial p-value":
+                format_pvalue_latex(
+                    p_spatial,
+                    sig_digits=digits,
+                ),
+
+            # ------------------------------------------------------
+            # temporal
+            # ------------------------------------------------------
+
+            f"Median temporal {control_group}":
+                format_float(
+                    np.nanmedian(x_temporal),
+                    digits=digits,
+                )
+                if len(x_temporal) else "NA",
+
+            f"Median temporal {group_name}":
+                format_float(
+                    np.nanmedian(y_temporal),
+                    digits=digits,
+                )
+                if len(y_temporal) else "NA",
+
+            "Temporal p-value":
+                format_pvalue_latex(
+                    p_temporal,
+                    sig_digits=digits,
+                ),
+        })
+
+    return pd.DataFrame(rows)
 
 # -----------------------------------------------------------------------------
 # Comparison helpers
@@ -1609,6 +1829,56 @@ def export_group_tables(
                     f"{group_name}"
                 ),
                 label=f"tab:{pair}_temporal_group_separation_metrics",
+                digits=digits,
+            )
+        )
+
+    direct_metrics_dir = out_dir / "direct_metrics"
+    direct_metrics_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+    direct_results = analyze_direct_branch_metrics(
+        str(zip_path),
+        metrics=INPUT_METRICS,
+        mode="bandlimited_branch",
+    )
+
+    for group_name in sorted(direct_results.keys()):
+
+        if group_name == control_group:
+            continue
+
+        safe_group = safe_name(group_name)
+
+        pair = f"{safe_group}_vs_{safe_control}"
+
+        df = build_direct_metric_pvalue_table(
+            results=direct_results,
+            control_group=control_group,
+            group_name=group_name,
+            metrics=INPUT_METRICS,
+            digits=digits,
+        )
+
+        generated.extend(
+            save_table(
+                df,
+
+                direct_metrics_dir
+                / f"{pair}_direct_metric_pvalues.csv",
+
+                direct_metrics_dir
+                / f"{pair}_direct_metric_pvalues.tex",
+
+                caption=(
+                    f"Direct spatial and temporal biomarker comparisons "
+                    f"between {latex_escape_text(control_group)} "
+                    f"and {latex_escape_text(group_name)}"
+                ),
+
+                label=f"tab:{pair}_direct_metric_pvalues",
+
                 digits=digits,
             )
         )
