@@ -23,7 +23,7 @@ from .core.base import (
     required_deps=["matplotlib>=3.8", "pandas>=2.1", "plotly>=5.18"],
     required_pipelines=["waveform_shape_metrics"],
 )
-class GraphicsDashboardPostprocess(BatchPostprocess):
+class GroupsComparisonHTMLPostprocess(BatchPostprocess):
     def run(self, context: PostprocessContext) -> PostprocessResult:
         if not context.processed_files:
             raise ValueError(

@@ -21,7 +21,7 @@ from angioeye_io.archive_io import (
     reset_output_dir,
     replace_folder_in_zip,
 )
-from .grouped_batch import (
+from ..core.grouped_batch import (
     build_group_order,
     build_grouped_h5_index,
     find_control_group_name,
@@ -1611,7 +1611,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
 
 
 def export_selected_metric_pngs_bandlimited(
-    all_results, zip_path, out_dir, format="png", show_right_panel=True
+    all_results, zip_path, out_dir, format="png", show_group_illustrations=True
 ):
     os.makedirs(out_dir, exist_ok=True)
 
@@ -1646,12 +1646,12 @@ def export_selected_metric_pngs_bandlimited(
                 grp_std = grp.std()
                 rep_file = select_representative_file_per_group(df, value_col="mean")
 
-                if show_right_panel:
+                if show_group_illustrations:
                     fig = plt.figure(figsize=(15, 6.2), dpi=200)
                 else:
                     fig = plt.figure(figsize=(8, 6.2), dpi=200)
 
-                if show_right_panel:
+                if show_group_illustrations:
                     outer = gridspec.GridSpec(
                         1,
                         2,
@@ -1670,7 +1670,7 @@ def export_selected_metric_pngs_bandlimited(
                 ax_header.axis("off")
 
                 # ===== Gauche: scatter =====
-                if show_right_panel:
+                if show_group_illustrations:
                     ax_top = fig.add_subplot(outer[0, 0])
                 else:
                     ax_top = fig.add_subplot(outer[0])
@@ -1697,6 +1697,7 @@ def export_selected_metric_pngs_bandlimited(
                     )
 
                     if g in grp_mean.index:
+                        
                         ax_top.errorbar(
                             [x_pos[g]],
                             [grp_mean.loc[g]],
@@ -1709,7 +1710,8 @@ def export_selected_metric_pngs_bandlimited(
                             markerfacecolor="none",
                             markeredgecolor="red",
                             markeredgewidth=3,
-                        )
+                            )
+                        
 
                 ax_top.set_title(
                     f"{LATEX_FORMULAS.get(metric, metric)} (bandlimited waveform, {vessel})",
@@ -1719,11 +1721,12 @@ def export_selected_metric_pngs_bandlimited(
                 ax_top.set_xticks([x_pos[g] for g in groups])
                 ax_top.set_xticklabels(groups, rotation=0)
                 ax_top.tick_params(axis="both", labelsize=16)
+                ax_top.set_xlim(-0.5, len(groups) - 0.5)
                 ax_top.yaxis.set_major_formatter(FormatStrFormatter("%.3g"))
                 ax_top.grid(True, axis="y")
 
                 # ===== Droite: illustrations =====
-                if show_right_panel:
+                if show_group_illustrations:
                     right = gridspec.GridSpecFromSubplotSpec(
                         2,
                         2,
@@ -2359,7 +2362,7 @@ def save_dashboard(all_results, zip_path, single_group):
         zip_path,
         png_dir,
         "png",
-        show_right_panel=False,
+        show_group_illustrations=False,
     )
 
     replace_folder_in_zip(zip_path, png_dir, arc_folder="export_png")
@@ -2372,7 +2375,7 @@ def save_dashboard(all_results, zip_path, single_group):
                 zip_path,
                 eps_dir,
                 "eps",
-                show_right_panel=False,
+                show_group_illustrations=False,
             ),
             eps_dir,
         )
