@@ -339,8 +339,8 @@ def compute_file_higher_metrics_from_segment_array(arr, eps=EPS):
     beat_mad = []
     beat_cv_seg = []
 
-    for b in range(arr.shape[0]):
-        x = arr[b, :, :]
+    for beat_idx in range(arr.shape[0]):
+        x = arr[beat_idx, :, :]
         x = finite_1d(x)
 
         beat_median.append(median_1d(x))
@@ -360,9 +360,9 @@ def compute_file_higher_metrics_from_segment_array(arr, eps=EPS):
     seg_mad_beat = []
     seg_cv_beat = []
 
-    for j in range(arr.shape[1]):
-        for r in range(arr.shape[2]):
-            x = arr[:, j, r]
+    for branch_idx in range(arr.shape[1]):
+        for radius_idx in range(arr.shape[2]):
+            x = arr[:, branch_idx, radius_idx]
             x = finite_1d(x)
 
             seg_std_beat.append(std_1d(x))
