@@ -112,34 +112,35 @@ SELECTED_METRICS_PNG = {
     "sigma_t_over_T",
     "W50_over_T",
     "W80_over_T",
-    "E_low_over_E_total",
+    #"E_low_over_E_total",
+    "E_LF_over_E_HF",
     "t_max_over_T",
     "t_min_over_T",
-    "Delta_t_over_T",
-    "slope_rise_normalized",
-    "slope_fall_normalized",
-    "t_up_over_T",
-    "t_down_over_T",
-    "crest_factor",
+    #"Delta_t_over_T",
+    "S_rise",
+    "S_fall",
+    "t_rise_over_T",
+    "t_fall_over_T",
+    "CF",
     "Delta_DTI",
     "gamma_t",
     "N_eff_over_T",
     "N_t_over_T",
-    "s_t",
-    "w_t",
-    "s_d",
-    "w_d",
-    "v_end_over_v_mean",
+    "Q_t_skew",
+    "Q_t_width",
+    "Q_d_skew",
+    "Q_d_width",
+    "v_end_over_vbar",
     "E_slope",
-    "E_curv",
+    #"E_curv",
     "t50_over_T",
-    "t_phi_over_T",
-    "t_phi_n_over_T",
-    "rho_h",
-    "w_h",
-    "N_h_over_H_minus_1",
-    "D_phi",
-    "s_phi_over_T",
+    #"t_phi_over_T",
+    #"t_phi_n_over_T",
+    #"rho_h",
+    #"w_h",
+    #"N_h_over_H_minus_1",
+    #"D_phi",
+    #"s_phi_over_T",
     "eta_h",
 }
 METRIC_ALIASES = {
@@ -150,7 +151,7 @@ LATEX_FORMULAS = {
     "RI": r"$\rm RI$",
     "rho_h_90": r"$\rho_{h,90}$",
     "rho_h_95": r"$\rho_{h,95}$",
-    "crest_factor": r"$\rm CF$",
+    "CF": r"$\rm CF$",
     "t50_over_T": r"$t_{50}/T$",
     "R_VTI": r"$R_{VTI}$",
     "spectral_entropy": r"$H_{spec}$",
@@ -162,25 +163,26 @@ LATEX_FORMULAS = {
     "t_max_over_T": r"$t_{\mathrm{max}}/T$",
     "t_min_over_T": r"$t_{\mathrm{min}}/T$",
     "Delta_t_over_T": r"$\Delta_{\mathrm{t}}/T$",
-    "t_up_over_T": r"$t_{\mathrm{up}}/T$",
-    "t_down_over_T": r"$t_{\mathrm{down}}/T$",
+    "t_rise_over_T": r"$t_{\mathrm{rise}}/T$",
+    "t_fall_over_T": r"$t_{\mathrm{fall}}/T$",
     "S_decay": r"$S_{\mathrm{decay}}$",
     "Delta_DTI": r"$\Delta_{\mathrm{DTI}}$",
     "E_high_over_E_total": r"$E_{\mathrm{high}}/E_{\mathrm{total}}$",
     "E_low_over_E_total": r"$E_{\mathrm{low}}/E_{\mathrm{total}}$",
+    "E_LF_over_E_HF": r"$E_{\mathrm{LF}}/E_{\mathrm{HF}}$",
     "R_SD": r"$R_{SD}$",
-    "slope_fall_normalized": r"$S_{\mathrm{fall}}$",
-    "slope_rise_normalized": r"$S_{\mathrm{rise}}$",
+    "S_fall": r"$S_{\mathrm{fall}}$",
+    "S_rise": r"$S_{\mathrm{rise}}$",
     "gamma_t": r"$\gamma_t$",
     "mu_h": r"$\mu_h$",
     "sigma_h": r"$\sigma_h$",
     "N_eff_over_T": r"$N_{\mathrm{eff}}/T$",
     "E_recon_H_MAX": r"$E_{\mathrm{recon},H_{\max}}$",
-    "s_t": r"$s_{\mathrm{t}}$",
-    "w_t": r"$w_{\mathrm{t}}$",
-    "s_d": r"$s_{\mathrm{d}}$",
-    "w_d": r"$w_{\mathrm{d}}$",
-    "v_end_over_v_mean": r"$R_{EM}$",
+    "Q_t_skew": r"$Q_{\mathrm{t,skew}}$",
+    "Q_t_width": r"$Q_{\mathrm{t,width}}$",
+    "Q_d_skew": r"$Q_{\mathrm{d,skew}}$",
+    "Q_d_width": r"$Q_{\mathrm{d,width}}$",
+    "v_end_over_vbar": r"$v_{\mathrm{end}}/\bar{\mathrm{v}}$",
     "E_slope": r"$E_{\mathrm{slope}}$",
     "phase_locking_residual": r"$E_{\phi}$",
     "W50_over_T": r"$W_{50}/T$",
@@ -557,11 +559,11 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
         ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v(t) \: (mm/s)$", fontsize=14, labelpad=12)
     elif metric == "rho_h":
-        A2 = np.asarray(support.get("A2_cumsum", []), dtype=float)
-        m_vals = np.asarray(support.get("A2_m", []), dtype=float)
+        A2 = np.asarray(support.get("diagnostics/A2_cumsum", []), dtype=float)
+        m_vals = np.asarray(support.get("diagnostics/A2_m", []), dtype=float)
 
-        A2i = np.asarray(support.get("A2_cumsum_interp", []), dtype=float)
-        mi = np.asarray(support.get("A2_m_interp", []), dtype=float)
+        A2i = np.asarray(support.get("diagnostics/A2_cumsum_interp", []), dtype=float)
+        mi = np.asarray(support.get("diagnostics/A2_m_interp", []), dtype=float)
 
         m80 = float(support.get("m_80", np.nan))
         rho_h = float(support.get("rho_h", np.nan))
@@ -609,8 +611,8 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
             ]
         )
     elif metric == "w_h":
-        A2i = np.asarray(support.get("A2_cumsum_interp", []), dtype=float)
-        mi = np.asarray(support.get("A2_m_interp", []), dtype=float)
+        A2i = np.asarray(support.get("diagnostics/A2_cumsum_interp", []), dtype=float)
+        mi = np.asarray(support.get("diagnostics/A2_m_interp", []), dtype=float)
         m50 = float(support.get("m_50", np.nan))
         m80 = float(support.get("m_80", np.nan))
         w_h = float(support.get("w_h", np.nan))
@@ -711,7 +713,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
             return
 
         n_vals = np.arange(2, 2 + len(tdphi_n))
-        t_delta = float(support.get("t_phi_over_T", np.nan))
+        t_delta = float(support.get("diagnostics/t_phi_over_T", np.nan))
         if not np.isfinite(t_delta):
             t_delta = float(np.nanmedian(tdphi_n))
 
@@ -921,25 +923,25 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
         ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v(t) \: (mm/s)$", fontsize=14, labelpad=12)
 
-    elif metric == "t_up_over_T":
-        t_up = float(support["t_up_over_T"])
+    elif metric == "t_rise_over_T":
+        t_rise = float(support["t_rise_over_T"])
 
         ax.plot(tau, sig, linewidth=3, color=main_color)
         vline_to_curve(
-            t_up, tau, sig, y0=0.0, color="black", linestyles="--", linewidth=1
+            t_rise, tau, sig, y0=0.0, color="black", linestyles="--", linewidth=1
         )
-        info_box([rf"$t_{{up}}/T = {t_up:.3f}$"])
+        info_box([rf"$t_{{rise}}/T = {t_rise:.3f}$"])
         ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v(t) \: (mm/s)$", fontsize=14, labelpad=12)
 
-    elif metric == "t_down_over_T":
-        t_down = float(support["t_down_over_T"])
+    elif metric == "t_fall_over_T":
+        t_fall = float(support["t_fall_over_T"])
 
         ax.plot(tau, sig, linewidth=3, color=main_color)
         vline_to_curve(
-            t_down, tau, sig, y0=0.0, color="black", linestyles="--", linewidth=1
+            t_fall, tau, sig, y0=0.0, color="black", linestyles="--", linewidth=1
         )
-        info_box([rf"$t_{{down}}/T = {t_down:.3f}$"])
+        info_box([rf"$t_{{fall}}/T = {t_fall:.3f}$"])
         ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v(t) \: (mm/s)$", fontsize=14, labelpad=12)
 
@@ -967,8 +969,8 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
         ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v(t) \: (mm/s)$", fontsize=14, labelpad=12)
 
-    elif metric == "slope_rise_normalized":
-        s_rise = float(support["slope_rise_normalized"])
+    elif metric == "S_rise":
+        s_rise = float(support["S_rise"])
         idx = int(np.nanargmax(dvdt))
 
         ax.plot(tau, sig, linewidth=3, color=main_color)
@@ -979,8 +981,8 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
         ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v(t) \: (mm/s)$", fontsize=14, labelpad=12)
 
-    elif metric == "slope_fall_normalized":
-        s_fall = float(support["slope_fall_normalized"])
+    elif metric == "S_fall":
+        s_fall = float(support["S_fall"])
         idx = int(np.nanargmin(dvdt))
 
         ax.plot(tau, sig, linewidth=3, color=main_color)
@@ -1203,8 +1205,8 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
             loc="lower left", bbox_to_anchor=(0.02, 0.02), frameon=False, fontsize=10
         )
 
-    elif metric == "crest_factor":
-        cf = float(support["crest_factor"])
+    elif metric == "CF":
+        cf = float(support["CF"])
         vmax = float(np.nanmax(vb))
         rms = float(np.sqrt(np.nanmean(vb**2)))
         vb_tau = np.linspace(0.0, 1.0, len(vb), endpoint=False)
@@ -1257,6 +1259,36 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
             rf"$E_{{low}} = {e_low:.3g}$",
             rf"$E_{{total}} = {e_total:.3g}$",
             rf"$E_{{low}}/E_{{total}} = {ratio:.3f}$",
+        ]
+        text = "\n".join([str(x) for x in lines if x is not None and str(x) != ""])
+
+        ax.text(
+            0.5,
+            0.98,
+            text,
+            transform=ax.transAxes,
+            ha="left",
+            va="top",
+            fontsize=12,
+            bbox=dict(facecolor="white", edgecolor="none", pad=1.0),
+            clip_on=True,
+        )
+
+        ax.set_xlabel("Harmonic n (a.u.)", fontsize=14)
+        ax.set_ylabel(r"$|V_n|^2 \: (a.u.)$", fontsize=14, labelpad=12)
+
+    elif metric == "E_LF_over_E_HF":
+        mags2 = harmonic_energies[1:]
+        e_lf_over_e_hf = float(support["E_LF_over_E_HF"])
+        
+        xh = np.arange(1, len(mags2) + 1)
+
+        ax.set_yscale("log")
+        ax.bar(xh[: H_LOW_MAX + 1], mags2[: H_LOW_MAX + 1], color=main_color)
+        ax.bar(xh[H_LOW_MAX:], mags2[H_LOW_MAX:], color="#cccccc")
+        lines = [
+            
+            rf"$E_{{LF}}/E_{{HF}} = {e_lf_over_e_hf:.3f}$",
         ]
         text = "\n".join([str(x) for x in lines if x is not None and str(x) != ""])
 
@@ -1330,11 +1362,11 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
         ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v(t) \: (mm/s)$", fontsize=14, labelpad=12)
 
-    elif metric == "s_t":
+    elif metric == "Q_t_skew":
         t10 = float(support["t10_over_T"])
         t50 = float(support["t50_over_T"])
         t90 = float(support["t90_over_T"])
-        s_t = float(support["s_t"])
+        Q_t_skew = float(support["Q_t_skew"])
 
         ax.plot(tau, C, linewidth=3, color=main_color)
         for tq in [t10, t50, t90]:
@@ -1344,17 +1376,17 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
 
         info_box(
             [
-                rf"$s_{{t}}={s_t:.3f}$",
-                rf"$t_{{10}}={t10:.3f}, t_{{50}}={t50:.3f}, t_{{90}}={t90:.3f}$",
+                rf"$Q_{{t,skew}}={Q_t_skew:.3f}$",
+                rf"$t_{{10}}/T={t10:.3f}, t_{{50}}/T={t50:.3f}, t_{{90}}/T={t90:.3f}$",
             ]
         )
         ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$d(t) \: (a.u.)$", fontsize=14, labelpad=12)
 
-    elif metric == "w_t":
+    elif metric == "Q_t_width":
         t25 = float(support["t25_over_T"])
         t75 = float(support["t75_over_T"])
-        w_t = float(support["w_t"])
+        Q_t_width = float(support["Q_t_width"])
 
         ax.plot(tau, C, linewidth=3, color=main_color)
         y25 = _y_at(t25, tau, C)
@@ -1366,7 +1398,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
         ax.fill_between(tau, 0, C, where=(tau >= t25) & (tau <= t75), color=fill_color2)
 
         info_box(
-            [rf"$w_{{t}}={w_t:.3f}$", rf"$t_{{25}}={t25:.3f}, t_{{75}}={t75:.3f}$"]
+            [rf"$Q_{{t,width}}={Q_t_width:.3f}$", rf"$t_{{25}}/T={t25:.3f}, t_{{75}}/T={t75:.3f}$"]
         )
         ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$d(t) \: (a.u.)$", fontsize=14, labelpad=12)
@@ -1377,8 +1409,8 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
         t50 = float(support["t50_over_T"])
         t75 = float(support["t75_over_T"])
         t90 = float(support["t90_over_T"])
-        w_t = float(support["w_t"])
-        s_t = float(support["s_t"])
+        Q_t_width = float(support["Q_t_width"])
+        Q_t_skew = float(support["Q_t_skew"])
         r_q_t = float(support["R_Q_t"])
 
         ax.plot(tau, C, linewidth=3, color=main_color)
@@ -1390,19 +1422,19 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
 
         info_box(
             [
-                rf"$w_{{t}}={w_t:.3f}$",
-                rf"$s_{{t}}={s_t:.3f}$",
+                rf"$w_{{t}}={Q_t_width:.3f}$",
+                rf"$s_{{t}}={Q_t_skew:.3f}$",
                 rf"$R_{{Q_{{t}}}}={r_q_t:.3f}$",
             ]
         )
         ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$d(t) \: (a.u.)$", fontsize=14, labelpad=12)
 
-    elif metric == "s_d":
-        d10 = float(support["d10"])
-        d50 = float(support["d50"])
-        d90 = float(support["d90"])
-        s_d = float(support["s_d"])
+    elif metric == "Q_d_skew":
+        d10 = float(support["d10_over_D"])
+        d50 = float(support["d50_over_D"])
+        d90 = float(support["d90_over_D"])
+        Q_d_skew = float(support["Q_d_skew"])
 
         ax.plot(tau, C, linewidth=3, color=main_color)
         for tq, dq in [(0.1, d10), (0.5, d50), (0.9, d90)]:
@@ -1411,17 +1443,18 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
 
         info_box(
             [
-                rf"$s_{{d}}={s_d:.3f}$",
-                rf"$d_{{10}}={d10:.3f}, d_{{50}}={d50:.3f}, d_{{90}}={d90:.3f}$",
+                rf"$Q_{{d,skew}}={Q_d_skew:.3f}$",
+                rf"$d_{{10}}/D={d10:.3f}, d_{{50}}/D={d50:.3f}$", 
+                rf"$d_{{90}}/D={d90:.3f}$",
             ]
         )
         ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$d(t) \: (a.u.)$", fontsize=14, labelpad=12)
 
-    elif metric == "w_d":
-        d25 = float(support["d25"])
-        d75 = float(support["d75"])
-        w_d = float(support["w_d"])
+    elif metric == "Q_d_width":
+        d25 = float(support["d25_over_D"])
+        d75 = float(support["d75_over_D"])
+        Q_d_width = float(support["Q_d_width"])
 
         ax.plot(tau, C, linewidth=3, color=main_color)
         ax.vlines(0.25, 0, d25, linestyle="--", linewidth=1, color="black")
@@ -1434,19 +1467,19 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
         ax.fill_betweenx(y_fill, 0, x_curve, color=fill_color2)
 
         info_box(
-            [rf"$W_{{d}}={w_d:.3f}$", rf"$d_{{25}}={d25:.3f}, d_{{75}}={d75:.3f}$"]
+            [rf"$Q_{{d,width}}={Q_d_width:.3f}$", rf"$d_{{25}}/D={d25:.3f}, d_{{75}}/D={d75:.3f}$"]
         )
         ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$d(t) \: (a.u.)$", fontsize=14, labelpad=12)
 
     elif metric == "R_Q_d":
-        d10 = float(support["d10"])
-        d25 = float(support["d25"])
-        d50 = float(support["d50"])
-        d75 = float(support["d75"])
-        d90 = float(support["d90"])
-        w_d = float(support["w_d"])
-        s_d = float(support["s_d"])
+        d10 = float(support["d10_over_D"])
+        d25 = float(support["d25_over_D"])
+        d50 = float(support["d50_over_D"])
+        d75 = float(support["d75_over_D"])
+        d90 = float(support["d90_over_D"])
+        Q_d_width = float(support["Q_d_width"])
+        Q_d_skew = float(support["Q_d_skew"])
         r_q_d = float(support["R_Q_d"])
 
         ax.plot(tau, C, linewidth=3, color=main_color)
@@ -1460,18 +1493,18 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
 
         info_box(
             [
-                rf"$Q_{{d_{{width}}}}={w_d:.3f}$",
-                rf"$Q_{{d_{{skew}}}}={s_d:.3f}$",
+                rf"$Q_{{d_{{width}}}}={Q_d_width:.3f}$",
+                rf"$Q_{{d_{{skew}}}}={Q_d_skew:.3f}$",
                 rf"$R_{{Q_{{d}}}}={r_q_d:.3f}$",
             ]
         )
         ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$d(t) \: (a.u.)$", fontsize=14, labelpad=12)
 
-    elif metric == "v_end_over_v_mean":
+    elif metric == "v_end_over_vbar":
         vmean = float(support["vmean"])
         vend = float(support["vend"])
-        ratio = float(support["v_end_over_v_mean"])
+        ratio = float(support["v_end_over_vbar"])
         i0 = int(support.get("late_window_start_idx", int(np.floor(0.75 * n))))
         i1 = int(support.get("late_window_end_idx", int(np.ceil(0.90 * n))))
 
@@ -1491,7 +1524,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
             fontsize=12,
             bbox=dict(facecolor="white", edgecolor="none"),
         )
-        info_box([rf"$R_{{EM}}={ratio:.3f}$"])
+        info_box([rf"$v_{{end}}/\bar{{v}}={ratio:.3f}$"])
         ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v(t) \: (mm/s)$", fontsize=14, labelpad=12)
 
@@ -1834,21 +1867,69 @@ def choose_zip():
     return filedialog.askopenfilename(filetypes=[("ZIP", "*.zip")])
 
 
+def extract_group_metrics(group, results_dict, prefix=""):
+    """
+    Parcourt récursivement les groupes/datasets HDF5
+    """
+
+    for metric_name in group.keys():
+
+        item = group[metric_name]
+
+        # chemin complet incluant les sous dossiers
+        full_name = f"{prefix}/{metric_name}" if prefix else metric_name
+
+        # -----------------------------
+        # Cas 1 : sous dossier HDF5
+        # -----------------------------
+        if isinstance(item, h5py.Group):
+
+            extract_group_metrics(
+                item,
+                results_dict,
+                prefix=full_name
+            )
+
+        # -----------------------------
+        # Cas 2 : dataset
+        # -----------------------------
+        elif isinstance(item, h5py.Dataset):
+
+            try:
+                data = np.array(item, dtype=float)
+
+                latex_formula = item.attrs.get("latex_formula", "")
+
+                results_dict[full_name] = {
+                    "mean": float(np.nanmedian(data)),
+                    "std": float(np.nanstd(data)),
+                    "latex_formula": latex_formula,
+                }
+
+            except (ValueError, TypeError):
+                print(f"Skipping non numeric dataset: {full_name}")
+
+
 def extract_metrics(h5_path):
     """
     Retourne:
+
     results[mode][vessel][metric_name] = {
         "mean": ...,
         "std": ...,
         "latex_formula": ...
     }
     """
+
     results = defaultdict(lambda: defaultdict(dict))
 
     with h5py.File(h5_path, "r") as f:
+
         for vessel in VALID_VESSELS:
+
             metrics_root_path = find_first_existing_path(
-                f, get_metrics_base_candidates(vessel)
+                f,
+                get_metrics_base_candidates(vessel)
             )
 
             if metrics_root_path is None or metrics_root_path not in f:
@@ -1857,21 +1938,17 @@ def extract_metrics(h5_path):
             metrics_root = f[metrics_root_path]
 
             for mode in metrics_root.keys():
+
                 if mode not in VALID_METRIC_FOLDERS:
                     continue
 
                 group = metrics_root[mode]
 
-                for metric_name in group.keys():
-                    dataset = group[metric_name]
-                    data = np.array(dataset)
-
-                    latex_formula = dataset.attrs.get("latex_formula", "")
-                    results[mode][vessel][metric_name] = {
-                        "mean": np.median(data),
-                        "std": np.std(data),
-                        "latex_formula": latex_formula,
-                    }
+                # parcours récursif du groupe
+                extract_group_metrics(
+                    group,
+                    results[mode][vessel]
+                )
 
     return results
 
@@ -1895,7 +1972,7 @@ def select_representative_file_per_group(df_metric: pd.DataFrame, value_col="mea
 
 
 METRIC_GROUPS = {
-    "Timing and displacement - distribution metrics": {
+    "Temporal timing and displacement distribution": {
         "mu_t_over_T",
         "sigma_t_over_T",
         "gamma_t",
@@ -1913,24 +1990,25 @@ METRIC_GROUPS = {
         "SF_VTI",
         "Delta_DTI",
         "t50_over_T",
-        "s_t",
-        "w_t",
-        "s_d",
-        "w_d",
+        "Q_t_skew",
+        "Q_t_width",
+        "Q_d_skew",
+        "Q_d_width",
     },
     "Temporal kinetics and persistence metrics": {
         "t_max_over_T",
         "t_min_over_T",
         "Delta_t_over_T",
-        "t_up_over_T",
-        "t_down_over_T",
-        "crest_factor",
-        "slope_rise_normalized",
-        "slope_fall_normalized",
-        "v_end_over_v_mean",
+        "t_rise_over_T",
+        "t_fall_over_T",
+        "CF",
+        "S_rise",
+        "S_fall",
+        "v_end_over_vbar",
     },
-    "Harmonic - domain organization metrics": {
+    "Spectral and representation-fidelity metrics": {
         "E_low_over_E_total",
+        "E_LF_over_E_HF",
         "rho_h",
         "w_h",
         "N_h_over_H_minus_1",
@@ -2362,7 +2440,7 @@ def save_dashboard(all_results, zip_path, single_group):
         zip_path,
         png_dir,
         "png",
-        show_group_illustrations=False,
+        show_group_illustrations=True,
     )
 
     replace_folder_in_zip(zip_path, png_dir, arc_folder="export_png")
@@ -2375,7 +2453,7 @@ def save_dashboard(all_results, zip_path, single_group):
                 zip_path,
                 eps_dir,
                 "eps",
-                show_group_illustrations=False,
+                show_group_illustrations=True,
             ),
             eps_dir,
         )
