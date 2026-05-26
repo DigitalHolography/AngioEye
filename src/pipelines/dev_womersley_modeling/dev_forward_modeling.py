@@ -1,5 +1,6 @@
 import numpy as np
-from scipy.signal import convolve
+from numpy.ma import ceil
+from scipy.signal import convolve, windows
 from scipy.special import jv
 
 
@@ -12,41 +13,70 @@ def _abel_cell_integral(x_abs, r_left, r_right):
 
 
 def apply_abel_projection(radial_profile, r_coord, x_coord, R0):
-    K_half = np.zeros((len(x_coord), len(r_coord)))
-    K = np.zeros((2 * len(x_coord), len(r_coord)))
-    for i, xi in enumerate(x_coord):
+    r_gird = r_coord.copy() / R0
+    x_grid = x_coord.copy() / R0
+    K_half = np.zeros((len(x_grid), len(r_gird)))
+    K = np.zeros((2 * len(x_grid), len(r_gird)))
+    for i, xi in enumerate(x_grid):
         x_abs = float(xi)
-        for j in range(len(r_coord) - 1):
-            K_half[i, j] = _abel_cell_integral(x_abs, r_coord[j], r_coord[j + 1])
-    K = np.concatenate([np.flip(K_half), K_half])
-    print(f"K: {K}")
+        for j in range(len(r_gird) - 1):
+            K_half[i, j] = _abel_cell_integral(x_abs, r_gird[j], r_gird[j + 1])
+    K = np.concatenate([np.flip(K_half, axis=0), K_half], axis=0)
     v_model = K @ radial_profile
     return v_model
 
 
-def get_womersley_physics(n_harmonic, b_period, R0, Nu):
-    omega_n = (2.0 * np.pi * n_harmonic) / b_period
+def psf_gaussian(fwhm_um, dx_um):
+    fwhm_in_points = fwhm_um / dx_um
+    sigma_in_points = fwhm_in_points / (2 * np.sqrt(2 * np.log(2)))
+    kernel_radius = ceil(3 * sigma_in_points)
+    kernel_size = 2 * kernel_radius + 1
+    psf_kernel = windows.gaussian(kernel_size, std=sigma_in_points)
+    psf_kernel /= psf_kernel.sum()
+    return psf_kernel
+
+
+def get_womersley_physics(n, b_period, R0, Nu):
+    omega_n = (2.0 * np.pi * n) / b_period
     alpha_n = R0 * np.sqrt(omega_n / Nu)
     lambda_n = np.exp(1j * 3.0 * np.pi / 4.0) * alpha_n
     j0_val = jv(0, lambda_n)
     j1_val = jv(1, lambda_n)
-    kn = 1.0 - (2.0 * j1_val) / (lambda_n * j0_val)
-    print(f"alpha_n: {alpha_n}")
+    if n == 0:
+        kn = 0.0
+    else:
+        kn = 1.0 - (2.0 * j1_val) / (lambda_n * j0_val)
+
+    if n < 4:
+        print(f"alpha_n: {alpha_n}")
     return lambda_n, j0_val, j1_val, kn
 
 
 def generate_harmonic_flow_profile(
-    Cn, Dn, n_harmonic, b_period, R0, Nu, x_coord, r_coord, psf_kernel=None
+    Cn, Dn, harmonics, b_period, R0, Nu, x_coord, r_coord, fwhm, dx
 ):
-    lambda_n, j0_val, j1_val, _ = get_womersley_physics(n_harmonic, b_period, R0, Nu)
+    v_model_freq = np.zeros((len(harmonics), len(x_coord)), dtype=complex)
+    psf_kernel = psf_gaussian(fwhm, dx)
     x_rad = r_coord.copy() / R0
-    bn = 1.0 - (jv(0, lambda_n * x_rad) / j0_val)
-    psin = (-lambda_n * j1_val) / (j0_val**2) * jv(0, lambda_n * x_rad)
-    u_n = (Cn * bn) + (Dn * psin)
-    print(f"u_n: {u_n}")
-    v_model = apply_abel_projection(u_n, r_coord, x_coord, R0)
+    for n in harmonics:
+        lambda_n, j0_val, j1_val, _ = get_womersley_physics(n, b_period, R0, Nu)
+        bn = 1.0 - (jv(0, lambda_n * x_rad) / j0_val)
+        psin = (-lambda_n * j1_val) / (j0_val**2) * jv(0, lambda_n * x_rad)
 
-    if psf_kernel is not None:
-        v_model = convolve(v_model, psf_kernel, mode="same")
+        u_n = (Cn[n] * bn) + (Dn[n] * psin)
+
+        v_prof = apply_abel_projection(u_n, r_coord, x_coord, R0)
+        v_blurred = convolve(v_prof, psf_kernel, mode="same")
+        v_downsampled = (v_blurred[::2] + v_blurred[1::2]) / 2.0
+        v_model_freq[n, :] = v_downsampled
+
+        if n < 4:
+            print(f"n: {n}")
+            print(f"bn: {bn}")
+            print(f"psin: {psin}")
+            print(f"u_n: {u_n}")
+            print(f"v_downsampled: {v_downsampled}")
+
+    v_model = np.fft.irfft(v_model_freq, axis=0)
 
     return v_model
