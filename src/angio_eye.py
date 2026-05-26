@@ -130,7 +130,7 @@ class ProcessApp(_BaseAppTk):
         self.input_convention_var = tk.StringVar(value="legacy")
         self.holo_input_var = tk.StringVar()
         self.holo_display_path_var = tk.StringVar(value="No .holo selected")
-        self.holo_status_var = tk.StringVar(value="EF h5 not found")
+        self.holo_status_var = tk.StringVar()
         self.holo_output_path_var = tk.StringVar(value="Output path: -")
         self.minimal_status_var = tk.StringVar(value="Ready.")
         self.pipeline_library_summary_var = tk.StringVar(value="")
@@ -893,6 +893,15 @@ class ProcessApp(_BaseAppTk):
             output_dir=self._holo_output_dir(holo_path),
         )
 
+    def _set_holo_status_visible(self, visible: bool) -> None:
+        for label_name in ("minimal_holo_status_label", "advanced_holo_status_label"):
+            label = getattr(self, label_name, None)
+            if label is not None:
+                if visible:
+                    label.grid()
+                else:
+                    label.grid_remove()
+
     def _set_holo_status_color(self, found: bool) -> None:
         color = "#3fb37f" if found else "#d65f5f"
         for label_name in ("minimal_holo_status_label", "advanced_holo_status_label"):
@@ -904,11 +913,12 @@ class ProcessApp(_BaseAppTk):
         raw_holo_value = (self.holo_input_var.get() or "").strip()
         if not raw_holo_value:
             self.holo_display_path_var.set("No .holo selected")
-            self.holo_status_var.set("EF h5 not found")
+            self.holo_status_var.set("")
             self.holo_output_path_var.set("Output path: -")
-            self._set_holo_status_color(False)
+            self._set_holo_status_visible(False)
             return
 
+        self._set_holo_status_visible(True)
         holo_path = Path(raw_holo_value)
         self.holo_display_path_var.set(str(holo_path))
         output_dir = self._holo_output_dir(holo_path)
@@ -1285,7 +1295,7 @@ class ProcessApp(_BaseAppTk):
         selected_header = ttk.Label(self.pipeline_library_inner, text="Selected")
         selected_header.grid(row=0, column=0, sticky="w", pady=(0, 6))
         status_header = ttk.Label(self.pipeline_library_inner, text="Status")
-        status_header.grid(row=0, column=1, sticky="w", padx=(12, 0), pady=(0, 6))
+        status_header.grid(row=0, column=1, sticky="w", padx=(12, 18), pady=(0, 6))
         self._bind_vertical_mousewheel(selected_header, self.pipeline_library_canvas)
         self._bind_vertical_mousewheel(status_header, self.pipeline_library_canvas)
 
@@ -1309,7 +1319,7 @@ class ProcessApp(_BaseAppTk):
 
             status_text = self._pipeline_status_text(pipeline)
             status = ttk.Label(self.pipeline_library_inner, text=status_text)
-            status.grid(row=idx, column=1, sticky="w", padx=(12, 0), pady=(0, 6))
+            status.grid(row=idx, column=1, sticky="w", padx=(12, 18), pady=(0, 6))
             self._bind_vertical_mousewheel(status, self.pipeline_library_canvas)
 
             tip_text = self._descriptor_tooltip_text(pipeline)
@@ -1330,7 +1340,7 @@ class ProcessApp(_BaseAppTk):
         selected_header = ttk.Label(self.postprocess_library_inner, text="Selected")
         selected_header.grid(row=0, column=0, sticky="w", pady=(0, 6))
         status_header = ttk.Label(self.postprocess_library_inner, text="Status")
-        status_header.grid(row=0, column=1, sticky="w", padx=(12, 0), pady=(0, 6))
+        status_header.grid(row=0, column=1, sticky="w", padx=(12, 18), pady=(0, 6))
         self._bind_vertical_mousewheel(selected_header, self.postprocess_library_canvas)
         self._bind_vertical_mousewheel(status_header, self.postprocess_library_canvas)
 
@@ -1354,7 +1364,7 @@ class ProcessApp(_BaseAppTk):
 
             status_text = self._postprocess_status_text(postprocess)
             status = ttk.Label(self.postprocess_library_inner, text=status_text)
-            status.grid(row=idx, column=1, sticky="w", padx=(12, 0), pady=(0, 6))
+            status.grid(row=idx, column=1, sticky="w", padx=(12, 18), pady=(0, 6))
             self._bind_vertical_mousewheel(status, self.postprocess_library_canvas)
 
             tip_text = self._descriptor_tooltip_text(postprocess)
