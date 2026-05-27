@@ -18,10 +18,9 @@ from angioeye_io.archive_io import (
 )
 from ..core.grouped_batch import (
     find_control_group_name,
-    iter_grouped_h5_files_in_zip,
 )
 
-PIPELINE_ROOT = "/AngioEye/Processing/waveform_shape_metrics"
+WAVEFORM_SHAPE_METRICS_PIPELINE = "waveform_shape_metrics"
 VALID_METRIC_FOLDERS = ["raw", "bandlimited"]
 VALID_VESSELS = ["artery", "vein"]
 
@@ -51,7 +50,7 @@ SELECTED_METRICS_PNG = {
     "Q_t_width",
     "Q_d_skew",
     "Q_d_width",
-    "v_end_over_v_bar",
+    "v_end_over_vbar",
     "E_slope",
     #"E_curv",
     "t50_over_T",
@@ -103,7 +102,7 @@ LATEX_FORMULAS = {
     "Q_t_width": r"$Q_{\mathrm{t,width}}$",
     "Q_d_skew": r"$Q_{\mathrm{d,skew}}$",
     "Q_d_width": r"$Q_{\mathrm{d,width}}$",
-    "v_end_over_v_bar": r"$v_{\mathrm{end}}/v_{\mathrm{bar}}$",
+    "v_end_over_vbar": r"$v_{\mathrm{end}}/\bar{\mathrm{v}}$",
     "E_slope": r"$E_{\mathrm{slope}}$",
     "phase_locking_residual": r"$E_{\phi}$",
     "W50_over_T": r"$W_{50}/T$",
@@ -118,11 +117,6 @@ LATEX_FORMULAS = {
     #"w_h": r"$w_{h}$",
     #"N_h_over_H_minus_1": r"$N_{H}/(H-1)$",
 }
-
-
-WAVEFORM_SHAPE_METRICS_PIPELINE = "waveform_shape_metrics"
-VALID_METRIC_FOLDERS = ["raw", "bandlimited"]
-VALID_VESSELS = ["artery", "vein"]
 
 def get_metrics_base_candidates(vessel: str) -> list[str]:
     return pipeline_path_candidates(WAVEFORM_SHAPE_METRICS_PIPELINE, vessel, "global")
