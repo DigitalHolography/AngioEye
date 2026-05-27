@@ -36,7 +36,6 @@ SELECTED_METRICS_PNG = {
     "E_LF_over_E_HF",
     "t_max_over_T",
     "t_min_over_T",
-    #"Delta_t_over_T",
     "S_rise",
     "S_fall",
     "t_rise_over_T",
@@ -52,15 +51,7 @@ SELECTED_METRICS_PNG = {
     "Q_d_width",
     "v_end_over_vbar",
     "E_slope",
-    #"E_curv",
     "t50_over_T",
-    #"t_phi_over_T",
-    #"t_phi_n_over_T",
-    #"rho_h",
-    #"w_h",
-    #"N_h_over_H_minus_1",
-    #"D_phi",
-    #"s_phi_over_T",
     "eta_h",
 }
 METRIC_ALIASES = {
@@ -69,53 +60,33 @@ METRIC_ALIASES = {
 EPS = 1e-12
 LATEX_FORMULAS = {
     "RI": r"$\rm RI$",
-    "rho_h_90": r"$\rho_{h,90}$",
-    "rho_h_95": r"$\rho_{h,95}$",
     "CF": r"$\rm CF$",
     "t50_over_T": r"$t_{50}/T$",
     "R_VTI": r"$R_{VTI}$",
-    "spectral_entropy": r"$H_{spec}$",
     "mu_t_over_T": r"$\mu_t/T$",
     "PI": r"$\rm PI$",
     "SF_VTI": r"$SF_{VTI}$",
     "sigma_t_over_T": r"$\sigma_t/T$",
-    "delta_phi2": r"$\Delta\phi_2$",
     "t_max_over_T": r"$t_{\mathrm{max}}/T$",
     "t_min_over_T": r"$t_{\mathrm{min}}/T$",
-    "Delta_t_over_T": r"$\Delta_{\mathrm{t}}/T$",
     "t_rise_over_T": r"$t_{\mathrm{rise}}/T$",
     "t_fall_over_T": r"$t_{\mathrm{fall}}/T$",
-    "S_decay": r"$S_{\mathrm{decay}}$",
     "Delta_DTI": r"$\Delta_{\mathrm{DTI}}$",
-    "E_high_over_E_total": r"$E_{\mathrm{high}}/E_{\mathrm{total}}$",
-    "E_low_over_E_total": r"$E_{\mathrm{low}}/E_{\mathrm{total}}$",
     "E_LF_over_E_HF": r"$E_{\mathrm{LF}}/E_{\mathrm{HF}}$",
-    "R_SD": r"$R_{SD}$",
     "S_fall": r"$S_{\mathrm{fall}}$",
     "S_rise": r"$S_{\mathrm{rise}}$",
     "gamma_t": r"$\gamma_t$",
-    "mu_h": r"$\mu_h$",
-    "sigma_h": r"$\sigma_h$",
     "N_eff_over_T": r"$N_{\mathrm{eff}}/T$",
-    "E_recon_H_MAX": r"$E_{\mathrm{recon},H_{\max}}$",
     "Q_t_skew": r"$Q_{\mathrm{t,skew}}$",
     "Q_t_width": r"$Q_{\mathrm{t,width}}$",
     "Q_d_skew": r"$Q_{\mathrm{d,skew}}$",
     "Q_d_width": r"$Q_{\mathrm{d,width}}$",
     "v_end_over_vbar": r"$v_{\mathrm{end}}/\bar{\mathrm{v}}$",
     "E_slope": r"$E_{\mathrm{slope}}$",
-    "phase_locking_residual": r"$E_{\phi}$",
     "W50_over_T": r"$W_{50}/T$",
     "W80_over_T": r"$W_{80}/T$",
     "N_t_over_T": r"$N_t/T$",
-    #"t_phi_n_over_T": r"$t_{\Delta\phi_n}/T$",
-    #"t_phi_over_T": r"$t_{\phi}/T$",
-    #"D_phi": r"$D_{\phi}$",
-    #"s_phi_over_T": r"$s_{\Delta\phi}/T$",
     "eta_h": r"$\eta_h$",
-    #"rho_h": r"$\rho_{h}$",
-    #"w_h": r"$w_{h}$",
-    #"N_h_over_H_minus_1": r"$N_{H}/(H-1)$",
 }
 
 def get_metrics_base_candidates(vessel: str) -> list[str]:
@@ -220,12 +191,6 @@ def analyze_zip(zip_path):
                             )
 
     return dict(all_results)
-
-
-def reset_output_dir(path):
-    if os.path.isdir(path):
-        shutil.rmtree(path)
-    os.makedirs(path, exist_ok=True)
 
 
 def plot_group_statistics(df, metric, vessel, out_path):
@@ -336,29 +301,6 @@ def choose_zip():
     root.withdraw()
     return filedialog.askopenfilename(filetypes=[("ZIP", "*.zip")])
 
-
-def replace_folder_in_zip(zip_path: str, folder_path: str, arc_folder: str):
-    """
-    Remplace complètement un dossier dans un zip.
-    Supprime toute ancienne version de arc_folder/ puis ajoute folder_path.
-    """
-    temp_zip = zip_path + ".tmp"
-
-    with zipfile.ZipFile(zip_path, "r") as zin:
-        with zipfile.ZipFile(temp_zip, "w", compression=zipfile.ZIP_DEFLATED) as zout:
-            for item in zin.infolist():
-                if not item.filename.startswith(arc_folder + "/"):
-                    buffer = zin.read(item.filename)
-                    zout.writestr(item, buffer)
-
-            for root, _, files in os.walk(folder_path):
-                for fn in files:
-                    fullpath = os.path.join(root, fn)
-                    rel = os.path.relpath(fullpath, folder_path)
-                    arcname = os.path.join(arc_folder, rel).replace("\\", "/")
-                    zout.write(fullpath, arcname)
-
-    os.replace(temp_zip, zip_path)
 
 METRIC_GROUPS = {
     "Temporal timing and displacement distribution": {
