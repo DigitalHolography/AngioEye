@@ -753,127 +753,6 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
     # Packing helpers
     # ---------------------------------------------------------------------
     @staticmethod
-    def _audit_metric_names() -> dict[str, str]:
-        return {
-            "vmax": "maximum_velocity",
-            "vmin": "minimum_velocity",
-            "vmean": "mean_velocity",
-            "vmedian": "median_velocity",
-            "vrms": "rms_velocity",
-            "vstd": "velocity_standard_deviation",
-            "v_range": "velocity_range",
-            "v_peak_above_mean": "peak_velocity_above_mean",
-            "v_mean_above_min": "mean_velocity_above_minimum",
-            "v_p05": "velocity_percentile_05",
-            "v_p10": "velocity_percentile_10",
-            "v_p25": "velocity_percentile_25",
-            "v_p50": "velocity_percentile_50",
-            "v_p75": "velocity_percentile_75",
-            "v_p90": "velocity_percentile_90",
-            "v_p95": "velocity_percentile_95",
-            "v_iqr": "velocity_interquartile_range",
-            "v_mad": "velocity_median_absolute_deviation",
-            "vti_total": "total_velocity_time_integral",
-            "vti_0_10": "velocity_time_integral_first_10_percent",
-            "vti_0_25": "velocity_time_integral_first_25_percent",
-            "vti_0_33": "velocity_time_integral_first_third",
-            "vti_0_50": "velocity_time_integral_first_half",
-            "vti_0_75": "velocity_time_integral_first_75_percent",
-            "vti_75_90": "velocity_time_integral_75_to_90_percent",
-            "vti_90_100": "velocity_time_integral_final_10_percent",
-            "vti_late_half": "velocity_time_integral_late_half",
-            "vti_above_min": "velocity_time_integral_above_minimum",
-            "vti_above_mean_pos": "positive_velocity_time_integral_above_mean",
-            "vti_below_mean_abs": "negative_velocity_time_integral_below_mean",
-            "v_start_mean": "mean_velocity_first_10_percent",
-            "v_early_mean": "mean_velocity_first_third",
-            "v_mid_mean": "mean_velocity_middle_third",
-            "v_late_mean": "mean_velocity_final_third",
-            "vend_mean": "mean_velocity_end_window",
-            "v_final_mean": "mean_velocity_final_10_percent",
-            "v_early_max": "maximum_velocity_first_third",
-            "v_late_min": "minimum_velocity_late_half",
-            "v_ac_rms": "rms_pulsatile_velocity",
-            "v_ac_abs_mean": "mean_absolute_pulsatile_velocity",
-            "v_ac_abs_integral": "integrated_absolute_pulsatile_velocity",
-            "v_positive_pulsatile_integral": "positive_pulsatile_velocity_integral",
-            "v_negative_pulsatile_integral": "negative_pulsatile_velocity_integral",
-            "v_peak_to_peak": "peak_to_peak_velocity",
-            "t_vmax": "time_of_maximum_velocity",
-            "t_vmin": "time_of_minimum_velocity",
-            "t_upstroke_max": "time_of_maximum_acceleration",
-            "t_downstroke_max": "time_of_maximum_deceleration",
-            "peak_to_trough_time": "time_from_peak_velocity_to_trough",
-            "beat_period": "beat_period",
-            "dvdt_max": "maximum_acceleration",
-            "dvdt_min": "minimum_acceleration",
-            "dvdt_fall_abs_max": "maximum_deceleration_magnitude",
-            "dvdt_rms": "rms_acceleration",
-            "dvdt_abs_mean": "mean_absolute_acceleration",
-            "dvdt_std": "acceleration_standard_deviation",
-            "dvdt_energy": "acceleration_energy",
-            "total_variation": "total_velocity_change",
-            "positive_variation": "integrated_positive_acceleration",
-            "negative_variation": "integrated_deceleration_magnitude",
-            "dc_level": "fourier_dc_velocity_level",
-            "fundamental_amp": "fundamental_harmonic_velocity_amplitude",
-            "second_harmonic_amp": "second_harmonic_velocity_amplitude",
-            "third_harmonic_amp": "third_harmonic_velocity_amplitude",
-            "pulsatile_harmonic_power": "pulsatile_harmonic_power",
-            "higher_harmonic_power": "higher_harmonic_power",
-            "low_harmonic_power": "low_harmonic_power",
-            "bandlimited_ac_rms_from_harmonics": "rms_pulsatile_velocity_from_harmonics",
-            "signal_energy": "velocity_signal_energy",
-            "signal_mean_square": "velocity_mean_square",
-            "pulsatile_energy": "pulsatile_velocity_energy",
-            "pulsatile_mean_square": "pulsatile_velocity_mean_square",
-            "absolute_deviation_energy": "absolute_pulsatile_deviation_integral",
-            "vti_squared_over_T": "velocity_time_integral_squared_per_period",
-            "harmonic_coeff_abs": "harmonic_velocity_coefficient_magnitude",
-            "harmonic_amp": "harmonic_velocity_amplitude",
-            "harmonic_power": "harmonic_velocity_power",
-            "raw_minus_band_mean": "mean_raw_minus_bandlimited_velocity",
-            "raw_minus_band_bias": "raw_minus_bandlimited_velocity_bias",
-            "raw_minus_band_rms": "rms_raw_minus_bandlimited_velocity",
-            "raw_minus_band_mae": "mean_absolute_raw_minus_bandlimited_velocity",
-            "raw_minus_band_max_abs": "maximum_absolute_raw_minus_bandlimited_velocity",
-            "raw_minus_band_energy": "raw_minus_bandlimited_residual_energy",
-            "raw_minus_band_vti_abs": "absolute_raw_minus_bandlimited_vti",
-            "raw_band_corr": "raw_bandlimited_velocity_correlation",
-            "raw_band_vti_difference": "raw_minus_bandlimited_vti_difference",
-        }
-
-    @staticmethod
-    def _rectified_qc_metric_names() -> dict[str, str]:
-        return {
-            "raw_minus_band_mean": (
-                "mean_rectified_raw_minus_rectified_bandlimited_velocity"
-            ),
-            "raw_minus_band_bias": (
-                "rectified_raw_minus_rectified_bandlimited_velocity_bias"
-            ),
-            "raw_minus_band_rms": (
-                "rms_rectified_raw_minus_rectified_bandlimited_velocity"
-            ),
-            "raw_minus_band_mae": (
-                "mean_absolute_rectified_raw_minus_rectified_bandlimited_velocity"
-            ),
-            "raw_minus_band_max_abs": (
-                "maximum_absolute_rectified_raw_minus_rectified_bandlimited_velocity"
-            ),
-            "raw_minus_band_energy": (
-                "rectified_raw_minus_rectified_bandlimited_residual_energy"
-            ),
-            "raw_minus_band_vti_abs": (
-                "absolute_rectified_raw_minus_rectified_bandlimited_vti"
-            ),
-            "raw_band_corr": "rectified_raw_bandlimited_velocity_correlation",
-            "raw_band_vti_difference": (
-                "rectified_raw_minus_rectified_bandlimited_vti_difference"
-            ),
-        }
-
-    @staticmethod
     def _expected_range_note(key: str) -> str:
         nonnegative = (
             "Expected mathematical range: >= 0 or NaN. This is not a "
@@ -905,11 +784,8 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
 
     def _rectified_qc_meta(self) -> dict:
         meta = {}
-        output_names = self._rectified_qc_metric_names()
         for k in self._qc_metric_keys():
             meta[k[0]] = {
-                "output_name": [output_names.get(k[0], k[0])],
-                "source_metric_id": [k[0]],
                 "definition": [
                     k[1].replace("raw", "rectified raw").replace(
                         "bandlimited", "rectified bandlimited"
@@ -939,11 +815,8 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
 
     def _metric_meta(self) -> dict:
         meta = {}
-        output_names = self._audit_metric_names()
         for k in self._scalar_metric_keys():
             meta[k[0]] = {
-                "output_name": [output_names.get(k[0], k[0])],
-                "source_metric_id": [k[0]],
                 "definition": [k[1]],
                 "unit": [k[2]],
                 "latex_formula": [k[4]],
@@ -956,8 +829,6 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
             }
         for k in self._array_metric_keys():
             meta[k[0]] = {
-                "output_name": [output_names.get(k[0], k[0])],
-                "source_metric_id": [k[0]],
                 "definition": [k[1]],
                 "unit": [k[2]],
                 "latex_formula": [k[4]],
@@ -971,8 +842,6 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
             }
         for k in self._qc_metric_keys():
             meta[k[0]] = {
-                "output_name": [output_names.get(k[0], k[0])],
-                "source_metric_id": [k[0]],
                 "definition": [f"unrectified {k[1]}"],
                 "unit": [k[2]],
                 "latex_formula": [k[3]],
@@ -1007,10 +876,7 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
             attrs.update(meta.get(key, {}))
             attrs.update(meta_overrides.get(key, {}))
             attrs.update(attrs_common)
-            output_name = attrs.get("output_name", [key])
-            if isinstance(output_name, (list, tuple, np.ndarray)):
-                output_name = output_name[0]
-            metrics[f"{path_prefix}/{output_name}"] = with_attrs(arr, attrs)
+            metrics[f"{path_prefix}/{key}"] = with_attrs(arr, attrs)
 
     def _pack_params(self, metrics: dict, vessel_prefix: str, scope: str) -> None:
         metrics[f"{vessel_prefix}/{scope}/params/eps"] = np.asarray(self.eps, dtype=float)

@@ -9,6 +9,7 @@ import tkinter as tk
 import tkinter.font as tkfont
 import zipfile
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
@@ -51,6 +52,14 @@ from postprocess import (
 )
 
 _BaseAppTk = TkinterDnD.Tk if TkinterDnD is not None else tk.Tk
+
+
+@dataclass(frozen=True)
+class HoloInputContext:
+    holo_path: Path
+    ef_dir: Path
+    h5_path: Path
+    output_dir: Path
 
 
 class _Tooltip:
@@ -118,6 +127,11 @@ class ProcessApp(_BaseAppTk):
         self.batch_zip_var = tk.BooleanVar(value=False)
         self.batch_zip_name_var = tk.StringVar(value="outputs.zip")
         self.batch_progress_var = tk.DoubleVar(value=0.0)
+        self.input_convention_var = tk.StringVar(value="legacy")
+        self.holo_input_var = tk.StringVar()
+        self.holo_display_path_var = tk.StringVar(value="No .holo selected")
+        self.holo_status_var = tk.StringVar()
+        self.holo_output_path_var = tk.StringVar(value="Output path: -")
         self.minimal_status_var = tk.StringVar(value="Ready.")
         self.pipeline_library_summary_var = tk.StringVar(value="")
         self.postprocess_library_summary_var = tk.StringVar(value="")
@@ -243,14 +257,20 @@ class ProcessApp(_BaseAppTk):
         menu_bar = tk.Menu(self)
         view_menu = tk.Menu(menu_bar, tearoff=False)
         view_menu.add_radiobutton(
-            label="Minimal UI",
+            label="Minimal Mode",
             value="minimal",
             variable=self.ui_mode_var,
             command=lambda: self._apply_ui_mode(self.ui_mode_var.get()),
         )
         view_menu.add_radiobutton(
-            label="Advanced UI",
+            label="Legacy Advanced Mode",
             value="advanced",
+            variable=self.ui_mode_var,
+            command=lambda: self._apply_ui_mode(self.ui_mode_var.get()),
+        )
+        view_menu.add_radiobutton(
+            label="Sandbox Advanced Mode",
+            value="sandbox_advanced",
             variable=self.ui_mode_var,
             command=lambda: self._apply_ui_mode(self.ui_mode_var.get()),
         )
@@ -280,51 +300,99 @@ class ProcessApp(_BaseAppTk):
             self.minimal_logo_label = ttk.Label(content, image=self._minimal_logo_image)
             self.minimal_logo_label.grid(row=1, column=0, pady=(0, 18))
 
+        self.minimal_input_tabs = ttk.Notebook(content)
+        self.minimal_input_tabs.grid(row=2, column=0, sticky="ew", pady=(0, 18))
+
+        self.minimal_legacy_tab = ttk.Frame(self.minimal_input_tabs, padding=12)
+        self.minimal_holo_tab = ttk.Frame(self.minimal_input_tabs, padding=12)
+        self.minimal_input_tabs.add(self.minimal_legacy_tab, text="Legacy")
+        self.minimal_input_tabs.add(self.minimal_holo_tab, text="Holo workflow")
+        self.minimal_input_tabs.bind(
+            "<<NotebookTabChanged>>",
+            self._on_minimal_tab_changed,
+        )
+
+        self.minimal_legacy_tab.columnconfigure(0, weight=1)
         self.minimal_browse_button = ttk.Button(
-            content,
+            self.minimal_legacy_tab,
             text="Browse .h5 or zip archive",
             command=self.choose_batch_file,
         )
-        self.minimal_browse_button.grid(row=2, column=0, pady=(0, 10))
+        self.minimal_browse_button.grid(row=0, column=0, pady=(0, 10))
         self.minimal_input_path_label = tk.Label(
-            content,
+            self.minimal_legacy_tab,
             textvariable=self.minimal_input_path_var,
             bg=self._bg_color,
             fg=self._muted_fg,
             justify="center",
             wraplength=420,
         )
-        self.minimal_input_path_label.grid(row=3, column=0, pady=(0, 18), sticky="ew")
+        self.minimal_input_path_label.grid(row=1, column=0, pady=(0, 18), sticky="ew")
 
         self.minimal_output_button = ttk.Button(
-            content,
+            self.minimal_legacy_tab,
             text="Select output folder",
             command=self.choose_batch_output,
         )
-        self.minimal_output_button.grid(row=4, column=0, pady=(0, 10))
+        self.minimal_output_button.grid(row=2, column=0, pady=(0, 10))
         self.minimal_output_path_label = tk.Label(
-            content,
+            self.minimal_legacy_tab,
             textvariable=self.minimal_output_path_var,
             bg=self._bg_color,
             fg=self._muted_fg,
             justify="center",
             wraplength=420,
         )
-        self.minimal_output_path_label.grid(row=5, column=0, pady=(0, 6), sticky="ew")
+        self.minimal_output_path_label.grid(row=3, column=0, pady=(0, 6), sticky="ew")
         self.minimal_output_name_label = tk.Label(
-            content,
+            self.minimal_legacy_tab,
             textvariable=self.minimal_output_name_var,
             bg=self._bg_color,
             fg=self._text_fg,
             justify="center",
             wraplength=420,
         )
-        self.minimal_output_name_label.grid(row=6, column=0, pady=(0, 18), sticky="ew")
+        self.minimal_output_name_label.grid(row=4, column=0, pady=(0, 2), sticky="ew")
+
+        self.minimal_holo_tab.columnconfigure(0, weight=1)
+        self.minimal_holo_button = ttk.Button(
+            self.minimal_holo_tab,
+            text="Select .holo file",
+            command=self.choose_holo_file,
+        )
+        self.minimal_holo_button.grid(row=0, column=0, pady=(0, 10))
+        self.minimal_holo_path_label = tk.Label(
+            self.minimal_holo_tab,
+            textvariable=self.holo_display_path_var,
+            bg=self._bg_color,
+            fg=self._muted_fg,
+            justify="center",
+            wraplength=420,
+        )
+        self.minimal_holo_path_label.grid(row=1, column=0, pady=(0, 8), sticky="ew")
+        self.minimal_holo_status_label = tk.Label(
+            self.minimal_holo_tab,
+            textvariable=self.holo_status_var,
+            bg=self._bg_color,
+            fg="#d65f5f",
+            justify="center",
+            wraplength=420,
+        )
+        self.minimal_holo_status_label.grid(row=2, column=0, pady=(0, 8), sticky="ew")
+        self.minimal_holo_output_label = tk.Label(
+            self.minimal_holo_tab,
+            textvariable=self.holo_output_path_var,
+            bg=self._bg_color,
+            fg=self._text_fg,
+            justify="center",
+            wraplength=420,
+        )
+        self.minimal_holo_output_label.grid(row=3, column=0, pady=(0, 2), sticky="ew")
 
         self.minimal_run_button = ttk.Button(
             content, text="Run", command=self.run_batch
         )
-        self.minimal_run_button.grid(row=7, column=0, pady=(0, 18))
+        self.minimal_run_button.grid(row=3, column=0, pady=(0, 18))
 
         self.minimal_progress = ttk.Progressbar(
             content,
@@ -335,7 +403,7 @@ class ProcessApp(_BaseAppTk):
             length=340,
             style=self._progress_primary_style,
         )
-        self.minimal_progress.grid(row=8, column=0, sticky="ew")
+        self.minimal_progress.grid(row=4, column=0, sticky="ew")
         self.minimal_status_label = tk.Label(
             content,
             textvariable=self.minimal_status_var,
@@ -344,7 +412,7 @@ class ProcessApp(_BaseAppTk):
             justify="center",
             wraplength=420,
         )
-        self.minimal_status_label.grid(row=9, column=0, pady=(8, 0), sticky="ew")
+        self.minimal_status_label.grid(row=5, column=0, pady=(8, 0), sticky="ew")
 
     def _get_minimal_title_font(self) -> tkfont.Font:
         if self._minimal_title_font is None:
@@ -394,10 +462,20 @@ class ProcessApp(_BaseAppTk):
         parent.columnconfigure(2, weight=0)
         parent.rowconfigure(4, weight=1)
 
-        ttk.Label(parent, text="Input").grid(row=0, column=0, sticky="w")
-        input_entry = ttk.Entry(parent, textvariable=self.batch_input_var)
+        self.legacy_advanced_input_frame = ttk.Frame(parent)
+        self.legacy_advanced_input_frame.grid(
+            row=0, column=0, columnspan=3, sticky="ew"
+        )
+        self.legacy_advanced_input_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(self.legacy_advanced_input_frame, text="Input").grid(
+            row=0, column=0, sticky="w"
+        )
+        input_entry = ttk.Entry(
+            self.legacy_advanced_input_frame, textvariable=self.batch_input_var
+        )
         input_entry.grid(row=0, column=1, sticky="ew", padx=(0, 4))
-        input_btn_frame = ttk.Frame(parent)
+        input_btn_frame = ttk.Frame(self.legacy_advanced_input_frame)
         input_btn_frame.grid(row=0, column=2, sticky="w")
         ttk.Button(
             input_btn_frame, text="Browse folder", command=self.choose_batch_folder
@@ -406,12 +484,62 @@ class ProcessApp(_BaseAppTk):
             input_btn_frame, text="Browse file/zip", command=self.choose_batch_file
         ).pack(side="left", padx=(4, 0))
 
-        ttk.Label(parent, text="Output").grid(row=1, column=0, sticky="w", pady=(8, 0))
-        batch_output_entry = ttk.Entry(parent, textvariable=self.batch_output_var)
-        batch_output_entry.grid(row=1, column=1, sticky="ew", padx=(0, 4), pady=(8, 0))
-        ttk.Button(parent, text="Browse", command=self.choose_batch_output).grid(
-            row=1, column=2, sticky="w", pady=(8, 0)
+        ttk.Label(self.legacy_advanced_input_frame, text="Output").grid(
+            row=1, column=0, sticky="w", pady=(8, 0)
         )
+        batch_output_entry = ttk.Entry(
+            self.legacy_advanced_input_frame, textvariable=self.batch_output_var
+        )
+        batch_output_entry.grid(row=1, column=1, sticky="ew", padx=(0, 4), pady=(8, 0))
+        ttk.Button(
+            self.legacy_advanced_input_frame,
+            text="Browse",
+            command=self.choose_batch_output,
+        ).grid(row=1, column=2, sticky="w", pady=(8, 0))
+
+        self.sandbox_advanced_input_frame = ttk.Frame(parent)
+        self.sandbox_advanced_input_frame.grid(
+            row=0, column=0, columnspan=3, sticky="ew"
+        )
+        self.sandbox_advanced_input_frame.columnconfigure(1, weight=1)
+        ttk.Label(self.sandbox_advanced_input_frame, text="Holo input").grid(
+            row=0, column=0, sticky="w"
+        )
+        holo_entry = ttk.Entry(
+            self.sandbox_advanced_input_frame,
+            textvariable=self.holo_display_path_var,
+            state="readonly",
+        )
+        holo_entry.grid(row=0, column=1, sticky="ew", padx=(0, 4))
+        ttk.Button(
+            self.sandbox_advanced_input_frame,
+            text="Select .holo file",
+            command=self.choose_holo_file,
+        ).grid(row=0, column=2, sticky="w")
+        self.advanced_holo_status_label = tk.Label(
+            self.sandbox_advanced_input_frame,
+            textvariable=self.holo_status_var,
+            bg=self._bg_color,
+            fg="#d65f5f",
+            justify="left",
+            anchor="w",
+        )
+        self.advanced_holo_status_label.grid(
+            row=1, column=1, columnspan=2, sticky="ew", pady=(8, 0)
+        )
+        self.advanced_holo_output_label = tk.Label(
+            self.sandbox_advanced_input_frame,
+            textvariable=self.holo_output_path_var,
+            bg=self._bg_color,
+            fg=self._text_fg,
+            justify="left",
+            anchor="w",
+        )
+        self.advanced_holo_output_label.grid(
+            row=2, column=1, columnspan=2, sticky="ew", pady=(4, 0)
+        )
+
+        self.sandbox_advanced_input_frame.grid_remove()
 
         controls = ttk.Frame(parent)
         controls.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(12, 4))
@@ -537,16 +665,16 @@ class ProcessApp(_BaseAppTk):
     def _window_size_for_mode(self, mode: str) -> tuple[int, int, int, int]:
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
-        if mode == "advanced":
+        if mode in {"advanced", "sandbox_advanced"}:
             width = min(900, max(760, screen_width - 240), screen_width)
             height = min(640, max(520, screen_height - 240), screen_height)
             min_width = min(620, width)
             min_height = min(420, height)
         else:
             width = max(560, min(660, screen_width - 260))
-            height = max(420, min(520, screen_height - 260))
+            height = max(420, min(640, screen_height - 260))
             min_width = min(500, width)
-            min_height = min(520, height)
+            min_height = min(640, height)
         return width, height, min_width, min_height
 
     def _ensure_window_size_for_mode(
@@ -600,14 +728,17 @@ class ProcessApp(_BaseAppTk):
         self.geometry(f"{width}x{height}+{x}+{y}")
 
     def _apply_ui_mode(self, mode: str, *, persist: bool = True) -> None:
-        normalized_mode = "advanced" if mode == "advanced" else "minimal"
+        normalized_mode = (
+            mode if mode in {"advanced", "sandbox_advanced"} else "minimal"
+        )
         previous_mode = self.ui_mode
         self.ui_mode = normalized_mode
         self.ui_mode_var.set(normalized_mode)
+        self._configure_advanced_input_panel()
 
         self.minimal_view.pack_forget()
         self.advanced_view.pack_forget()
-        if normalized_mode == "advanced":
+        if normalized_mode in {"advanced", "sandbox_advanced"}:
             self.advanced_view.pack(fill="both", expand=True)
         else:
             self.minimal_view.pack(fill="both", expand=True)
@@ -618,11 +749,26 @@ class ProcessApp(_BaseAppTk):
             normalized_mode,
             force_target_size=(
                 normalized_mode == "minimal"
-                and (previous_mode == "advanced" or not persist)
+                and (previous_mode in {"advanced", "sandbox_advanced"} or not persist)
             ),
         )
         if persist:
             self._persist_ui_mode()
+
+    def _configure_advanced_input_panel(self) -> None:
+        if not hasattr(self, "legacy_advanced_input_frame"):
+            return
+        if self.ui_mode == "sandbox_advanced":
+            self.legacy_advanced_input_frame.grid_remove()
+            self.sandbox_advanced_input_frame.grid()
+            self.input_convention_var.set("holo")
+            self.batch_zip_var.set(False)
+        else:
+            self.sandbox_advanced_input_frame.grid_remove()
+            self.legacy_advanced_input_frame.grid()
+            if self.ui_mode == "advanced":
+                self.input_convention_var.set("legacy")
+        self._update_holo_status_labels()
 
     def _on_close(self) -> None:
         self._persist_ui_mode()
@@ -632,6 +778,18 @@ class ProcessApp(_BaseAppTk):
     def _on_batch_paths_changed(self, *_args) -> None:
         self._update_minimal_path_labels()
 
+    def _on_minimal_tab_changed(self, _event=None) -> None:
+        if not hasattr(self, "minimal_input_tabs"):
+            return
+        selected_tab = self.minimal_input_tabs.select()
+        selected_widget = self.nametowidget(selected_tab) if selected_tab else None
+        if selected_widget == getattr(self, "minimal_holo_tab", None):
+            self.input_convention_var.set("holo")
+            self.batch_zip_var.set(False)
+        else:
+            self.input_convention_var.set("legacy")
+        self._update_holo_status_labels()
+
     def _handle_dropped_paths(self, dropped_paths: Sequence[Path]) -> bool:
         for dropped_path in dropped_paths:
             if dropped_path.is_file() and dropped_path.suffix.lower() in {
@@ -639,8 +797,13 @@ class ProcessApp(_BaseAppTk):
                 ".hdf5",
                 ".zip",
             }:
+                self.input_convention_var.set("legacy")
                 self.batch_input_var.set(str(dropped_path))
                 self._apply_input_defaults(dropped_path)
+                self._log_batch(f"[INPUT] Drag and drop -> {dropped_path}")
+                return True
+            if dropped_path.is_file() and dropped_path.suffix.lower() == ".holo":
+                self._apply_holo_input(dropped_path)
                 self._log_batch(f"[INPUT] Drag and drop -> {dropped_path}")
                 return True
         return False
@@ -658,7 +821,7 @@ class ProcessApp(_BaseAppTk):
 
         messagebox.showwarning(
             "Unsupported drop",
-            "Drop a single .h5, .hdf5, or .zip file into the window.",
+            "Drop a single .holo, .h5, .hdf5, or .zip file into the window.",
         )
 
     def _default_output_stem(self, input_path: Path) -> str:
@@ -676,6 +839,100 @@ class ProcessApp(_BaseAppTk):
         if input_path.is_file() and input_path.suffix.lower() == ".zip":
             return self._default_archive_name(input_path)
         return f"{self._default_output_stem(input_path)}.h5"
+
+    def _holo_dataset_dir(self, holo_path: Path) -> Path:
+        return holo_path.parent / holo_path.stem
+
+    def _holo_ef_dir(self, holo_path: Path) -> Path:
+        return self._holo_dataset_dir(holo_path) / f"{holo_path.stem}_EF"
+
+    def _holo_output_dir(self, holo_path: Path) -> Path:
+        return self._holo_dataset_dir(holo_path) / f"{holo_path.stem}_AE"
+
+    def _holo_output_filename(self, holo_path: Path) -> str:
+        return f"{holo_path.stem}_AE.h5"
+
+    def _find_holo_ef_h5(self, holo_path: Path) -> Path | None:
+        ef_dir = self._holo_ef_dir(holo_path)
+        if not ef_dir.is_dir():
+            return None
+        candidates = sorted({*ef_dir.rglob("*.h5"), *ef_dir.rglob("*.hdf5")})
+        if not candidates:
+            return None
+
+        def candidate_rank(path: Path) -> tuple[int, str]:
+            has_h5_parent = any(parent.name.lower() == "h5" for parent in path.parents)
+            exact_stem = path.stem == holo_path.stem
+            if has_h5_parent and exact_stem:
+                rank = 0
+            elif exact_stem:
+                rank = 1
+            elif has_h5_parent:
+                rank = 2
+            else:
+                rank = 3
+            return rank, str(path).lower()
+
+        return min(candidates, key=candidate_rank)
+
+    def _resolve_holo_context(self, holo_path: Path) -> HoloInputContext:
+        holo_path = holo_path.expanduser()
+        if holo_path.suffix.lower() != ".holo":
+            raise ValueError(f"File is not a .holo file: {holo_path}")
+        if not holo_path.is_file():
+            raise FileNotFoundError(f"Holo file does not exist: {holo_path}")
+
+        ef_dir = self._holo_ef_dir(holo_path)
+        h5_path = self._find_holo_ef_h5(holo_path)
+        if h5_path is None:
+            raise FileNotFoundError(f"No .h5/.hdf5 file found under {ef_dir}")
+        return HoloInputContext(
+            holo_path=holo_path,
+            ef_dir=ef_dir,
+            h5_path=h5_path,
+            output_dir=self._holo_output_dir(holo_path),
+        )
+
+    def _set_holo_status_visible(self, visible: bool) -> None:
+        for label_name in ("minimal_holo_status_label", "advanced_holo_status_label"):
+            label = getattr(self, label_name, None)
+            if label is not None:
+                if visible:
+                    label.grid()
+                else:
+                    label.grid_remove()
+
+    def _set_holo_status_color(self, found: bool) -> None:
+        color = "#3fb37f" if found else "#d65f5f"
+        for label_name in ("minimal_holo_status_label", "advanced_holo_status_label"):
+            label = getattr(self, label_name, None)
+            if label is not None:
+                label.configure(fg=color)
+
+    def _update_holo_status_labels(self) -> None:
+        raw_holo_value = (self.holo_input_var.get() or "").strip()
+        if not raw_holo_value:
+            self.holo_display_path_var.set("No .holo selected")
+            self.holo_status_var.set("")
+            self.holo_output_path_var.set("Output path: -")
+            self._set_holo_status_visible(False)
+            return
+
+        self._set_holo_status_visible(True)
+        holo_path = Path(raw_holo_value)
+        self.holo_display_path_var.set(str(holo_path))
+        output_dir = self._holo_output_dir(holo_path)
+        self.holo_output_path_var.set(f"Output path: {output_dir}")
+
+        h5_path = self._find_holo_ef_h5(holo_path)
+        if h5_path is None:
+            self.holo_status_var.set(
+                f"EF h5 not found under {self._holo_ef_dir(holo_path)}"
+            )
+            self._set_holo_status_color(False)
+        else:
+            self.holo_status_var.set("EF h5 found")
+            self._set_holo_status_color(True)
 
     def _update_minimal_path_labels(self) -> None:
         raw_value = (self.batch_input_var.get() or "").strip()
@@ -753,6 +1010,7 @@ class ProcessApp(_BaseAppTk):
         self._set_progress_units(self._progress_completed_units + units)
 
     def _apply_input_defaults(self, input_path: Path) -> None:
+        self.input_convention_var.set("legacy")
         output_dir = input_path if input_path.is_dir() else input_path.parent
 
         self.batch_output_var.set(str(output_dir))
@@ -1037,7 +1295,7 @@ class ProcessApp(_BaseAppTk):
         selected_header = ttk.Label(self.pipeline_library_inner, text="Selected")
         selected_header.grid(row=0, column=0, sticky="w", pady=(0, 6))
         status_header = ttk.Label(self.pipeline_library_inner, text="Status")
-        status_header.grid(row=0, column=1, sticky="w", padx=(12, 0), pady=(0, 6))
+        status_header.grid(row=0, column=1, sticky="w", padx=(12, 18), pady=(0, 6))
         self._bind_vertical_mousewheel(selected_header, self.pipeline_library_canvas)
         self._bind_vertical_mousewheel(status_header, self.pipeline_library_canvas)
 
@@ -1061,7 +1319,7 @@ class ProcessApp(_BaseAppTk):
 
             status_text = self._pipeline_status_text(pipeline)
             status = ttk.Label(self.pipeline_library_inner, text=status_text)
-            status.grid(row=idx, column=1, sticky="w", padx=(12, 0), pady=(0, 6))
+            status.grid(row=idx, column=1, sticky="w", padx=(12, 18), pady=(0, 6))
             self._bind_vertical_mousewheel(status, self.pipeline_library_canvas)
 
             tip_text = self._descriptor_tooltip_text(pipeline)
@@ -1082,7 +1340,7 @@ class ProcessApp(_BaseAppTk):
         selected_header = ttk.Label(self.postprocess_library_inner, text="Selected")
         selected_header.grid(row=0, column=0, sticky="w", pady=(0, 6))
         status_header = ttk.Label(self.postprocess_library_inner, text="Status")
-        status_header.grid(row=0, column=1, sticky="w", padx=(12, 0), pady=(0, 6))
+        status_header.grid(row=0, column=1, sticky="w", padx=(12, 18), pady=(0, 6))
         self._bind_vertical_mousewheel(selected_header, self.postprocess_library_canvas)
         self._bind_vertical_mousewheel(status_header, self.postprocess_library_canvas)
 
@@ -1106,7 +1364,7 @@ class ProcessApp(_BaseAppTk):
 
             status_text = self._postprocess_status_text(postprocess)
             status = ttk.Label(self.postprocess_library_inner, text=status_text)
-            status.grid(row=idx, column=1, sticky="w", padx=(12, 0), pady=(0, 6))
+            status.grid(row=idx, column=1, sticky="w", padx=(12, 18), pady=(0, 6))
             self._bind_vertical_mousewheel(status, self.postprocess_library_canvas)
 
             tip_text = self._descriptor_tooltip_text(postprocess)
@@ -1358,6 +1616,38 @@ class ProcessApp(_BaseAppTk):
             self.batch_input_var.set(path)
             self._apply_input_defaults(Path(path))
 
+    def choose_holo_file(self) -> None:
+        path = filedialog.askopenfilename(
+            filetypes=[("Holo files", "*.holo"), ("All files", "*.*")],
+            initialdir=self.holo_input_var.get() or self.batch_input_var.get() or None,
+            title="Select base .holo file",
+        )
+        if path:
+            self._apply_holo_input(Path(path))
+
+    def _apply_holo_input(self, holo_path: Path) -> None:
+        self.input_convention_var.set("holo")
+        self.holo_input_var.set(str(holo_path))
+        self.batch_zip_var.set(False)
+        self.batch_zip_name_var.set(self._default_archive_name(holo_path))
+
+        h5_path = self._find_holo_ef_h5(holo_path)
+        if h5_path is not None:
+            self.batch_input_var.set(str(h5_path))
+            self.batch_output_var.set(str(self._holo_output_dir(holo_path)))
+        else:
+            self.batch_input_var.set("")
+            self.batch_output_var.set(str(self._holo_output_dir(holo_path)))
+
+        if hasattr(self, "minimal_input_tabs"):
+            try:
+                self.minimal_input_tabs.select(self.minimal_holo_tab)
+            except tk.TclError:
+                pass
+        self._update_holo_status_labels()
+        self._reset_progress()
+        self._set_minimal_status("Ready.")
+
     def choose_batch_output(self) -> None:
         path = filedialog.askdirectory(
             initialdir=self.batch_output_var.get() or None,
@@ -1366,16 +1656,61 @@ class ProcessApp(_BaseAppTk):
         if path:
             self.batch_output_var.set(path)
 
+    def _uses_holo_input_convention(self) -> bool:
+        return (
+            self.input_convention_var.get() == "holo"
+            or self.ui_mode == "sandbox_advanced"
+        )
+
+    def _reset_holo_output_dir(self, context: HoloInputContext) -> None:
+        expected_output_dir = self._holo_output_dir(context.holo_path).resolve()
+        output_dir = context.output_dir.resolve()
+        expected_parent = self._holo_dataset_dir(context.holo_path).resolve()
+        if (
+            output_dir != expected_output_dir
+            or output_dir.parent != expected_parent
+            or not output_dir.name.endswith("_AE")
+        ):
+            raise RuntimeError(
+                f"Refusing to overwrite unexpected output path: {output_dir}"
+            )
+
+        if output_dir.exists():
+            if not output_dir.is_dir():
+                raise RuntimeError(
+                    f"Output path exists and is not a folder: {output_dir}"
+                )
+            shutil.rmtree(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
     def run_batch(self) -> None:
         self._reset_progress()
-        data_value = (self.batch_input_var.get() or "").strip()
+        holo_mode = self._uses_holo_input_convention()
+        data_value = (
+            (self.holo_input_var.get() or "").strip()
+            if holo_mode
+            else (self.batch_input_var.get() or "").strip()
+        )
         if not data_value:
             messagebox.showwarning(
                 "Missing input",
-                "Select a folder, HDF5 file, or .zip archive to process.",
+                (
+                    "Select a .holo file to process."
+                    if holo_mode
+                    else "Select a folder, HDF5 file, or .zip archive to process."
+                ),
             )
             return
         data_path = Path(data_value).expanduser()
+        holo_context: HoloInputContext | None = None
+        if holo_mode:
+            try:
+                holo_context = self._resolve_holo_context(data_path)
+            except Exception as exc:  # noqa: BLE001
+                self._update_holo_status_labels()
+                messagebox.showerror("Invalid holo input", str(exc))
+                self._set_minimal_status("Run failed.")
+                return
 
         selected_names = [
             pipeline.name
@@ -1436,21 +1771,40 @@ class ProcessApp(_BaseAppTk):
             )
             return
 
-        base_output_value = (self.batch_output_var.get() or "").strip()
-        base_output_dir = (
-            Path(base_output_value).expanduser() if base_output_value else Path.cwd()
-        )
-        if not base_output_dir.is_absolute():
-            base_output_dir = Path.cwd() / base_output_dir
-        base_output_dir.mkdir(parents=True, exist_ok=True)
+        if holo_context is not None:
+            base_output_dir = holo_context.output_dir
+            try:
+                self._reset_holo_output_dir(holo_context)
+            except Exception as exc:  # noqa: BLE001
+                messagebox.showerror("Invalid output", str(exc))
+                self._set_minimal_status("Run failed.")
+                return
+        else:
+            base_output_value = (self.batch_output_var.get() or "").strip()
+            base_output_dir = (
+                Path(base_output_value).expanduser()
+                if base_output_value
+                else Path.cwd()
+            )
+            if not base_output_dir.is_absolute():
+                base_output_dir = Path.cwd() / base_output_dir
+            base_output_dir.mkdir(parents=True, exist_ok=True)
 
         self._reset_batch_output("Starting batch run...\n")
         self._set_minimal_status("Preparing batch...")
 
         tempdir: tempfile.TemporaryDirectory | None = None
         try:
-            data_root, tempdir = self._prepare_data_root(data_path)
-            inputs = self._find_h5_inputs(data_root)
+            if holo_context is not None:
+                data_root = holo_context.ef_dir
+                inputs = [holo_context.h5_path]
+                tempdir = None
+                self._log_batch(f"[INPUT] Holo file -> {holo_context.holo_path}")
+                self._log_batch(f"[INPUT] EF h5 -> {holo_context.h5_path}")
+                self._log_batch(f"[OUTPUT] AE folder -> {holo_context.output_dir}")
+            else:
+                data_root, tempdir = self._prepare_data_root(data_path)
+                inputs = self._find_h5_inputs(data_root)
         except Exception as exc:  # noqa: BLE001
             messagebox.showerror("Invalid input", f"Cannot prepare input: {exc}")
             self._log_batch(f"Error: {exc}")
@@ -1468,9 +1822,10 @@ class ProcessApp(_BaseAppTk):
             style_name=self._progress_primary_style,
             status_text="Running pipelines...",
         )
-        minimal_output_filename = self._minimal_output_filename_for_run(
-            data_path,
-            inputs,
+        output_filename = (
+            self._holo_output_filename(holo_context.holo_path)
+            if holo_context is not None
+            else self._minimal_output_filename_for_run(data_path, inputs)
         )
 
         work_output_dir: Path | None = None
@@ -1493,7 +1848,7 @@ class ProcessApp(_BaseAppTk):
                         pipelines,
                         output_dir,
                         output_relative_parent=relative_parent,
-                        output_filename=minimal_output_filename,
+                        output_filename=output_filename,
                     )
                     processed_outputs.append(combined_output)
                     processed_input_paths.append(h5_path)

@@ -22,8 +22,6 @@ from .core.base import (
     required_pipelines=["waveform_shape_metrics"],
 )
 class VariabilityHeterogeneityPostprocess(BatchPostprocess):
-
-
     def run(self, context: PostprocessContext) -> PostprocessResult:
         if not context.processed_files:
             raise ValueError(
