@@ -16,11 +16,16 @@ from matplotlib.ticker import FormatStrFormatter
 from tkinter import Tk, filedialog
 import html
 import base64
+from angioeye_io.hdf5_io import find_first_existing_path
+from angioeye_io.hdf5_schema import pipeline_path_candidates
+from angioeye_io.archive_io import (
+    replace_folder_in_zip,
+    reset_output_dir,
+)
 
-PIPELINE_ROOT = "/AngioEye/Processing/waveform_shape_metrics"
+WAVEFORM_SHAPE_METRICS_PIPELINE = "waveform_shape_metrics"
 VALID_METRIC_FOLDERS = ["raw", "bandlimited"]
 VALID_VESSELS = ["artery", "vein"]
-
 SELECTED_METRICS = {
     "mu_t_over_T",
     "RI",
@@ -30,33 +35,25 @@ SELECTED_METRICS = {
     "sigma_t_over_T",
     "W50_over_T",
     "W80_over_T",
-    "E_low_over_E_total",
+    "E_LF_over_E_HF",
     "t_max_over_T",
     "t_min_over_T",
-    "Delta_t_over_T",
-    "slope_rise_normalized",
-    "slope_fall_normalized",
-    "t_up_over_T",
-    "t_down_over_T",
-    "crest_factor",
+    "S_rise",
+    "S_fall",
+    "t_rise_over_T",
+    "t_fall_over_T",
+    "CF",
     "Delta_DTI",
     "gamma_t",
     "N_eff_over_T",
     "N_t_over_T",
-    "s_t",
-    "w_t",
-    "s_d",
-    "w_d",
-    "v_end_over_v_mean",
+    "Q_t_skew",
+    "Q_t_width",
+    "Q_d_skew",
+    "Q_d_width",
+    "v_end_over_vbar",
     "E_slope",
     "t50_over_T",
-    "t_phi_over_T",
-    "t_phi_n_over_T",
-    "rho_h",
-    "w_h",
-    "N_h_over_H_minus_1",
-    "D_phi",
-    "s_phi_over_T",
     "eta_h",
 }
 METRIC_ALIASES = {
@@ -65,88 +62,104 @@ METRIC_ALIASES = {
 
 LATEX_FORMULAS = {
     "RI": r"$\rm RI$",
-    "rho_h_90": r"$\rho_{h,90}$",
-    "rho_h_95": r"$\rho_{h,95}$",
-    "crest_factor": r"$\rm CF$",
+    "CF": r"$\rm CF$",
     "t50_over_T": r"$t_{50}/T$",
     "R_VTI": r"$R_{VTI}$",
-    "spectral_entropy": r"$H_{spec}$",
     "mu_t_over_T": r"$\mu_t/T$",
     "PI": r"$\rm PI$",
     "SF_VTI": r"$SF_{VTI}$",
     "sigma_t_over_T": r"$\sigma_t/T$",
-    "delta_phi2": r"$\Delta\phi_2$",
     "t_max_over_T": r"$t_{\mathrm{max}}/T$",
     "t_min_over_T": r"$t_{\mathrm{min}}/T$",
-    "Delta_t_over_T": r"$\Delta_{\mathrm{t}}/T$",
-    "t_up_over_T": r"$t_{\mathrm{up}}/T$",
-    "t_down_over_T": r"$t_{\mathrm{down}}/T$",
-    "S_decay": r"$S_{\mathrm{decay}}$",
+    "t_rise_over_T": r"$t_{\mathrm{rise}}/T$",
+    "t_fall_over_T": r"$t_{\mathrm{fall}}/T$",
     "Delta_DTI": r"$\Delta_{\mathrm{DTI}}$",
-    "E_high_over_E_total": r"$E_{\mathrm{high}}/E_{\mathrm{total}}$",
-    "E_low_over_E_total": r"$E_{\mathrm{low}}/E_{\mathrm{total}}$",
-    "R_SD": r"$R_{SD}$",
-    "slope_fall_normalized": r"$S_{\mathrm{fall}}$",
-    "slope_rise_normalized": r"$S_{\mathrm{rise}}$",
+    "E_LF_over_E_HF": r"$E_{\mathrm{LF}}/E_{\mathrm{HF}}$",
+    "S_fall": r"$S_{\mathrm{fall}}$",
+    "S_rise": r"$S_{\mathrm{rise}}$",
     "gamma_t": r"$\gamma_t$",
-    "mu_h": r"$\mu_h$",
-    "sigma_h": r"$\sigma_h$",
     "N_eff_over_T": r"$N_{\mathrm{eff}}/T$",
-    "E_recon_H_MAX": r"$E_{\mathrm{recon},H_{\max}}$",
-    "s_t": r"$s_{\mathrm{t}}$",
-    "w_t": r"$w_{\mathrm{t}}$",
-    "s_d": r"$s_{\mathrm{d}}$",
-    "w_d": r"$w_{\mathrm{d}}$",
-    "v_end_over_v_mean": r"$R_{EM}$",
+    "Q_t_skew": r"$Q_{\mathrm{t,skew}}$",
+    "Q_t_width": r"$Q_{\mathrm{t,width}}$",
+    "Q_d_skew": r"$Q_{\mathrm{d,skew}}$",
+    "Q_d_width": r"$Q_{\mathrm{d,width}}$",
+    "v_end_over_vbar": r"$v_{\mathrm{end}}/\bar{\mathrm{v}}$",
     "E_slope": r"$E_{\mathrm{slope}}$",
-    "phase_locking_residual": r"$E_{\phi}$",
     "W50_over_T": r"$W_{50}/T$",
     "W80_over_T": r"$W_{80}/T$",
     "N_t_over_T": r"$N_t/T$",
-    "t_phi_n_over_T": r"$t_{\Delta\phi_n}/T$",
-    "t_phi_over_T": r"$t_{\phi}/T$",
-    "D_phi": r"$D_{\phi}$",
-    "s_phi_over_T": r"$s_{\Delta\phi}/T$",
     "eta_h": r"$\eta_h$",
-    "rho_h": r"$\rho_{h}$",
-    "w_h": r"$w_{h}$",
-    "N_h_over_H_minus_1": r"$N_{H}/(H-1)$",
 }
 
 
+def get_metrics_base_candidates(vessel: str) -> list[str]:
+    return pipeline_path_candidates(WAVEFORM_SHAPE_METRICS_PIPELINE, vessel, "global")
 
-def get_metrics_base_path(vessel: str) -> str:
-    return f"{PIPELINE_ROOT}/{vessel}/global"
+
+def extract_group_metrics(group, results_dict, prefix=""):
+
+    for metric_name in group.keys():
+
+        item = group[metric_name]
+
+        full_name = f"{prefix}/{metric_name}" if prefix else metric_name
+
+        # Si sous-dossier -> recurse
+        if isinstance(item, h5py.Group):
+
+            extract_group_metrics(
+                item,
+                results_dict,
+                prefix=full_name
+            )
+
+        # Si dataset -> stats
+        elif isinstance(item, h5py.Dataset):
+
+            try:
+                data = np.array(item, dtype=float)
+
+                results_dict[full_name] = {
+                    "median": np.nanmedian(data),
+                    "std": np.nanstd(data),
+                }
+
+            except (ValueError, TypeError):
+                print(f"Skipping non numeric dataset: {full_name}")
 
 
 def extract_metrics(h5_path):
+
     results = defaultdict(lambda: defaultdict(dict))
 
     with h5py.File(h5_path, "r") as f:
-        for vessel in VALID_VESSELS:
-            metrics_root_path = get_metrics_base_path(vessel)
 
-            if metrics_root_path not in f:
+        for vessel in VALID_VESSELS:
+
+            metrics_root_path = find_first_existing_path(
+                f,
+                get_metrics_base_candidates(vessel)
+            )
+
+            if metrics_root_path is None or metrics_root_path not in f:
                 continue
 
             metrics_root = f[metrics_root_path]
 
             for mode in metrics_root.keys():
+
                 if mode not in VALID_METRIC_FOLDERS:
                     continue
 
                 group = metrics_root[mode]
 
-                for metric_name in group.keys():
-                    dataset = group[metric_name]
-                    data = np.array(dataset, dtype=float)
-
-                    results[mode][vessel][metric_name] = {
-                        "median": np.nanmedian(data),
-                        "std": np.nanstd(data),
-                    }
+                extract_group_metrics(
+                    group,
+                    results[mode][vessel]
+                )
 
     return results
+
 
 def analyze_zip(zip_path):
     all_results = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
@@ -182,10 +195,7 @@ def analyze_zip(zip_path):
                             )
 
     return dict(all_results)
-def reset_output_dir(path):
-    if os.path.isdir(path):
-        shutil.rmtree(path)
-    os.makedirs(path, exist_ok=True)
+
 
 def choose_zip():
     root = Tk()

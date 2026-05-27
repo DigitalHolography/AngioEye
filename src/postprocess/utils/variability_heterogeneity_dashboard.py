@@ -3,7 +3,6 @@ import shutil
 from collections import defaultdict
 from pathlib import Path
 from tkinter import Tk, filedialog
-
 import h5py
 import numpy as np
 import pandas as pd
@@ -32,9 +31,10 @@ EPS = 1e-12
 
 DEFAULT_TOP_N = 10
 
-CONTROL_GROUP_PATTERNS = [
+CONTROL_GROUP_PATTERNS = [  
     r"^control$",
     r"^controle$",
+    r"^controls$",
     r"^ctrl$",
     r"^ctl$",
     r"^healthy$",
@@ -155,6 +155,7 @@ SPATIAL_VARIABILITY_COLUMNS = [
 
 TEMPORAL_VARIABILITY_COLUMNS = [
     "STD_beat_medseg",
+    #"IQR_beat_medseg",
     "MAD_beat_medseg",
     "CV_beat_medseg",
 ]
@@ -337,8 +338,8 @@ def compute_file_higher_metrics_from_segment_array(arr, eps=EPS):
     beat_mad = []
     beat_cv_seg = []
 
-    for b in range(arr.shape[0]):
-        x = arr[b, :, :]
+    for beat_idx in range(arr.shape[0]):
+        x = arr[beat_idx, :, :]
         x = finite_1d(x)
 
         beat_median.append(median_1d(x))
@@ -358,9 +359,9 @@ def compute_file_higher_metrics_from_segment_array(arr, eps=EPS):
     seg_mad_beat = []
     seg_cv_beat = []
 
-    for j in range(arr.shape[1]):
-        for r in range(arr.shape[2]):
-            x = arr[:, j, r]
+    for branch_idx in range(arr.shape[1]):
+        for radius_idx in range(arr.shape[2]):
+            x = arr[:, branch_idx, radius_idx]
             x = finite_1d(x)
 
             seg_std_beat.append(std_1d(x))
@@ -923,6 +924,12 @@ def build_mannwhitney_ranking_table(
         ]
     ]
 
+DESCRIPTOR_LABELS = {
+    "STD": r"$\mathrm{STD}$",
+    "IQR": r"$\mathrm{IQR}$",
+    "MAD": r"$\mathrm{MAD}$",
+    "CV": r"$\mathrm{CV}$",
+}
 
 def get_descriptor_values_for_test(
     results_for_group,
@@ -1415,6 +1422,7 @@ SPATIAL_DESCRIPTOR_MAP = {
 
 TEMPORAL_DESCRIPTOR_MAP = {
     "STD": "STD_beat_medseg",
+    #"IQR": "IQR_beat_medseg",
     "MAD": "MAD_beat_medseg",
     "CV": "CV_beat_medseg",
 }
