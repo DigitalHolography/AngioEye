@@ -166,6 +166,8 @@ def extract_v_pulse_meas(dataset, num_interp_points_t):
 
 
 def _abel_cell_integral(x_abs, r_left, r_right):
+    if x_abs >= r_right:
+        return 0.0
     lower = max(r_left, x_abs)
     upper = r_right
     lower_term = np.sqrt(max(lower**2 - x_abs**2, 0.0))
@@ -175,15 +177,25 @@ def _abel_cell_integral(x_abs, r_left, r_right):
 
 def apply_abel_projection(u_n):
     L = len(u_n)
-    x_grid = np.linspace(0, 1, L)
-    r_gird = np.linspace(0, 1, L + 1)
-    K = np.zeros((L, L))
+    n_half = L // 2
 
-    for i, x in enumerate(x_grid):
-        for j in range(L):
-            K[i, j] = _abel_cell_integral(x, r_gird[j], r_gird[j + 1])
+    u_left = u_n[:n_half]
+    u_right = u_n[n_half:]
+    u_left = u_left[::-1]
+    x_grid = (np.arange(n_half) + 0.5) / n_half
+    r_grid = (np.arange(n_half + 1)) / n_half
+
+    K = np.zeros((n_half, n_half))
+    for i, xi in enumerate(x_grid):
+        for j in range(n_half):
+            K[i, j] = _abel_cell_integral(xi, r_grid[j], r_grid[j + 1])
     print(f"K: {K}")
-    v_model = K @ u_n
+    v_left = K @ u_left
+    v_right = K @ u_right
+
+    v_left = v_left[::-1]
+
+    v_model = np.concatenate([v_left, v_right])
     return v_model
 
 
@@ -355,7 +367,7 @@ def compute_Dn(Vn, model, flag):
 
 
 def generate_harmonic_flow_profile(V, segment_data):
-    v_model_freq = np.zeros(
+    v_model_fft = np.zeros(
         (V.shape[0], V.shape[1], V.shape[2], V.shape[3]), dtype=complex
     )
     for branch_index in range(V.shape[2]):
@@ -406,11 +418,11 @@ def generate_harmonic_flow_profile(V, segment_data):
                 psf_kernel = psf_gaussian(fwhm, pixel_size)
                 v_prof = apply_abel_projection(u_n)
                 v_blurred = convolve(v_prof, psf_kernel, mode="same")
-                v_model_freq[n, :, branch_index, circle_index] = v_blurred
+                v_model_fft[n, :, branch_index, circle_index] = v_blurred
 
-    v_model = np.fft.irfft(v_model_freq, axis=0)
+    v_model = np.fft.irfft(v_model_fft, axis=0)
 
-    return v_model
+    return v_model, v_model_fft
 
 
 @registerPipeline(name="WomersleyModeling")
@@ -453,7 +465,7 @@ class WomersleyModeling(ProcessPipeline):
 
         # v_pulse_fft_filtered, r0_std = profile_analysis()
         segment_data = parabola_fit(v_pulse_fft)
-        v_model = generate_harmonic_flow_profile(v_pulse_fft, segment_data)
+        v_model, v_model_fft = generate_harmonic_flow_profile(v_pulse_fft, segment_data)
 
         metrics: dict = {}
         metrics["dataset_x"] = np.asarray(dataset_x)
@@ -464,6 +476,7 @@ class WomersleyModeling(ProcessPipeline):
         metrics["v_pulse_meas_n1"] = np.asarray(v_pulse_meas_n1)
         metrics["v_pulse_meas_dc"] = np.asarray(v_pulse_meas_dc)
         metrics["v_model"] = np.asarray(v_model)
+        metrics["v_model_fft"] = np.asarray(v_model_fft)
         # metrics["v_profile_fft_filtered"] = np.asarray(v_pulse_fft_filtered)
         # metrics["r0_std"] = r0_std
 
