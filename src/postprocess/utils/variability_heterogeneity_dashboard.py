@@ -139,7 +139,7 @@ COLUMN_LABELS = {
     "IQR_seg_medbeat": r"$\mathrm{med}_{b}(\mathrm{IQR}_{seg})$",
     "MAD_seg_medbeat": r"$\mathrm{med}_{b}(\mathrm{MAD}_{seg})$",
     "CV_seg_medbeat": r"$\mathrm{med}_{b}(\mathrm{CV}_{seg})$",
-    "MED_beat_medseg": r"$\mathrm{med}_{seg}(\mathrm{med}_{b})$",
+    # Temporal variability
     "STD_beat_medseg": r"$\mathrm{med}_{seg}(\mathrm{STD}_{b})$",
     "IQR_beat_medseg": r"$\mathrm{med}_{seg}(\mathrm{IQR}_{b})$",
     "MAD_beat_medseg": r"$\mathrm{med}_{seg}(\mathrm{MAD}_{b})$",
@@ -357,10 +357,6 @@ def compute_file_higher_metrics_from_segment_array(arr, eps=EPS):
     seg_iqr_beat = []
     seg_mad_beat = []
     seg_cv_beat = []
-    seg_iqr=[]
-    seg_mad=[]
-    seg_std=[]
-    seg_median=[]
 
     for j in range(arr.shape[1]):
         for r in range(arr.shape[2]):
@@ -371,59 +367,22 @@ def compute_file_higher_metrics_from_segment_array(arr, eps=EPS):
             seg_iqr_beat.append(iqr_1d(x))
             seg_mad_beat.append(mad_1d(x))
             seg_cv_beat.append(cv_1d(x, eps=eps))
-            seg_iqr.append(iqr_1d(x))
-            seg_mad.append(mad_1d(x))
-            seg_std.append(std_1d(x))
-            seg_median.append(median_1d(x))
 
     seg_std_beat = np.asarray(seg_std_beat, dtype=float)
     seg_iqr_beat = np.asarray(seg_iqr_beat, dtype=float)
     seg_mad_beat = np.asarray(seg_mad_beat, dtype=float)
     seg_cv_beat = np.asarray(seg_cv_beat, dtype=float)
-    seg_iqr = np.asarray(seg_iqr, dtype=float)
-    seg_mad = np.asarray(seg_mad, dtype=float)
-    seg_median = np.asarray(seg_median, dtype=float)
-    seg_std = np.asarray(seg_std, dtype=float)
 
     return {
-        "MED_seg_medbeat": (
-            float(np.nanmedian(beat_median))
-            if np.any(np.isfinite(beat_median))
-            else np.nan
-        ),
-        "STD_seg_medbeat": (
-            float(np.nanmedian(beat_std)) if np.any(np.isfinite(beat_std)) else np.nan
-        ),
-        "IQR_seg_medbeat": (
-            float(np.nanmedian(beat_iqr)) if np.any(np.isfinite(beat_iqr)) else np.nan
-        ),
-        "MAD_seg_medbeat": (
-            float(np.nanmedian(beat_mad)) if np.any(np.isfinite(beat_mad)) else np.nan
-        ),
-        "CV_seg_medbeat": (
-            float(np.nanmedian(beat_cv_seg))
-            if np.any(np.isfinite(beat_cv_seg))
-            else np.nan
-        ),
-        "MED_beat_medseg": (
-            float(np.nanmedian(seg_median))
-            if np.any(np.isfinite(seg_median))
-            else np.nan
-        ),
-        "STD_beat_medseg": (
-            float(np.nanmedian(seg_std)) if np.any(np.isfinite(seg_std)) else np.nan
-        ),
-        "IQR_beat_medseg": (
-            float(np.nanmedian(seg_iqr)) if np.any(np.isfinite(seg_iqr)) else np.nan
-        ),
-        "MAD_beat_medseg": (
-            float(np.nanmedian(seg_mad)) if np.any(np.isfinite(seg_mad)) else np.nan
-        ),
-        "CV_beat_medseg": (
-            float(np.nanmedian(seg_cv_beat))
-            if np.any(np.isfinite(seg_cv_beat))
-            else np.nan
-        ),
+        "MED_seg_medbeat": nanmedian_or_nan(beat_median),
+        "STD_seg_medbeat": nanmedian_or_nan(beat_std),
+        "IQR_seg_medbeat": nanmedian_or_nan(beat_iqr),
+        "MAD_seg_medbeat": nanmedian_or_nan(beat_mad),
+        "CV_seg_medbeat": nanmedian_or_nan(beat_cv_seg),
+        "STD_beat_medseg": nanmedian_or_nan(seg_std_beat),
+        "IQR_beat_medseg": nanmedian_or_nan(seg_iqr_beat),
+        "MAD_beat_medseg": nanmedian_or_nan(seg_mad_beat),
+        "CV_beat_medseg": nanmedian_or_nan(seg_cv_beat),
     }
 
 
@@ -551,25 +510,25 @@ def format_mean_std(values, digits=3):
     return f"{mu:.{digits}f} $\\pm$ {sd:.{digits}f}"
 
 
-def build_group_table(results_for_group, metrics=INPUT_METRICS, digits=3, mode="spatial"):
-    if mode == "spatial":
-        higher_metric_order = [
-            "MED_seg_medbeat",
-            "STD_seg_medbeat",
-            "IQR_seg_medbeat",
-            "MAD_seg_medbeat",
-            "CV_seg_medbeat",
-        ]
-    elif mode == "temporal":
-        higher_metric_order = [
-            "MED_beat_medseg",
-            "STD_beat_medseg",
-            "IQR_beat_medseg",
-            "MAD_beat_medseg",
-            "CV_beat_medseg",
-        ]
-    else:
-        raise ValueError("mode must be 'spatial' or 'temporal'")
+def format_float(value, digits=4):
+    if value is None or not np.isfinite(value):
+        return "NA"
+    return f"{float(value):.{digits}g}"
+
+
+def format_pvalue_latex(value, sig_digits=3, threshold=1e-3):
+    """
+    Formats p-values for LaTeX tables.
+
+    Examples
+    --------
+    1.03e-10 -> $1.03 \times 10^{-10}$
+    0.0441   -> 0.0441
+    """
+    if value is None or not np.isfinite(value):
+        return "NA"
+
+    value = float(value)
 
     if value == 0.0:
         return r"$<10^{-300}$"
@@ -628,6 +587,7 @@ def build_group_table_with_columns(
 
     for metric_name in metrics:
         metric_block = results_for_group.get(metric_name, {})
+
         row = {
             "Metric": metric_label(metric_name),
         }
@@ -1613,13 +1573,8 @@ def dataframe_to_latex_table(
     if label:
         lines.append(f"\\label{{{label}}}")
 
-def export_group_tables(zip_path, metrics=INPUT_METRICS, mode=SEGMENT_MODE, digits=3):
-    base_dir = Path(zip_path).parent / "latex_tables"
-    csv_dir = base_dir / "csv"
-    tex_dir = base_dir / "tex"
-
-    csv_dir.mkdir(parents=True, exist_ok=True)
-    tex_dir.mkdir(parents=True, exist_ok=True)
+    lines.append(latex_tabular)
+    lines.append(r"\end{table}")
 
     return "\n".join(lines)
 
@@ -1731,7 +1686,8 @@ def export_group_tables(
     # Raw tables for every group, including control.
     # ------------------------------------------------------------------
     for group_name in sorted(results.keys()):
-        print("Building tables for group:", group_name)
+        print("Building raw spatial and temporal tables for group:", group_name)
+        safe_group = safe_name(group_name)
 
         df_spatial = build_spatial_group_table(
             results[group_name],
@@ -1749,51 +1705,360 @@ def export_group_tables(
             )
         )
 
-        # === SPATIAL ===
-        df_spatial = build_group_table(results[group_name], metrics, digits, mode="spatial")
-
-        csv_spatial = csv_dir / f"{safe_group}_spatial_table.csv"
-        tex_spatial = tex_dir / f"{safe_group}_spatial_table.tex"
-
-        df_spatial.to_csv(csv_spatial, index=False)
-
-        latex_spatial = dataframe_to_latex_table(
-            df_spatial,
-            caption=f"Spatial variability metrics for group {group_name}",
-            label=f"tab:{safe_group}_spatial",
+        df_temporal = build_temporal_group_table(
+            results[group_name],
+            metrics=metrics,
+            digits=digits,
+        )
+        generated.extend(
+            save_table(
+                df_temporal,
+                temporal_raw_dir / f"{safe_group}_temporal_variability_table.csv",
+                temporal_raw_dir / f"{safe_group}_temporal_variability_table.tex",
+                caption=f"Raw temporal variability metrics for group {latex_escape_text(group_name)}",
+                label=f"tab:{safe_group}_temporal_variability_raw",
+                digits=digits,
+            )
         )
 
-        with open(tex_spatial, "w", encoding="utf-8") as f:
-            f.write(latex_spatial)
+    # ------------------------------------------------------------------
+    # Control vs every other group.
+    # ------------------------------------------------------------------
+    control_results = results[control_group]
 
-        # === TEMPORAL ===
-        df_temporal = build_group_table(results[group_name], metrics, digits, mode="temporal")
+    for group_name in sorted(results.keys()):
+        if group_name == control_group:
+            continue
 
-        csv_temporal = csv_dir / f"{safe_group}_temporal_table.csv"
-        tex_temporal = tex_dir / f"{safe_group}_temporal_table.tex"
+        print(f"Building comparison tables: {group_name} vs {control_group}")
+        group_results = results[group_name]
+        safe_group = safe_name(group_name)
+        pair = f"{safe_group}_vs_{safe_control}"
 
-        df_temporal.to_csv(csv_temporal, index=False)
-
-        latex_temporal = dataframe_to_latex_table(
-            df_temporal,
-            caption=f"Temporal variability metrics for group {group_name}",
-            label=f"tab:{safe_group}_temporal",
+        # ------------------------------
+        # Spatial comparison tables
+        # ------------------------------
+        df = build_variability_ranking_table(
+            group_results,
+            higher_metrics=SPATIAL_VARIABILITY_COLUMNS,
+            metrics=metrics,
+            n=top_n,
+            ascending=False,
+            digits=digits,
+        )
+        generated.extend(
+            save_table(
+                df,
+                spatial_cmp_dir / f"{pair}_n_most_spatially_variable_metrics.csv",
+                spatial_cmp_dir / f"{pair}_n_most_spatially_variable_metrics.tex",
+                caption=f"Top {top_n} most spatially variable metrics in group {latex_escape_text(group_name)}",
+                label=f"tab:{pair}_most_spatially_variable",
+                digits=digits,
+            )
         )
 
-        with open(tex_temporal, "w", encoding="utf-8") as f:
-            f.write(latex_temporal)
+        df = build_variability_ranking_table(
+            group_results,
+            higher_metrics=SPATIAL_VARIABILITY_COLUMNS,
+            metrics=metrics,
+            n=top_n,
+            ascending=True,
+            digits=digits,
+        )
+        generated.extend(
+            save_table(
+                df,
+                spatial_cmp_dir / f"{pair}_n_least_spatially_variable_metrics.csv",
+                spatial_cmp_dir / f"{pair}_n_least_spatially_variable_metrics.tex",
+                caption=f"Top {top_n} least spatially variable metrics in group {latex_escape_text(group_name)}",
+                label=f"tab:{pair}_least_spatially_variable",
+                digits=digits,
+            )
+        )
 
-        generated.extend([
-            csv_spatial, tex_spatial,
-            csv_temporal, tex_temporal
-        ])
+        df = build_contrast_table(
+            control_results,
+            group_results,
+            higher_metrics=SPATIAL_VARIABILITY_COLUMNS,
+            control_name=control_group,
+            group_name=group_name,
+            metrics=metrics,
+            n=top_n,
+            digits=digits,
+        )
+        generated.extend(
+            save_table(
+                df,
+                spatial_cmp_dir / f"{pair}_strongest_spatial_variability_contrast.csv",
+                spatial_cmp_dir / f"{pair}_strongest_spatial_variability_contrast.tex",
+                caption=f"Top {top_n} strongest spatial variability contrasts between {latex_escape_text(group_name)} and {latex_escape_text(control_group)}",
+                label=f"tab:{pair}_strongest_spatial_contrast",
+                digits=digits,
+            )
+        )
 
-    
-    replace_folder_in_zip(zip_path, base_dir, arc_folder="latex_tables")
+        df = build_mannwhitney_ranking_table(
+            control_results,
+            group_results,
+            higher_metrics=SPATIAL_VARIABILITY_COLUMNS,
+            control_name=control_group,
+            group_name=group_name,
+            metrics=metrics,
+            n=None,
+            digits=digits,
+        )
+        generated.extend(
+            save_table(
+                df,
+                spatial_cmp_dir / f"{pair}_best_spatial_variability_mannwhitney.csv",
+                spatial_cmp_dir / f"{pair}_best_spatial_variability_mannwhitney.tex",
+                caption=f"Best spatial variability metrics between {latex_escape_text(control_group)} and {latex_escape_text(group_name)}, ranked by Mann-Whitney p-value",
+                label=f"tab:{pair}_best_spatial_mannwhitney",
+                digits=digits,
+            )
+        )
 
-    
-    if base_dir.is_dir():
-        shutil.rmtree(base_dir)
+        df = build_descriptor_pvalue_summary_table(
+            control_results,
+            group_results,
+            descriptor_map=SPATIAL_DESCRIPTOR_MAP,
+            control_name=control_group,
+            group_name=group_name,
+            metrics=SPATIAL_SELECTED_METRICS,
+            digits=digits,
+        )
+        generated.extend(
+            save_table(
+                df,
+                spatial_cmp_dir / f"{pair}_spatial_descriptor_pvalue_summary_RI_PI.csv",
+                spatial_cmp_dir / f"{pair}_spatial_descriptor_pvalue_summary_RI_PI.tex",
+                caption=(
+                    f"Spatial descriptor-specific Mann-Whitney p-values between "
+                    f"{control_group} and {group_name} for $\rm RI$ and $\rm PI$"
+                ),
+                label=f"tab:{pair}_spatial_descriptor_pvalue_summary",
+                digits=digits,
+            )
+        )
+
+        df = build_group_separation_metrics_table(
+            control_results,
+            group_results,
+            higher_metrics=SPATIAL_VARIABILITY_COLUMNS,
+            control_name=control_group,
+            group_name=group_name,
+            metrics=SPATIAL_SELECTED_METRICS,
+            digits=digits,
+        )
+        generated.extend(
+            save_table(
+                df,
+                spatial_cmp_dir / f"{pair}_spatial_group_separation_metrics_RI_PI.csv",
+                spatial_cmp_dir / f"{pair}_spatial_group_separation_metrics_RI_PI.tex",
+                caption=(
+                    f"Spatial group-separation metrics between {control_group} and "
+                    f"{group_name} for $\rm RI$ and $\rm PI$"
+                ),
+                label=f"tab:{pair}_spatial_group_separation_metrics",
+                digits=digits,
+            )
+        )
+
+        df = build_auc_separability_ranking_table(
+            control_results,
+            group_results,
+            higher_metrics=SPATIAL_VARIABILITY_COLUMNS,
+            control_name=control_group,
+            group_name=group_name,
+            metrics=metrics,
+            digits=digits,
+        )
+        generated.extend(
+            save_table(
+                df,
+                spatial_cmp_dir
+                / f"{pair}_spatial_auc_separability_ranking_all_metrics.csv",
+                spatial_cmp_dir
+                / f"{pair}_spatial_auc_separability_ranking_all_metrics.tex",
+                caption=(
+                    f"Spatial variability metrics between {latex_escape_text(control_group)} "
+                    f"and {latex_escape_text(group_name)}, ranked by AUC separability"
+                ),
+                label=f"tab:{pair}_spatial_auc_separability_ranking",
+                digits=digits,
+            )
+        )
+
+        # ------------------------------
+        # Temporal comparison tables
+        # ------------------------------
+        df = build_variability_ranking_table(
+            group_results,
+            higher_metrics=TEMPORAL_VARIABILITY_COLUMNS,
+            metrics=metrics,
+            n=top_n,
+            ascending=False,
+            digits=digits,
+        )
+        generated.extend(
+            save_table(
+                df,
+                temporal_cmp_dir / f"{pair}_n_most_temporally_variable_metrics.csv",
+                temporal_cmp_dir / f"{pair}_n_most_temporally_variable_metrics.tex",
+                caption=f"Top {top_n} most temporally variable metrics in group {latex_escape_text(group_name)}",
+                label=f"tab:{pair}_most_temporally_variable",
+                digits=digits,
+            )
+        )
+
+        df = build_variability_ranking_table(
+            group_results,
+            higher_metrics=TEMPORAL_VARIABILITY_COLUMNS,
+            metrics=metrics,
+            n=top_n,
+            ascending=True,
+            digits=digits,
+        )
+        generated.extend(
+            save_table(
+                df,
+                temporal_cmp_dir / f"{pair}_n_least_temporally_variable_metrics.csv",
+                temporal_cmp_dir / f"{pair}_n_least_temporally_variable_metrics.tex",
+                caption=f"Top {top_n} least temporally variable metrics in group {latex_escape_text(group_name)}",
+                label=f"tab:{pair}_least_temporally_variable",
+                digits=digits,
+            )
+        )
+
+        df = build_contrast_table(
+            control_results,
+            group_results,
+            higher_metrics=TEMPORAL_VARIABILITY_COLUMNS,
+            control_name=control_group,
+            group_name=group_name,
+            metrics=metrics,
+            n=top_n,
+            digits=digits,
+        )
+        generated.extend(
+            save_table(
+                df,
+                temporal_cmp_dir
+                / f"{pair}_strongest_temporal_variability_contrast.csv",
+                temporal_cmp_dir
+                / f"{pair}_strongest_temporal_variability_contrast.tex",
+                caption=f"Top {top_n} strongest temporal variability contrasts between {latex_escape_text(group_name)} and {latex_escape_text(control_group)}",
+                label=f"tab:{pair}_strongest_temporal_contrast",
+                digits=digits,
+            )
+        )
+
+        df = build_mannwhitney_ranking_table(
+            control_results,
+            group_results,
+            higher_metrics=TEMPORAL_VARIABILITY_COLUMNS,
+            control_name=control_group,
+            group_name=group_name,
+            metrics=metrics,
+            n=None,
+            digits=digits,
+        )
+        temporal_mannwhitney_caption = (
+            "Best temporal variability metrics between "
+            f"{latex_escape_text(control_group)} and {latex_escape_text(group_name)}, "
+            "ranked by Mann-Whitney p-value"
+        )
+        generated.extend(
+            save_table(
+                df,
+                temporal_cmp_dir / f"{pair}_best_temporal_variability_mannwhitney.csv",
+                temporal_cmp_dir / f"{pair}_best_temporal_variability_mannwhitney.tex",
+                caption=temporal_mannwhitney_caption,
+                label=f"tab:{pair}_best_temporal_mannwhitney",
+                digits=digits,
+            )
+        )
+
+        df = build_descriptor_pvalue_summary_table(
+            control_results,
+            group_results,
+            descriptor_map=TEMPORAL_DESCRIPTOR_MAP,
+            control_name=control_group,
+            group_name=group_name,
+            metrics=TEMPORAL_SELECTED_METRICS,
+            digits=digits,
+        )
+        generated.extend(
+            save_table(
+                df,
+                temporal_cmp_dir
+                / f"{pair}_temporal_descriptor_pvalue_summary_Nt_Neff.csv",
+                temporal_cmp_dir
+                / f"{pair}_temporal_descriptor_pvalue_summary_Nt_Neff.tex",
+                caption=(
+                    f"Temporal descriptor-specific Mann-Whitney p-values between "
+                    f"{control_group} and {group_name} for $N_t/T$ and "
+                    f"$N_{{\mathrm{{eff}}}}/T$"
+                ),
+                label=f"tab:{pair}_temporal_descriptor_pvalue_summary",
+                digits=digits,
+            )
+        )
+
+        df = build_group_separation_metrics_table(
+            control_results,
+            group_results,
+            higher_metrics=TEMPORAL_VARIABILITY_COLUMNS,
+            control_name=control_group,
+            group_name=group_name,
+            metrics=TEMPORAL_SELECTED_METRICS,
+            digits=digits,
+        )
+        generated.extend(
+            save_table(
+                df,
+                temporal_cmp_dir
+                / f"{pair}_temporal_group_separation_metrics_Nt_Neff.csv",
+                temporal_cmp_dir
+                / f"{pair}_temporal_group_separation_metrics_Nt_Neff.tex",
+                caption=(
+                    f"Temporal group-separation metrics between {control_group} and "
+                    f"{group_name} for $N_t/T$ and $N_{{\mathrm{{eff}}}}/T$"
+                ),
+                label=f"tab:{pair}_temporal_group_separation_metrics",
+                digits=digits,
+            )
+        )
+
+        df = build_auc_separability_ranking_table(
+            control_results,
+            group_results,
+            higher_metrics=TEMPORAL_VARIABILITY_COLUMNS,
+            control_name=control_group,
+            group_name=group_name,
+            metrics=metrics,
+            digits=digits,
+        )
+        generated.extend(
+            save_table(
+                df,
+                temporal_cmp_dir
+                / f"{pair}_temporal_auc_separability_ranking_all_metrics.csv",
+                temporal_cmp_dir
+                / f"{pair}_temporal_auc_separability_ranking_all_metrics.tex",
+                caption=(
+                    f"Temporal variability metrics between {latex_escape_text(control_group)} "
+                    f"and {latex_escape_text(group_name)}, ranked by AUC separability"
+                ),
+                label=f"tab:{pair}_temporal_auc_separability_ranking",
+                digits=digits,
+            )
+        )
+
+    replace_folder_in_zip(zip_path, out_dir, arc_folder="latex_tables")
+
+    if out_dir.is_dir():
+        shutil.rmtree(out_dir)
 
     print(
         f"Generated {len(generated)} files and inserted them into {zip_path} under latex_tables/."
