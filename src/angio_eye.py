@@ -122,6 +122,7 @@ class ProcessApp(_BaseAppTk):
         self.batch_zip_name_var = tk.StringVar(value="outputs.zip")
         self.batch_progress_var = tk.DoubleVar(value=0.0)
         self.input_convention_var = tk.StringVar(value="legacy")
+        self.holo_input_paths: list[Path] = []
         self.holo_input_var = tk.StringVar()
         self.holo_status_var = tk.StringVar()
         self.holo_output_path_var = tk.StringVar(value="Output path: -")
@@ -725,6 +726,16 @@ class ProcessApp(_BaseAppTk):
         self._update_minimal_path_labels()
 
     def _handle_dropped_paths(self, dropped_paths: Sequence[Path]) -> bool:
+        if dropped_paths and all(
+            path.is_file() and path.suffix.lower() == ".holo"
+            for path in dropped_paths
+        ):
+            self._apply_holo_inputs(dropped_paths)
+            self._log_batch(
+                f"[INPUT] Drag and drop -> {len(dropped_paths)} .holo file(s)"
+            )
+            return True
+
         for dropped_path in dropped_paths:
             if dropped_path.is_file() and dropped_path.suffix.lower() in {
                 ".h5",
@@ -734,10 +745,6 @@ class ProcessApp(_BaseAppTk):
                 self.input_convention_var.set("legacy")
                 self.batch_input_var.set(str(dropped_path))
                 self._apply_input_defaults(dropped_path)
-                self._log_batch(f"[INPUT] Drag and drop -> {dropped_path}")
-                return True
-            if dropped_path.is_file() and dropped_path.suffix.lower() == ".holo":
-                self._apply_holo_input(dropped_path)
                 self._log_batch(f"[INPUT] Drag and drop -> {dropped_path}")
                 return True
         return False
@@ -755,7 +762,7 @@ class ProcessApp(_BaseAppTk):
 
         messagebox.showwarning(
             "Unsupported drop",
-            "Drop a single .holo, .h5, .hdf5, or .zip file into the window.",
+            "Drop .holo file(s), or a single .h5, .hdf5, or .zip file.",
         )
 
     def _default_output_stem(self, input_path: Path) -> str:
@@ -821,49 +828,58 @@ class ProcessApp(_BaseAppTk):
             self._set_holo_status_visible(False)
             return
 
-        raw_holo_value = (self.holo_input_var.get() or "").strip()
-        if not raw_holo_value:
+        holo_paths = self._selected_holo_paths()
+        if not holo_paths:
             self.holo_status_var.set("")
             self.holo_output_path_var.set("Output path: -")
             self._set_holo_status_visible(False)
             return
 
         self._set_holo_status_visible(True)
-        holo_path = Path(raw_holo_value)
-        output_dir = self._holo_output_dir(holo_path)
-        self.holo_output_path_var.set(f"Output path: {output_dir}")
-
-        h5_path = self._find_holo_ef_h5(holo_path)
-        if h5_path is None:
-            self.holo_status_var.set(
-                f"EF h5 not found under {self._holo_ef_dir(holo_path)}"
-            )
-            self._set_holo_status_color(False)
+        if len(holo_paths) == 1:
+            output_text = f"Output path: {self._holo_output_dir(holo_paths[0])}"
         else:
-            self.holo_status_var.set("EF h5 found")
-            self._set_holo_status_color(True)
+            output_text = "Output paths: one *_AE folder per selected .holo"
+        self.holo_output_path_var.set(output_text)
+
+        missing_stems = [
+            path.stem for path in holo_paths if self._find_holo_ef_h5(path) is None
+        ]
+        found_count = len(holo_paths) - len(missing_stems)
+        status = f"{found_count}/{len(holo_paths)} EF found"
+        if missing_stems:
+            status += f" - missing: {', '.join(missing_stems)}"
+        self.holo_status_var.set(status)
+        self._set_holo_status_color(not missing_stems)
 
     def _update_minimal_path_labels(self) -> None:
         holo_mode = self._uses_holo_input_convention()
-        raw_value = (
-            (self.holo_input_var.get() or "").strip()
-            if holo_mode
-            else (self.batch_input_var.get() or "").strip()
-        )
+        holo_paths = self._selected_holo_paths() if holo_mode else []
+        raw_value = "" if holo_mode else (self.batch_input_var.get() or "").strip()
         if not raw_value:
-            self.minimal_input_path_var.set("No input selected")
-            self.minimal_output_name_var.set("Output name: -")
+            if holo_paths:
+                if len(holo_paths) == 1:
+                    self.minimal_input_path_var.set(str(holo_paths[0]))
+                    self.minimal_output_name_var.set(
+                        f"Output name: {self._holo_output_filename(holo_paths[0])}"
+                    )
+                else:
+                    stems = ", ".join(path.stem for path in holo_paths)
+                    self.minimal_input_path_var.set(
+                        f"{len(holo_paths)} .holo files selected: {stems}"
+                    )
+                    self.minimal_output_name_var.set(
+                        "Output names: one *_AE.h5 per selected .holo"
+                    )
+            else:
+                self.minimal_input_path_var.set("No input selected")
+                self.minimal_output_name_var.set("Output name: -")
         else:
             input_path = Path(raw_value)
             self.minimal_input_path_var.set(str(input_path))
-            if holo_mode:
-                self.minimal_output_name_var.set(
-                    f"Output name: {self._holo_output_filename(input_path)}"
-                )
-            else:
-                self.minimal_output_name_var.set(
-                    f"Output name: {self._default_output_artifact_name(input_path)}"
-                )
+            self.minimal_output_name_var.set(
+                f"Output name: {self._default_output_artifact_name(input_path)}"
+            )
 
         output_value = (self.batch_output_var.get() or "").strip()
         self.minimal_output_path_var.set(output_value or "No output folder selected")
@@ -930,6 +946,8 @@ class ProcessApp(_BaseAppTk):
 
     def _apply_input_defaults(self, input_path: Path) -> None:
         self.input_convention_var.set("legacy")
+        self.holo_input_paths = []
+        self.holo_input_var.set("")
         output_dir = input_path if input_path.is_dir() else input_path.parent
 
         self.batch_output_var.set(str(output_dir))
@@ -1527,7 +1545,7 @@ class ProcessApp(_BaseAppTk):
             self._apply_input_defaults(Path(path))
 
     def choose_batch_file(self) -> None:
-        path = filedialog.askopenfilename(
+        selected_paths = filedialog.askopenfilenames(
             filetypes=[
                 ("AngioEye inputs", "*.h5 *.hdf5 *.holo *.zip"),
                 ("HDF5 files", "*.h5 *.hdf5"),
@@ -1538,26 +1556,55 @@ class ProcessApp(_BaseAppTk):
             initialdir=self.batch_input_var.get() or os.path.abspath("h5_example"),
             title="Select HDF5, .holo, or .zip input",
         )
-        if path:
-            input_path = Path(path)
+        if selected_paths:
+            input_paths = [Path(path) for path in selected_paths]
+            if all(path.suffix.lower() == ".holo" for path in input_paths):
+                self._apply_holo_inputs(input_paths)
+                return
+            if len(input_paths) != 1:
+                messagebox.showwarning(
+                    "Unsupported selection",
+                    "Select multiple .holo files, or one .h5, .hdf5, or .zip file.",
+                )
+                return
+
+            input_path = input_paths[0]
             if input_path.suffix.lower() == ".holo":
                 self._apply_holo_input(input_path)
             else:
-                self.batch_input_var.set(path)
+                self.batch_input_var.set(str(input_path))
                 self._apply_input_defaults(input_path)
 
     def _apply_holo_input(self, holo_path: Path) -> None:
-        self.input_convention_var.set("holo")
-        self.holo_input_var.set(str(holo_path))
-        self.batch_input_var.set(str(holo_path))
-        self.batch_zip_var.set(False)
-        self.batch_zip_name_var.set(self._default_archive_name(holo_path))
+        ProcessApp._apply_holo_inputs(self, [holo_path])
 
-        self.batch_output_var.set(str(self._holo_output_dir(holo_path)))
+    def _apply_holo_inputs(self, holo_paths: Sequence[Path]) -> None:
+        paths = [path.expanduser() for path in holo_paths]
+        self.input_convention_var.set("holo")
+        self.holo_input_paths = paths
+        self.holo_input_var.set(os.pathsep.join(str(path) for path in paths))
+        if len(paths) == 1:
+            self.batch_input_var.set(str(paths[0]))
+            self.batch_output_var.set(str(self._holo_output_dir(paths[0])))
+            self.batch_zip_name_var.set(self._default_archive_name(paths[0]))
+        else:
+            stems = ", ".join(path.stem for path in paths)
+            self.batch_input_var.set(f"{len(paths)} .holo files selected: {stems}")
+            self.batch_output_var.set("Auto: one *_AE folder per selected .holo")
+            self.batch_zip_name_var.set("outputs.zip")
+        self.batch_zip_var.set(False)
 
         self._update_holo_status_labels()
         self._reset_progress()
         self._set_minimal_status("Ready.")
+
+    def _selected_holo_paths(self) -> list[Path]:
+        paths = getattr(self, "holo_input_paths", [])
+        if paths:
+            return list(paths)
+
+        raw_value = (self.holo_input_var.get() or "").strip()
+        return [Path(raw_value)] if raw_value else []
 
     def choose_batch_output(self) -> None:
         path = filedialog.askdirectory(

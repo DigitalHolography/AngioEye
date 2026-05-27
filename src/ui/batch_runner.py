@@ -14,30 +14,35 @@ from .holo import HoloInputContext
 def run_batch(app: Any) -> None:
     app._reset_progress()
     holo_mode = app._uses_holo_input_convention()
+    holo_paths = app._selected_holo_paths() if holo_mode else []
     data_value = (
-        (app.holo_input_var.get() or "").strip()
+        str(holo_paths[0])
         if holo_mode
         else (app.batch_input_var.get() or "").strip()
     )
-    if not data_value:
+    if (holo_mode and not holo_paths) or (not holo_mode and not data_value):
         messagebox.showwarning(
             "Missing input",
             (
-                "Select a .holo file to process."
+                "Select one or more .holo files to process."
                 if holo_mode
                 else "Select a folder, HDF5 file, or .zip archive to process."
             ),
         )
         return
     data_path = Path(data_value).expanduser()
-    holo_context: HoloInputContext | None = None
+    holo_contexts: list[HoloInputContext] = []
+    skipped_holo_stems: list[str] = []
     if holo_mode:
-        try:
-            holo_context = app._resolve_holo_context(data_path)
-        except Exception as exc:  # noqa: BLE001
+        for holo_path in holo_paths:
+            try:
+                holo_contexts.append(app._resolve_holo_context(holo_path))
+            except Exception:  # noqa: BLE001
+                skipped_holo_stems.append(holo_path.stem)
+        if not holo_contexts:
             app._update_holo_status_labels()
-            messagebox.showerror("Invalid holo input", str(exc))
-            app._set_minimal_status("Run failed.")
+            _show_skipped_holo_warning(skipped_holo_stems)
+            app._set_minimal_status("Run skipped.")
             return
 
     selected_names = [
@@ -99,38 +104,56 @@ def run_batch(app: Any) -> None:
         )
         return
 
-    if holo_context is not None:
-        base_output_dir = holo_context.output_dir
-        try:
-            app._reset_holo_output_dir(holo_context)
-        except Exception as exc:  # noqa: BLE001
-            messagebox.showerror("Invalid output", str(exc))
-            app._set_minimal_status("Run failed.")
-            return
-    else:
-        base_output_value = (app.batch_output_var.get() or "").strip()
-        base_output_dir = (
-            Path(base_output_value).expanduser() if base_output_value else Path.cwd()
+    if holo_contexts:
+        for context in holo_contexts:
+            try:
+                app._reset_holo_output_dir(context)
+            except Exception as exc:  # noqa: BLE001
+                messagebox.showerror("Invalid output", str(exc))
+                app._set_minimal_status("Run failed.")
+                return
+        _run_holo_batch(
+            app=app,
+            holo_contexts=holo_contexts,
+            pipelines=pipelines,
+            postprocesses=postprocesses,
+            selected_names=selected_names,
+            skipped_holo_stems=skipped_holo_stems,
         )
-        if not base_output_dir.is_absolute():
-            base_output_dir = Path.cwd() / base_output_dir
-        base_output_dir.mkdir(parents=True, exist_ok=True)
+        return
+
+    _run_legacy_batch(
+        app=app,
+        data_path=data_path,
+        pipelines=pipelines,
+        postprocesses=postprocesses,
+        selected_names=selected_names,
+    )
+
+
+def _run_legacy_batch(
+    *,
+    app: Any,
+    data_path: Path,
+    pipelines: list[Any],
+    postprocesses: list[Any],
+    selected_names: list[str],
+) -> None:
+    base_output_value = (app.batch_output_var.get() or "").strip()
+    base_output_dir = (
+        Path(base_output_value).expanduser() if base_output_value else Path.cwd()
+    )
+    if not base_output_dir.is_absolute():
+        base_output_dir = Path.cwd() / base_output_dir
+    base_output_dir.mkdir(parents=True, exist_ok=True)
 
     app._reset_batch_output("Starting batch run...\n")
     app._set_minimal_status("Preparing batch...")
 
     tempdir: tempfile.TemporaryDirectory | None = None
     try:
-        if holo_context is not None:
-            data_root = holo_context.ef_dir
-            inputs = [holo_context.h5_path]
-            tempdir = None
-            app._log_batch(f"[INPUT] Holo file -> {holo_context.holo_path}")
-            app._log_batch(f"[INPUT] EF h5 -> {holo_context.h5_path}")
-            app._log_batch(f"[OUTPUT] AE folder -> {holo_context.output_dir}")
-        else:
-            data_root, tempdir = app._prepare_data_root(data_path)
-            inputs = app._find_h5_inputs(data_root)
+        data_root, tempdir = app._prepare_data_root(data_path)
+        inputs = app._find_h5_inputs(data_root)
     except Exception as exc:  # noqa: BLE001
         messagebox.showerror("Invalid input", f"Cannot prepare input: {exc}")
         app._log_batch(f"Error: {exc}")
@@ -139,6 +162,136 @@ def run_batch(app: Any) -> None:
             tempdir.cleanup()
         return
 
+    _run_input_batch(
+        app=app,
+        inputs=inputs,
+        data_root=data_root,
+        pipelines=pipelines,
+        postprocesses=postprocesses,
+        selected_names=selected_names,
+        input_path=data_path,
+        base_output_dir=base_output_dir,
+        output_dir=base_output_dir,
+        output_filename=app._minimal_output_filename_for_run(data_path, inputs),
+        tempdir=tempdir,
+    )
+
+
+def _run_holo_batch(
+    *,
+    app: Any,
+    holo_contexts: list[HoloInputContext],
+    pipelines: list[Any],
+    postprocesses: list[Any],
+    selected_names: list[str],
+    skipped_holo_stems: list[str],
+) -> None:
+    app._reset_batch_output("Starting batch run...\n")
+    app._set_minimal_status("Preparing batch...")
+
+    failures: list[str] = []
+    processed_outputs_by_context: dict[HoloInputContext, list[Path]] = {
+        context: [] for context in holo_contexts
+    }
+    input_paths_by_context: dict[HoloInputContext, list[Path]] = {
+        context: [] for context in holo_contexts
+    }
+
+    app._start_progress(
+        len(holo_contexts) * len(pipelines),
+        style_name=app._progress_primary_style,
+        status_text="Running pipelines...",
+    )
+    for context in holo_contexts:
+        app._log_batch(f"[INPUT] Holo file -> {context.holo_path}")
+        app._log_batch(f"[INPUT] EF h5 -> {context.h5_path}")
+        app._log_batch(f"[OUTPUT] AE folder -> {context.output_dir}")
+        try:
+            combined_output = app._run_pipelines_on_file(
+                context.h5_path,
+                pipelines,
+                context.output_dir,
+                output_relative_parent=Path("."),
+                output_filename=app._holo_output_filename(context.holo_path),
+            )
+        except Exception as exc:  # noqa: BLE001
+            failures.append(f"{context.h5_path}: {exc}")
+            app._log_batch(f"[FAIL] {context.h5_path.name}: {exc}")
+            continue
+        processed_outputs_by_context[context].append(combined_output)
+        input_paths_by_context[context].append(context.h5_path)
+
+    if postprocesses:
+        app._start_progress(
+            len(holo_contexts) * len(postprocesses),
+            style_name=app._progress_final_style,
+            status_text="Running postprocess...",
+        )
+        for context in holo_contexts:
+            processed_outputs = processed_outputs_by_context[context]
+            if processed_outputs:
+                app._run_postprocesses(
+                    postprocesses=postprocesses,
+                    output_dir=context.output_dir,
+                    processed_outputs=processed_outputs,
+                    input_h5_paths=input_paths_by_context[context],
+                    input_path=context.holo_path,
+                    selected_pipeline_names=selected_names,
+                    failures=failures,
+                )
+            else:
+                app._log_batch(
+                    f"[POST SKIP] {context.holo_path.name}: no successful pipeline "
+                    "outputs were generated."
+                )
+                app._advance_progress(len(postprocesses))
+
+    processed_outputs = [
+        output
+        for context_outputs in processed_outputs_by_context.values()
+        for output in context_outputs
+    ]
+    if len(processed_outputs) == 1:
+        summary_msg = f"Output file: {processed_outputs[0]}"
+    else:
+        summary_msg = f"Outputs generated for {len(processed_outputs)} holo file(s)."
+    app._set_progress_units(app._progress_total_units)
+    app._log_batch(f"Completed. {summary_msg}")
+
+    if failures:
+        app._set_minimal_status("Completed with errors.")
+        app._show_batch_error_dialog(
+            f"{len(failures)} failure(s). See log for details.\n\n{summary_msg}"
+        )
+    else:
+        app._set_minimal_status("Process ended.")
+
+    _show_skipped_holo_warning(skipped_holo_stems)
+
+
+def _show_skipped_holo_warning(skipped_holo_stems: list[str]) -> None:
+    if not skipped_holo_stems:
+        return
+    messagebox.showwarning(
+        "Skipped files",
+        f"Skipped {len(skipped_holo_stems)} files: {', '.join(skipped_holo_stems)}",
+    )
+
+
+def _run_input_batch(
+    *,
+    app: Any,
+    inputs: list[Path],
+    data_root: Path,
+    pipelines: list[Any],
+    postprocesses: list[Any],
+    selected_names: list[str],
+    input_path: Path,
+    base_output_dir: Path,
+    output_dir: Path,
+    output_filename: str | None,
+    tempdir: tempfile.TemporaryDirectory | None = None,
+) -> None:
     pipeline_progress_units = len(inputs) * len(pipelines)
     final_progress_units = len(postprocesses) + (
         1 if app.batch_zip_var.get() else 0
@@ -148,17 +301,11 @@ def run_batch(app: Any) -> None:
         style_name=app._progress_primary_style,
         status_text="Running pipelines...",
     )
-    output_filename = (
-        app._holo_output_filename(holo_context.holo_path)
-        if holo_context is not None
-        else app._minimal_output_filename_for_run(data_path, inputs)
-    )
 
     work_output_dir: Path | None = None
     clean_work_output = False
     zip_failed = False
     try:
-        output_dir = base_output_dir
         if app.batch_zip_var.get():
             work_output_dir = Path(tempfile.mkdtemp(dir=base_output_dir))
             output_dir = work_output_dir
@@ -198,7 +345,7 @@ def run_batch(app: Any) -> None:
                 output_dir=output_dir,
                 processed_outputs=processed_outputs,
                 input_h5_paths=processed_input_paths,
-                input_path=data_path,
+                input_path=input_path,
                 selected_pipeline_names=selected_names,
                 failures=failures,
             )
