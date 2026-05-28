@@ -97,7 +97,7 @@ def extract_windkessel_rows_from_h5(h5_path, group_name):
     return rows
 
 
-SELECTED_METRICS_PNG = {
+SELECTED_METRICS = {
     "mu_t_over_T",
     "RI",
     "PI",
@@ -248,16 +248,16 @@ def plot_windkessel_metric_for_method(df, metric, method, out_path):
             zorder=2,
         )
 
-    stats = sub.groupby("group")["value"].agg(["mean", "std"]).reset_index()
+    stats = sub.groupby("group")["value"].agg(["median", "std"]).reset_index()
 
     for _, row in stats.iterrows():
         group = row["group"]
-        mean_val = row["mean"]
+        median_val = row["median"]
         std_val = row["std"] if np.isfinite(row["std"]) else 0.0
 
         ax.errorbar(
             x_pos[group],
-            mean_val,
+            median_val,
             yerr=std_val,
             fmt=METHOD_MARKERS_WINDKESSEL[method],
             color="black",
@@ -307,7 +307,6 @@ def export_windkessel_figures(zip_path, out_dir, format="png"):
                 out_path,
             )
 
-    # CSV uniquement une fois (png par exemple)
     if format == "png":
         csv_path = os.path.join(out_dir, "windkessel_values.csv")
         df.to_csv(csv_path, index=False)
@@ -336,7 +335,7 @@ def select_support_beat(support, beat_idx):
 
 
 def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
-    main_color = "#EC5241" if vessel == "artery" else "#414CEC"
+    main_color = "#EC5241" if vessel == "artery" else "#1B82F1"
     fill_color1 = "#f9c2ca" if vessel == "artery" else "#A1B2F2"
     fill_color2 = "#F2CCC7" if vessel == "artery" else "#BDDBE7"
     if not support:
@@ -1013,12 +1012,12 @@ def export_selected_metric(
 
             for vessel in VALID_VESSELS:
 
-                main_color = "#EC5241" if vessel == "artery" else "#414CEC"
+                main_color = "#EC5241" if vessel == "artery" else "#1B82F1"
 
                 if vessel not in all_results[current_mode]:
                     continue
 
-                for metric in sorted(SELECTED_METRICS_PNG):
+                for metric in sorted(SELECTED_METRICS):
                     metric_key = METRIC_ALIASES.get(metric, metric)
 
                     if metric_key not in all_results[current_mode][vessel]:
@@ -1035,10 +1034,10 @@ def export_selected_metric(
 
                     x_pos = {g: i for i, g in enumerate(groups)}
 
-                    grp = df.groupby("group")["mean"]
+                    grp = df.groupby("group")["median"]
                     grp_mean = grp.mean()
                     grp_std = grp.std()
-                    rep_file = select_representative_file_per_group(df, value_col="mean")
+                    rep_file = select_representative_file_per_group(df, value_col="median")
 
                     if show_group_illustrations:
                         fig = plt.figure(figsize=(15, 6.2), dpi=200)
@@ -1084,7 +1083,7 @@ def export_selected_metric(
 
                         ax_top.scatter(
                             x,
-                            gdf["mean"].values,
+                            gdf["median"].values,
                             color="black",
                             s=20,
                             edgecolors="none",
@@ -1200,9 +1199,6 @@ def choose_zip():
 
 
 def extract_group_metrics(group, results_dict, prefix=""):
-    """
-    Parcourt récursivement les groupes/datasets HDF5
-    """
 
     for metric_name in group.keys():
 
@@ -1210,9 +1206,6 @@ def extract_group_metrics(group, results_dict, prefix=""):
 
         full_name = f"{prefix}/{metric_name}" if prefix else metric_name
 
-        # -----------------------------
-        # Cas 1 : sous dossier HDF5
-        # -----------------------------
         if isinstance(item, h5py.Group):
 
             extract_group_metrics(
@@ -1221,9 +1214,6 @@ def extract_group_metrics(group, results_dict, prefix=""):
                 prefix=full_name
             )
 
-        # -----------------------------
-        # Cas 2 : dataset
-        # -----------------------------
         elif isinstance(item, h5py.Dataset):
 
             try:
@@ -1232,7 +1222,7 @@ def extract_group_metrics(group, results_dict, prefix=""):
                 latex_formula = item.attrs.get("latex_formula", "")
 
                 results_dict[full_name] = {
-                    "mean": float(np.nanmedian(data)),
+                    "median": float(np.nanmedian(data)),
                     "std": float(np.nanstd(data)),
                     "latex_formula": latex_formula,
                 }
@@ -1242,15 +1232,6 @@ def extract_group_metrics(group, results_dict, prefix=""):
 
 
 def extract_metrics(h5_path):
-    """
-    Retourne:
-
-    results[mode][vessel][metric_name] = {
-        "mean": ...,
-        "std": ...,
-        "latex_formula": ...
-    }
-    """
 
     results = defaultdict(lambda: defaultdict(dict))
 
@@ -1283,7 +1264,7 @@ def extract_metrics(h5_path):
     return results
 
 
-def select_representative_file_per_group(df_metric: pd.DataFrame, value_col="mean"):
+def select_representative_file_per_group(df_metric: pd.DataFrame, value_col="median"):
     """
     Renvoie un dict: {group -> filename} du patient le plus proche de la médiane du groupe.
     df_metric doit contenir au moins: ["group", "file", value_col]
@@ -1294,7 +1275,6 @@ def select_representative_file_per_group(df_metric: pd.DataFrame, value_col="mea
         if len(vals) == 0 or not np.any(np.isfinite(vals)):
             continue
         med = float(np.nanmedian(vals))
-        # index du patient le plus proche de la médiane
         idx = int(np.nanargmin(np.abs(vals - med)))
         rep[g] = gdf.iloc[idx]["file"]
 
@@ -1316,7 +1296,7 @@ def analyze_zip(zip_path):
                         {
                             "file": grouped_file.file_name,
                             "group": grouped_file.group_name,
-                            "mean": values["mean"],
+                            "median": values["median"],
                             "std": values["std"],
                             "latex_formula": values.get("latex_formula", ""),
                             "vessel": vessel,
