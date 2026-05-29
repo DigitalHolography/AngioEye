@@ -18,7 +18,7 @@ from .core.base import (
         "Build group-level LaTeX and CSV tables for variability and heterogeneity "
         "metrics computed from by-segment arterial waveform shape metrics."
     ),
-    required_deps=["pandas>=2.1"],
+    required_deps=["pandas>=2.1", "scipy>=1.10"],
     required_pipelines=["waveform_shape_metrics"],
 )
 class VariabilityHeterogeneityPostprocess(BatchPostprocess):

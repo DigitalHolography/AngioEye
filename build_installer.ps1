@@ -169,9 +169,7 @@ function Invoke-PyInstaller {
         if ($IncludeAllExtras -or $IncludePipelineExtras) {
             $uvArgs += @("--extra", "pipelines")
         }
-        if ($IncludeAllExtras -or $IncludePostprocessExtras) {
-            $uvArgs += @("--extra", "postprocess")
-        }
+        $uvArgs += @("--extra", "postprocess")
         $uvArgs += @("--with", "pyinstaller", "python", "-m", "PyInstaller")
         $uvArgs += $Arguments
         & $uv.Source @uvArgs
@@ -279,6 +277,11 @@ def common_datas():
     datas = []
     datas += collect_data_files("pipelines")
     datas += collect_data_files("postprocess")
+    datas += collect_data_files("jinja2")
+    datas += collect_data_files("matplotlib")
+    datas += collect_data_files("pandas")
+    datas += collect_data_files("plotly")
+    datas += collect_data_files("scipy")
     datas += collect_data_files("sv_ttk")
     datas += collect_data_files("tkinterdnd2")
     datas += [(r'$logo', ".")]
@@ -293,6 +296,11 @@ def common_hiddenimports():
     hiddenimports += ["angio_eye", "launcher"]
     hiddenimports += collect_submodules("pipelines")
     hiddenimports += collect_submodules("postprocess")
+    hiddenimports += collect_submodules("jinja2")
+    hiddenimports += collect_submodules("matplotlib")
+    hiddenimports += collect_submodules("pandas")
+    hiddenimports += collect_submodules("plotly")
+    hiddenimports += collect_submodules("scipy")
     hiddenimports += collect_submodules("tkinterdnd2")
     hiddenimports += ["matplotlib.backends.backend_ps"]
     return hiddenimports
@@ -359,11 +367,23 @@ function Copy-EditablePackageModules {
         return
     }
 
+    if (Test-Path -LiteralPath $destinationDir -PathType Container) {
+        Remove-Item -LiteralPath $destinationDir -Recurse -Force
+    }
     New-Item -ItemType Directory -Force -Path $destinationDir | Out-Null
-    Get-ChildItem -LiteralPath $sourceDir -File -Filter "*.py" |
-        Where-Object { $_.Name -ne "__init__.py" } |
+    Get-ChildItem -LiteralPath $sourceDir -Force |
+        Where-Object {
+            $_.Name -ne "__pycache__" -and
+            $_.Name -ne "__init__.py" -and
+            $_.Name -notlike "*.pyc"
+        } |
         ForEach-Object {
-            Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $destinationDir $_.Name) -Force
+            $destination = Join-Path $destinationDir $_.Name
+            if ($_.PSIsContainer) {
+                Copy-Item -LiteralPath $_.FullName -Destination $destination -Recurse -Force
+            } else {
+                Copy-Item -LiteralPath $_.FullName -Destination $destination -Force
+            }
         }
 }
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "AngioEye"
-version = "1.14.0"
+version = "1.15.0"
 description = "Cohort-analysis engine for retinal Doppler holography"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -17,7 +17,13 @@ dependencies = ["numpy>=1.24", "h5py>=3.9", "sv-ttk>=2.6", "tkinterdnd2"]
 [project.optional-dependencies]
 # For specific pipelines
 pipelines = ["pandas>=2.1"]
-postprocess = ["matplotlib>=3.8", "pandas>=2.1", "plotly>=5.18"]
+postprocess = [
+    "jinja2>=3.1",
+    "matplotlib>=3.8",
+    "pandas>=2.1",
+    "plotly>=5.18",
+    "scipy>=1.10",
+]
 
 # For developers
 dev = ["ruff", "pre-commit", "pyinstaller"]

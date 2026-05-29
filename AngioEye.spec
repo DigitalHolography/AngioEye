@@ -6,6 +6,11 @@ def _common_datas():
     datas = []
     datas += collect_data_files("pipelines")
     datas += collect_data_files("postprocess")
+    datas += collect_data_files("jinja2")
+    datas += collect_data_files("matplotlib")
+    datas += collect_data_files("pandas")
+    datas += collect_data_files("plotly")
+    datas += collect_data_files("scipy")
     datas += collect_data_files("sv_ttk")
     datas += collect_data_files("tkinterdnd2")
     datas += [("Angioeye_logo.png", ".")]
@@ -19,6 +24,11 @@ def _common_hiddenimports():
     hiddenimports = []
     hiddenimports += collect_submodules("pipelines")
     hiddenimports += collect_submodules("postprocess")
+    hiddenimports += collect_submodules("jinja2")
+    hiddenimports += collect_submodules("matplotlib")
+    hiddenimports += collect_submodules("pandas")
+    hiddenimports += collect_submodules("plotly")
+    hiddenimports += collect_submodules("scipy")
     hiddenimports += collect_submodules("tkinterdnd2")
     hiddenimports += ["matplotlib.backends.backend_ps"]
     return hiddenimports
