@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,6 +29,28 @@ def output_dir(holo_path: Path) -> Path:
 
 def output_filename(holo_path: Path) -> str:
     return f"{holo_path.stem}_AE.h5"
+
+
+def reset_output_dir(context: HoloInputContext) -> None:
+    expected_output_dir = output_dir(context.holo_path).resolve()
+    context_output_dir = context.output_dir.resolve()
+    expected_parent = dataset_dir(context.holo_path).resolve()
+    if (
+        context_output_dir != expected_output_dir
+        or context_output_dir.parent != expected_parent
+        or not context_output_dir.name.endswith("_AE")
+    ):
+        raise RuntimeError(
+            f"Refusing to overwrite unexpected output path: {context_output_dir}"
+        )
+
+    if context_output_dir.exists():
+        if not context_output_dir.is_dir():
+            raise RuntimeError(
+                f"Output path exists and is not a folder: {context_output_dir}"
+            )
+        shutil.rmtree(context_output_dir)
+    context_output_dir.mkdir(parents=True, exist_ok=True)
 
 
 def find_ef_h5(holo_path: Path) -> Path | None:

@@ -151,16 +151,27 @@ def create_zip_from_tree(
     zip_path: str | Path,
     *,
     source_paths: Iterable[str | Path] | None = None,
+    exclude_root_dirs: Iterable[str] | None = None,
     compresslevel: int = 1,
     progress_callback: Callable[[int, int, Path], None] | None = None,
 ) -> Path:
     tree_root_path = Path(tree_root).expanduser().resolve()
     zip_path_obj = Path(zip_path)
     zip_path_obj.parent.mkdir(parents=True, exist_ok=True)
+    excluded_root_dirs = set(exclude_root_dirs or ())
 
     if source_paths is None:
         files = sorted(
-            (path for path in tree_root_path.rglob("*") if path.is_file()),
+            (
+                path
+                for path in tree_root_path.rglob("*")
+                if path.is_file()
+                and not _is_in_excluded_root_dir(
+                    path,
+                    tree_root_path,
+                    excluded_root_dirs,
+                )
+            ),
             key=lambda path: path.relative_to(tree_root_path).as_posix(),
         )
     else:
@@ -176,6 +187,12 @@ def create_zip_from_tree(
                     f"Source file is not inside archive root {tree_root_path}: "
                     f"{file_path}"
                 ) from exc
+            if _is_in_excluded_root_dir(
+                file_path,
+                tree_root_path,
+                excluded_root_dirs,
+            ):
+                continue
             files.append(file_path)
         files.sort(key=lambda path: path.relative_to(tree_root_path).as_posix())
 
@@ -194,6 +211,17 @@ def create_zip_from_tree(
             if progress_callback is not None:
                 progress_callback(idx, total_files, rel_path)
     return zip_path_obj
+
+
+def _is_in_excluded_root_dir(
+    file_path: Path,
+    tree_root_path: Path,
+    excluded_root_dirs: set[str],
+) -> bool:
+    if not excluded_root_dirs:
+        return False
+    relative_path = file_path.relative_to(tree_root_path)
+    return bool(relative_path.parts and relative_path.parts[0] in excluded_root_dirs)
 
 
 @contextmanager

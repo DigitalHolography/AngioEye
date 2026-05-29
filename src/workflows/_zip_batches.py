@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import shutil
 from collections.abc import Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -8,41 +7,69 @@ from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from input_output import ZipH5Member
-from input_output import extract_h5_member, extract_h5_members
-from input_output import iter_h5_member_batches
-
-
-def _default_pipeline_workers() -> int:
-    cpu_count = os.cpu_count() or 2
-    return max(1, min(2, cpu_count - 1))
-
-
-def _env_int(name: str, default: int) -> int:
-    try:
-        return max(1, int(os.getenv(name, str(default))))
-    except ValueError:
-        return default
+from batch_engine import BatchExecutionSettings, batch_count, env_int
+from input_output import (
+    ZipH5Member,
+    extract_h5_member,
+    extract_h5_members,
+    iter_h5_member_batches,
+)
 
 
 @dataclass(frozen=True)
-class ZipBatchSettings:
-    batch_size: int = 4
-    extract_workers: int = 2
-    pipeline_workers: int = _default_pipeline_workers()
+class ZipBatchSettings(BatchExecutionSettings):
+    @property
+    def extract_workers(self) -> int:
+        return self.staging_workers
+
+    @property
+    def pipeline_workers(self) -> int:
+        return self.task_workers
 
     @classmethod
-    def from_env(cls) -> "ZipBatchSettings":
+    def from_env(cls) -> ZipBatchSettings:
         return cls(
-            batch_size=_env_int("ANGIOEYE_ZIP_BATCH_SIZE", cls.batch_size),
-            extract_workers=_env_int(
-                "ANGIOEYE_ZIP_EXTRACT_WORKERS",
-                cls.extract_workers,
+            batch_size=env_int(
+                "ANGIOEYE_BATCH_SIZE",
+                env_int("ANGIOEYE_ZIP_BATCH_SIZE", cls.batch_size),
             ),
-            pipeline_workers=_env_int(
-                "ANGIOEYE_ZIP_PIPELINE_WORKERS",
-                cls.pipeline_workers,
+            staging_workers=env_int(
+                "ANGIOEYE_BATCH_STAGING_WORKERS",
+                env_int(
+                    "ANGIOEYE_ZIP_EXTRACT_WORKERS",
+                    cls.staging_workers,
+                ),
             ),
+            task_workers=env_int(
+                "ANGIOEYE_BATCH_TASK_WORKERS",
+                env_int(
+                    "ANGIOEYE_ZIP_PIPELINE_WORKERS",
+                    cls.task_workers,
+                ),
+            ),
+        )
+
+    def __init__(
+        self,
+        batch_size: int = 4,
+        staging_workers: int | None = None,
+        task_workers: int | None = None,
+        *,
+        extract_workers: int | None = None,
+        pipeline_workers: int | None = None,
+    ) -> None:
+        if staging_workers is None:
+            staging_workers = extract_workers if extract_workers is not None else 2
+        if task_workers is None:
+            task_workers = (
+                pipeline_workers
+                if pipeline_workers is not None
+                else BatchExecutionSettings.task_workers
+            )
+        super().__init__(
+            batch_size=batch_size,
+            staging_workers=staging_workers,
+            task_workers=task_workers,
         )
 
 
@@ -82,7 +109,7 @@ def iter_extracted_zip_batches(
     member_count: int,
     settings: ZipBatchSettings,
 ) -> Iterator[ExtractedZipBatch]:
-    batch_count = _batch_count(member_count, settings.batch_size)
+    batch_count_value = batch_count(member_count, settings.batch_size)
     with TemporaryDirectory() as tmp_dir:
         extraction_root = Path(tmp_dir)
         for batch_idx, member_batch in iter_h5_member_batches(
@@ -99,7 +126,7 @@ def iter_extracted_zip_batches(
                 )
                 yield ExtractedZipBatch(
                     index=batch_idx,
-                    count=batch_count,
+                    count=batch_count_value,
                     members=tuple(member_batch),
                     h5_paths=tuple(h5_paths),
                     root=batch_root,
@@ -107,11 +134,6 @@ def iter_extracted_zip_batches(
                 )
             finally:
                 shutil.rmtree(batch_root, ignore_errors=True)
-
-
-def _batch_count(member_count: int, batch_size: int) -> int:
-    return (member_count + batch_size - 1) // batch_size
-
 
 def _extract_zip_batch(
     *,

@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from batch_engine import (
+    BatchExecutionSettings,
+    batch_count,
+    iter_batches,
+    run_task_batch,
+)
 from input_output import ZipH5Member
 
 from ._zip_batches import ZipBatchSettings, iter_extracted_zip_batches
@@ -25,6 +30,15 @@ RunPipelineFile = Callable[
 ZipMemberPath = tuple[ZipH5Member, Path]
 
 
+@dataclass(frozen=True)
+class PipelineFileJob:
+    h5_path: Path
+    output_relative_parent: Path
+    output_filename: str | None
+    input_label: str
+    log_label: str
+
+
 def run_filesystem_pipeline_run(
     *,
     inputs: Iterable[Path],
@@ -32,31 +46,45 @@ def run_filesystem_pipeline_run(
     pipelines: Sequence[Any],
     output_dir: Path,
     output_filename: str | None,
+    settings: BatchExecutionSettings,
     run_pipeline_file: RunPipelineFile,
     relative_parent: Callable[[Path, Path], Path],
     log: Callable[[str], None],
+    advance_progress: Callable[[float], None],
+    idle_callback: Callable[[], None] | None = None,
 ) -> PipelineRunResult:
     result = PipelineRunResult()
-    for h5_path in inputs:
-        try:
-            combined_output = run_pipeline_file(
-                h5_path,
-                pipelines,
-                output_dir,
-                relative_parent(h5_path, data_root),
-                output_filename,
-            )
-        except Exception as exc:  # noqa: BLE001
-            _record_pipeline_failure(
-                result,
-                input_label=str(h5_path),
-                log_label=h5_path.name,
-                error=exc,
-                log=log,
-            )
-            continue
-
-        _record_pipeline_success(result, h5_path, combined_output)
+    jobs = [
+        PipelineFileJob(
+            h5_path=h5_path,
+            output_relative_parent=relative_parent(h5_path, data_root),
+            output_filename=output_filename,
+            input_label=str(h5_path),
+            log_label=h5_path.name,
+        )
+        for h5_path in inputs
+    ]
+    batch_count_value = batch_count(len(jobs), settings.batch_size)
+    for batch_index, job_batch in enumerate(
+        iter_batches(jobs, settings.batch_size),
+        start=1,
+    ):
+        log(
+            f"[BATCH] Running batch {batch_index}/{batch_count_value} "
+            f"({len(job_batch)} file(s)) with "
+            f"{min(settings.task_workers, len(job_batch))} worker(s)..."
+        )
+        _run_pipeline_job_batch(
+            jobs=job_batch,
+            pipelines=pipelines,
+            output_dir=output_dir,
+            run_pipeline_file=run_pipeline_file,
+            result=result,
+            log=log,
+            advance_progress=advance_progress,
+            max_workers=settings.task_workers,
+            idle_callback=idle_callback,
+        )
     return result
 
 
@@ -100,24 +128,22 @@ def run_zip_pipeline_run(
         member_paths: list[ZipMemberPath] = list(
             zip(extracted_batch.members, extracted_batch.h5_paths, strict=True)
         )
-        worker_count = min(settings.pipeline_workers, len(member_paths))
-        if worker_count <= 1:
-            _run_zip_pipeline_batch_sequential(
-                member_paths=member_paths,
-                pipelines=pipelines,
-                output_dir=output_dir,
-                run_pipeline_file=run_pipeline_file,
-                result=result,
-                log=log,
-            )
-            continue
-
+        worker_count = min(settings.task_workers, len(member_paths))
         log(
             f"[ZIP] Running pipelines for batch {extracted_batch.index}/"
             f"{extracted_batch.count} with {worker_count} worker(s)..."
         )
-        _run_zip_pipeline_batch_parallel(
-            member_paths=member_paths,
+        _run_pipeline_job_batch(
+            jobs=[
+                PipelineFileJob(
+                    h5_path=h5_path,
+                    output_relative_parent=member.relative_path.parent,
+                    output_filename=None,
+                    input_label=member.name,
+                    log_label=member.name,
+                )
+                for member, h5_path in member_paths
+            ],
             pipelines=pipelines,
             output_dir=output_dir,
             run_pipeline_file=run_pipeline_file,
@@ -130,40 +156,9 @@ def run_zip_pipeline_run(
     return result
 
 
-def _run_zip_pipeline_batch_sequential(
+def _run_pipeline_job_batch(
     *,
-    member_paths: Sequence[ZipMemberPath],
-    pipelines: Sequence[Any],
-    output_dir: Path,
-    run_pipeline_file: RunPipelineFile,
-    result: PipelineRunResult,
-    log: Callable[[str], None],
-) -> None:
-    for member, h5_path in member_paths:
-        try:
-            combined_output = _run_zip_member_pipeline(
-                member=member,
-                h5_path=h5_path,
-                pipelines=pipelines,
-                output_dir=output_dir,
-                run_pipeline_file=run_pipeline_file,
-            )
-        except Exception as exc:  # noqa: BLE001
-            _record_pipeline_failure(
-                result,
-                input_label=member.name,
-                log_label=member.name,
-                error=exc,
-                log=log,
-            )
-            continue
-
-        _record_pipeline_success(result, h5_path, combined_output)
-
-
-def _run_zip_pipeline_batch_parallel(
-    *,
-    member_paths: Sequence[ZipMemberPath],
+    jobs: Sequence[PipelineFileJob],
     pipelines: Sequence[Any],
     output_dir: Path,
     run_pipeline_file: RunPipelineFile,
@@ -173,67 +168,48 @@ def _run_zip_pipeline_batch_parallel(
     max_workers: int,
     idle_callback: Callable[[], None] | None,
 ) -> None:
-    worker_count = min(len(member_paths), max(1, max_workers))
-
-    with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        futures = {
-            executor.submit(
-                _run_zip_member_pipeline,
-                member=member,
-                h5_path=h5_path,
-                pipelines=pipelines,
-                output_dir=output_dir,
-                run_pipeline_file=run_pipeline_file,
-            ): (member, h5_path)
-            for member, h5_path in member_paths
-        }
-        pending = set(futures)
-        while pending:
-            done, pending = wait(
-                pending,
-                timeout=0.05,
-                return_when=FIRST_COMPLETED,
+    for task_result in run_task_batch(
+        jobs,
+        run_item=lambda job: _run_pipeline_job(
+            job=job,
+            pipelines=pipelines,
+            output_dir=output_dir,
+            run_pipeline_file=run_pipeline_file,
+        ),
+        max_workers=max_workers,
+        idle_callback=idle_callback,
+    ):
+        job = task_result.item
+        if task_result.error is not None:
+            _record_pipeline_failure(
+                result,
+                input_label=job.input_label,
+                log_label=job.log_label,
+                error=task_result.error,
+                log=log,
             )
-            if not done:
-                if idle_callback is not None:
-                    idle_callback()
-                continue
-            for future in done:
-                member, h5_path = futures[future]
-                try:
-                    combined_output = future.result()
-                except Exception as exc:  # noqa: BLE001
-                    _record_pipeline_failure(
-                        result,
-                        input_label=member.name,
-                        log_label=member.name,
-                        error=exc,
-                        log=log,
-                    )
-                    advance_progress(len(pipelines))
-                    continue
+            advance_progress(len(pipelines))
+            continue
 
-                _record_pipeline_success(result, h5_path, combined_output)
-                log(f"[OK] {member.name}: combined results -> {combined_output}")
-                advance_progress(len(pipelines))
-            if idle_callback is not None:
-                idle_callback()
+        assert task_result.value is not None
+        _record_pipeline_success(result, job.h5_path, task_result.value)
+        log(f"[OK] {job.log_label}: combined results -> {task_result.value}")
+        advance_progress(len(pipelines))
 
 
-def _run_zip_member_pipeline(
+def _run_pipeline_job(
     *,
-    member: ZipH5Member,
-    h5_path: Path,
+    job: PipelineFileJob,
     pipelines: Sequence[Any],
     output_dir: Path,
     run_pipeline_file: RunPipelineFile,
 ) -> Path:
     return run_pipeline_file(
-        h5_path,
+        job.h5_path,
         pipelines,
         output_dir,
-        member.relative_path.parent,
-        None,
+        job.output_relative_parent,
+        job.output_filename,
     )
 
 

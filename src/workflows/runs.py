@@ -6,10 +6,11 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import mkdtemp
-from typing import Any
+from typing import Any, Protocol
 
 from input_output import ZipH5Member
 
+from ._holo import HoloInputContext, output_filename
 from ._pipeline_runs import (
     PipelineRunResult,
     RunPipelineFile,
@@ -57,18 +58,21 @@ class _FinalizedOutputs:
     zip_error: str | None = None
 
 
-RunPostprocesses = Callable[
-    [
-        Sequence[Any],
-        Path,
-        Sequence[Path],
-        Sequence[Path],
-        Path,
-        Sequence[str],
-        list[str],
-    ],
-    None,
-]
+class RunPostprocesses(Protocol):
+    def __call__(
+        self,
+        postprocesses: Sequence[Any],
+        output_dir: Path,
+        processed_outputs: Sequence[Path],
+        input_h5_paths: Sequence[Path],
+        input_path: Path,
+        selected_pipeline_names: Sequence[str],
+        failures: list[str],
+        *,
+        zip_outputs: bool,
+    ) -> None: ...
+
+
 ZipProgressCallback = Callable[[int, int, Path], None]
 ZipOutputDir = Callable[[Path, Path | None, ZipProgressCallback | None], Path]
 IdleCallback = Callable[[], None]
@@ -132,6 +136,7 @@ def run_filesystem_workflow(
     zip_outputs: bool,
     zip_name: str,
     output_filename: str | None,
+    settings: ZipBatchSettings,
     run_pipeline_file: RunPipelineFile,
     run_postprocesses: RunPostprocesses,
     relative_parent: Callable[[Path, Path], Path],
@@ -142,6 +147,7 @@ def run_filesystem_workflow(
     set_status: Callable[[str], None],
     make_zip_progress_callback: Callable[[], ZipProgressCallback | None],
     on_zip_error: Callable[[str], None] | None = None,
+    idle_callback: IdleCallback | None = None,
 ) -> RunWorkflowResult:
     workspace = _prepare_workflow_workspace(
         base_output_dir=base_output_dir,
@@ -150,16 +156,21 @@ def run_filesystem_workflow(
     cleanup_workspace = False
 
     try:
+        pipeline_started_at = time.monotonic()
         pipeline_result = run_filesystem_pipeline_run(
             inputs=inputs,
             data_root=data_root,
             pipelines=pipelines,
             output_dir=workspace.output_dir,
             output_filename=output_filename,
+            settings=settings,
             run_pipeline_file=run_pipeline_file,
             relative_parent=relative_parent,
             log=log,
+            advance_progress=advance_progress,
+            idle_callback=idle_callback,
         )
+        _log_elapsed(log, "Pipeline phase", pipeline_started_at)
 
         _run_workflow_postprocesses(
             pipeline_result=pipeline_result,
@@ -172,6 +183,7 @@ def run_filesystem_workflow(
             advance_progress=advance_progress,
             start_final_progress=start_final_progress,
             final_progress_units=len(postprocesses) + (1 if zip_outputs else 0),
+            zip_outputs=zip_outputs,
         )
 
         finalized_outputs = _finalize_workflow_outputs(
@@ -230,6 +242,7 @@ def run_zip_workflow(
     cleanup_workspace = False
 
     try:
+        pipeline_started_at = time.monotonic()
         pipeline_result = run_zip_pipeline_run(
             zip_path=zip_path,
             members=members,
@@ -242,6 +255,7 @@ def run_zip_workflow(
             advance_progress=advance_progress,
             idle_callback=idle_callback,
         )
+        _log_elapsed(log, "Pipeline phase", pipeline_started_at)
 
         _run_workflow_postprocesses(
             pipeline_result=pipeline_result,
@@ -254,6 +268,7 @@ def run_zip_workflow(
             advance_progress=advance_progress,
             start_final_progress=start_final_progress,
             final_progress_units=len(postprocesses) + (1 if zip_outputs else 0),
+            zip_outputs=zip_outputs,
         )
 
         finalized_outputs = _finalize_workflow_outputs(
@@ -300,6 +315,92 @@ def _workflow_result(
     )
 
 
+def run_holo_workflow(
+    *,
+    contexts: Sequence[HoloInputContext],
+    pipelines: Sequence[Any],
+    postprocesses: Sequence[Any],
+    selected_pipeline_names: Sequence[str],
+    run_pipeline_file: RunPipelineFile,
+    run_postprocesses: RunPostprocesses,
+    log: Callable[[str], None],
+    advance_progress: Callable[[float], None],
+    start_final_progress: Callable[[float, str], None],
+) -> RunWorkflowResult:
+    result = PipelineRunResult()
+    pipeline_started_at = time.monotonic()
+    outputs_by_context: dict[HoloInputContext, list[Path]] = {
+        context: [] for context in contexts
+    }
+    inputs_by_context: dict[HoloInputContext, list[Path]] = {
+        context: [] for context in contexts
+    }
+
+    for context in contexts:
+        log(f"[INPUT] Holo file -> {context.holo_path}")
+        log(f"[INPUT] EF h5 -> {context.h5_path}")
+        log(f"[OUTPUT] AE folder -> {context.output_dir}")
+        try:
+            combined_output = run_pipeline_file(
+                context.h5_path,
+                pipelines,
+                context.output_dir,
+                Path("."),
+                output_filename(context.holo_path),
+            )
+        except Exception as exc:  # noqa: BLE001
+            result.failures.append(f"{context.h5_path}: {exc}")
+            log(f"[FAIL] {context.h5_path.name}: {exc}")
+            continue
+
+        result.processed_outputs.append(combined_output)
+        result.processed_input_paths.append(context.h5_path)
+        outputs_by_context[context].append(combined_output)
+        inputs_by_context[context].append(context.h5_path)
+    _log_elapsed(log, "Pipeline phase", pipeline_started_at)
+
+    if postprocesses:
+        start_final_progress(
+            len(contexts) * len(postprocesses),
+            "Running postprocess...",
+        )
+        postprocess_started_at = time.monotonic()
+        for context in contexts:
+            processed_outputs = outputs_by_context[context]
+            if processed_outputs:
+                run_postprocesses(
+                    postprocesses,
+                    context.output_dir,
+                    processed_outputs,
+                    inputs_by_context[context],
+                    context.holo_path,
+                    selected_pipeline_names,
+                    result.failures,
+                    zip_outputs=False,
+                )
+            else:
+                log(
+                    f"[POST SKIP] {context.holo_path.name}: no successful pipeline "
+                    "outputs were generated."
+                )
+                advance_progress(len(postprocesses))
+        _log_elapsed(log, "Postprocess phase", postprocess_started_at)
+
+    return RunWorkflowResult(
+        output_dir=contexts[0].output_dir if contexts else Path("."),
+        processed_outputs=result.processed_outputs,
+        processed_input_paths=result.processed_input_paths,
+        failures=result.failures,
+        summary_message=_holo_summary(result.processed_outputs),
+    )
+
+
+def _holo_summary(processed_outputs: Sequence[Path]) -> str:
+    if len(processed_outputs) == 1:
+        return f"Output file: {processed_outputs[0]}"
+    return f"Outputs generated for {len(processed_outputs)} holo file(s)."
+
+
 def _run_workflow_postprocesses(
     *,
     pipeline_result: PipelineRunResult,
@@ -312,11 +413,13 @@ def _run_workflow_postprocesses(
     advance_progress: Callable[[float], None],
     start_final_progress: Callable[[float, str], None],
     final_progress_units: int,
+    zip_outputs: bool,
 ) -> None:
     if final_progress_units:
         final_status = "Running postprocess..." if postprocesses else "Creating ZIP..."
         start_final_progress(final_progress_units, final_status)
 
+    postprocess_started_at = time.monotonic() if postprocesses else None
     if postprocesses and pipeline_result.processed_outputs:
         run_postprocesses(
             postprocesses,
@@ -326,6 +429,7 @@ def _run_workflow_postprocesses(
             input_path,
             selected_pipeline_names,
             pipeline_result.failures,
+            zip_outputs=zip_outputs,
         )
     elif postprocesses:
         log(
@@ -333,6 +437,8 @@ def _run_workflow_postprocesses(
             "so postprocess steps were skipped."
         )
         advance_progress(len(postprocesses))
+    if postprocess_started_at is not None:
+        _log_elapsed(log, "Postprocess phase", postprocess_started_at)
 
 
 def _finalize_workflow_outputs(
@@ -350,6 +456,7 @@ def _finalize_workflow_outputs(
     on_zip_error: Callable[[str], None] | None,
 ) -> _FinalizedOutputs:
     if zip_outputs:
+        finalize_started_at = time.monotonic()
         return _zip_workflow_outputs(
             output_dir=output_dir,
             base_output_dir=base_output_dir,
@@ -360,6 +467,7 @@ def _finalize_workflow_outputs(
             set_status=set_status,
             make_zip_progress_callback=make_zip_progress_callback,
             on_zip_error=on_zip_error,
+            finalize_started_at=finalize_started_at,
         )
 
     if len(processed_outputs) == 1:
@@ -378,6 +486,7 @@ def _zip_workflow_outputs(
     set_status: Callable[[str], None],
     make_zip_progress_callback: Callable[[], ZipProgressCallback | None],
     on_zip_error: Callable[[str], None] | None,
+    finalize_started_at: float,
 ) -> _FinalizedOutputs:
     try:
         final_zip_name = _zip_filename(zip_name)
@@ -393,6 +502,7 @@ def _zip_workflow_outputs(
             base_output_dir,
         )
         log(f"[ZIP] Archive created: {zip_path}")
+        _log_elapsed(log, "ZIP finalization", finalize_started_at)
         return _FinalizedOutputs(
             summary_message=_zip_summary(zip_path, companion_paths),
             zip_path=zip_path,
@@ -401,6 +511,7 @@ def _zip_workflow_outputs(
         zip_error = str(exc)
         advance_progress(1.0)
         log(f"[ZIP FAIL] {zip_error}")
+        _log_elapsed(log, "ZIP finalization", finalize_started_at)
         if on_zip_error is not None:
             on_zip_error(zip_error)
         return _FinalizedOutputs(
@@ -423,6 +534,24 @@ def _zip_summary(zip_path: Path, companion_paths: Sequence[Path]) -> str:
         companion_summary = ", ".join(str(path) for path in companion_paths)
         summary_parts.append(f"Companion outputs: {companion_summary}")
     return "; ".join(summary_parts)
+
+
+def _log_elapsed(
+    log: Callable[[str], None],
+    label: str,
+    started_at: float,
+) -> None:
+    log(f"[TIME] {label} completed in {_format_elapsed(time.monotonic() - started_at)}")
+
+
+def _format_elapsed(seconds: float) -> str:
+    seconds = max(0.0, seconds)
+    if seconds < 1.0:
+        return f"{seconds:.3f}s"
+    if seconds < 60.0:
+        return f"{seconds:.2f}s"
+    minutes, remainder = divmod(seconds, 60.0)
+    return f"{int(minutes)}m {remainder:.1f}s"
 
 
 def log_throttled_zip_progress(

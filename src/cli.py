@@ -26,29 +26,19 @@ import zipfile
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-import h5py
-
 from input_output import (
-    ANGIOEYE_PROCESSING_ROOT,
-    create_h5_file,
     create_zip_from_tree,
     find_hdf5_inputs,
     relative_hdf5_parent,
-    write_metrics_trees_to_h5,
 )
+from pipeline_engine import run_pipeline_file, run_postprocesses
 from pipelines import (
     PipelineDescriptor,
-    ProcessResult,
-    load_pipeline_catalog,
-    process_results_to_metric_trees,
-)
-from pipelines.core.errors import format_pipeline_exception
-from postprocess import (
-    PostprocessContext,
     PostprocessDescriptor,
+    load_pipeline_catalog,
     load_postprocess_catalog,
 )
-from workflows import copy_zip_companion_output_folders
+from workflows import ZIP_COMPANION_OUTPUT_FOLDERS, copy_zip_companion_output_folders
 
 
 def _build_pipeline_registry() -> dict[str, PipelineDescriptor]:
@@ -60,15 +50,6 @@ def _build_pipeline_registry() -> dict[str, PipelineDescriptor]:
 def _build_postprocess_registry() -> dict[str, PostprocessDescriptor]:
     available, _ = load_postprocess_catalog()
     return {p.name: p for p in available}
-
-
-def _postprocess_result_failures(result) -> list[str]:
-    failures = getattr(result, "metadata", {}).get("failures", [])
-    if isinstance(failures, str):
-        return [failures]
-    if not isinstance(failures, Sequence):
-        return []
-    return [str(failure) for failure in failures if str(failure).strip()]
 
 
 def _load_pipeline_list(
@@ -140,17 +121,6 @@ def _validate_postprocess_selection(
         raise ValueError("\n".join(errors))
 
 
-def _find_h5_inputs(path: Path) -> list[Path]:
-    return find_hdf5_inputs(path)
-
-
-def _safe_pipeline_suffix(name: str) -> str:
-    cleaned = "".join(ch if ch.isalnum() else "_" for ch in name.lower())
-    while "__" in cleaned:
-        cleaned = cleaned.replace("__", "_")
-    return cleaned.strip("_") or "pipeline"
-
-
 def _prepare_data_root(
     data_path: Path,
 ) -> tuple[Path, tempfile.TemporaryDirectory | None]:
@@ -161,51 +131,6 @@ def _prepare_data_root(
             zf.extractall(tempdir.name)
         return Path(tempdir.name), tempdir
     return data_path, None
-
-
-def _run_pipelines_on_file(
-    h5_path: Path,
-    pipelines: Sequence[PipelineDescriptor],
-    output_root: Path,
-    output_relative_parent: Path = Path("."),
-    trim_source: bool = False,
-) -> Path:
-    target_dir = output_root / output_relative_parent
-    target_dir.mkdir(parents=True, exist_ok=True)
-    combined_h5_out = target_dir / f"{h5_path.stem}_pipelines_result.h5"
-    suffix = 1
-    while combined_h5_out.exists():
-        combined_h5_out = target_dir / f"{h5_path.stem}_{suffix}_pipelines_result.h5"
-        suffix += 1
-    pipeline_results: list[tuple[str, ProcessResult]] = []
-    with h5py.File(h5_path, "r") as h5file:
-        for pipeline_desc in pipelines:
-            pipeline = pipeline_desc.instantiate()
-            try:
-                result = pipeline.run(h5file)
-            except Exception as exc:  # noqa: BLE001
-                raise RuntimeError(format_pipeline_exception(exc, pipeline)) from exc
-            pipeline_results.append((pipeline.name, result))
-            print(f"[OK] {h5_path.name} -> {pipeline.name}")
-    create_h5_file(
-        combined_h5_out,
-        source_file=str(h5_path),
-        trim_source=trim_source,
-    )
-    write_metrics_trees_to_h5(
-        combined_h5_out,
-        ANGIOEYE_PROCESSING_ROOT,
-        process_results_to_metric_trees(pipeline_results),
-        overwrite=False,
-    )
-    for _, result in pipeline_results:
-        result.output_h5_path = str(combined_h5_out)
-    print(f"[OK] {h5_path.name}: combined results -> {combined_h5_out}")
-    return combined_h5_out
-
-
-def _relative_input_parent(h5_path: Path, input_root: Path) -> Path:
-    return relative_hdf5_parent(h5_path, input_root)
 
 
 def _zip_output_dir(
@@ -226,6 +151,7 @@ def _zip_output_dir(
     return create_zip_from_tree(
         folder,
         zip_path,
+        exclude_root_dirs=ZIP_COMPANION_OUTPUT_FOLDERS,
         compresslevel=1,
         progress_callback=progress_callback,
     )
@@ -256,7 +182,7 @@ def run_cli(
     work_tempdir_path: Path | None = None
     clean_work_output = False
     try:
-        inputs = _find_h5_inputs(data_root)
+        inputs = find_hdf5_inputs(data_root)
         if not inputs:
             raise ValueError(f"No .h5/.hdf5 files found under {data_path}")
 
@@ -271,58 +197,53 @@ def run_cli(
         failures: list[str] = []
         processed_outputs: list[Path] = []
         processed_input_paths: list[Path] = []
+        pipeline_started_at = time.monotonic()
         for h5_path in inputs:
             try:
-                relative_parent = _relative_input_parent(h5_path, data_root)
-                combined_output = _run_pipelines_on_file(
+                relative_parent = relative_hdf5_parent(h5_path, data_root)
+                combined_output = run_pipeline_file(
                     h5_path,
                     pipelines,
                     work_root,
-                    output_relative_parent=relative_parent,
+                    relative_parent,
                     trim_source=trim_source,
+                    log=print,
+                    advance_progress=None,
+                    write_idle_callback=None,
                 )
                 processed_outputs.append(combined_output)
                 processed_input_paths.append(h5_path)
             except Exception as exc:  # noqa: BLE001
                 failures.append(f"{h5_path}: {exc}")
                 print(f"[FAIL] {h5_path.name}: {exc}", file=sys.stderr)
+        _print_elapsed("Pipeline phase", pipeline_started_at)
 
         if postprocesses and processed_outputs:
-            context = PostprocessContext(
-                output_dir=work_root,
-                processed_files=tuple(processed_outputs),
-                selected_pipelines=tuple(pipeline.name for pipeline in pipelines),
-                input_path=data_path,
+            postprocess_started_at = time.monotonic()
+            run_postprocesses(
+                postprocesses,
+                work_root,
+                processed_outputs,
+                processed_input_paths,
+                data_path,
+                tuple(pipeline.name for pipeline in pipelines),
+                failures,
                 zip_outputs=zip_outputs,
-                input_h5_paths=tuple(processed_input_paths),
+                log=_log_postprocess,
+                advance_progress=lambda _units=1.0: None,
             )
-            for descriptor in postprocesses:
-                print(f"[POST] Running {descriptor.name}...")
-                try:
-                    result = descriptor.instantiate().run(context)
-                except Exception as exc:  # noqa: BLE001
-                    msg = (
-                        f"Postprocess '{descriptor.name}' failed: "
-                        f"{type(exc).__name__}: {exc}"
-                    )
-                    failures.append(msg)
-                    print(f"[POST FAIL] {msg}", file=sys.stderr)
-                    continue
-                if result.summary:
-                    print(f"[POST OK] {descriptor.name}: {result.summary}")
-                else:
-                    print(f"[POST OK] {descriptor.name}")
-                for warning in _postprocess_result_failures(result):
-                    failures.append(warning)
-                    print(f"[POST WARN] {warning}", file=sys.stderr)
+            _print_elapsed("Postprocess phase", postprocess_started_at)
         elif postprocesses:
+            postprocess_started_at = time.monotonic()
             print(
                 "[POST SKIP] No successful pipeline outputs were generated, "
                 "so postprocess steps were skipped.",
                 file=sys.stderr,
             )
+            _print_elapsed("Postprocess phase", postprocess_started_at)
 
         if zip_outputs:
+            zip_started_at = time.monotonic()
             try:
                 final_name = (zip_name or "outputs.zip").strip() or "outputs.zip"
                 if not final_name.lower().endswith(".zip"):
@@ -357,10 +278,12 @@ def run_cli(
                     summary_parts.append(f"Companion outputs: {companion_summary}")
                 summary_msg = "; ".join(summary_parts)
                 clean_work_output = True
+                _print_elapsed("ZIP finalization", zip_started_at)
             except Exception as exc:  # noqa: BLE001
                 print(
                     f"[ZIP FAIL] Could not create ZIP archive: {exc}", file=sys.stderr
                 )
+                _print_elapsed("ZIP finalization", zip_started_at)
                 summary_msg = f"Outputs stored under: {work_root}"
         else:
             summary_msg = f"Outputs stored under: {work_root}"
@@ -447,6 +370,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     except Exception as exc:  # noqa: BLE001
         print(f"Error: {exc}", file=sys.stderr)
         return 1
+
+
+def _log_postprocess(message: str) -> None:
+    if message.startswith("[POST FAIL]") or message.startswith("[POST WARN]"):
+        print(message, file=sys.stderr)
+    else:
+        print(message)
+
+
+def _print_elapsed(label: str, started_at: float) -> None:
+    print(f"[TIME] {label} completed in {_format_elapsed(time.monotonic() - started_at)}")
+
+
+def _format_elapsed(seconds: float) -> str:
+    seconds = max(0.0, seconds)
+    if seconds < 1.0:
+        return f"{seconds:.3f}s"
+    if seconds < 60.0:
+        return f"{seconds:.2f}s"
+    minutes, remainder = divmod(seconds, 60.0)
+    return f"{int(minutes)}m {remainder:.1f}s"
 
 
 if __name__ == "__main__":
