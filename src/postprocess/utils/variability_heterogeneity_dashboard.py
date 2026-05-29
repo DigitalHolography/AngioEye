@@ -1,4 +1,4 @@
-import re
+﻿import re
 import shutil
 from collections import defaultdict
 from pathlib import Path
@@ -19,10 +19,10 @@ except ImportError as exc:
         "This script requires scipy for Mann-Whitney tests. Install it with: pip install scipy"
     ) from exc
 
-from angioeye_io.hdf5_io import find_first_existing_path
-from angioeye_io.archive_io import replace_folder_in_zip
+from input_output.hdf5_io import find_first_existing_path
+from input_output.archive_io import replace_folder_in_zip
 from ..core.grouped_batch import iter_grouped_h5_files_in_zip
-from angioeye_io.hdf5_io import MetricsTree
+from input_output.hdf5_io import MetricsTree
 
 
 SEGMENT_METRIC_FOLDER = "/AngioEye/Processing/waveform_shape_metrics/artery/by_segment/"
@@ -2107,3 +2107,4 @@ def export_group_tables(
 if __name__ == "__main__":
     zip_path = choose_zip()
     export_group_tables(zip_path, top_n=DEFAULT_TOP_N)
+

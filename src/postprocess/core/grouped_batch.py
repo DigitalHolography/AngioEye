@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
@@ -6,10 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from angioeye_io.archive_io import extracted_zip_tree
-
-
-H5_SUFFIXES = {".h5", ".hdf5"}
+from input_output.archive_io import ZipH5Member, iter_extracted_h5_members, list_h5_members
+from input_output.hdf5_schema import is_hdf5_path
 
 
 @dataclass(frozen=True)
@@ -22,7 +20,24 @@ class GroupedH5File:
 def extract_group_name(root: str | Path, batch_root: str | Path) -> str:
     root_path = Path(root)
     batch_root_path = Path(batch_root)
-    return "all" if root_path == batch_root_path else root_path.name
+    try:
+        relative = root_path.relative_to(batch_root_path)
+    except ValueError:
+        return root_path.name
+    return "all" if relative == Path(".") else relative.parts[0]
+
+
+def _extract_member_group_name(member: ZipH5Member) -> str:
+    parts = member.relative_path.parts
+    return "all" if len(parts) == 1 else parts[0]
+
+
+def _grouped_record_for_member(member: ZipH5Member, file_path: Path) -> GroupedH5File:
+    return GroupedH5File(
+        group_name=_extract_member_group_name(member),
+        file_name=member.relative_path.name,
+        file_path=file_path,
+    )
 
 
 def iter_grouped_h5_files(
@@ -37,7 +52,7 @@ def iter_grouped_h5_files(
         h5_files = sorted(
             file_name
             for file_name in files
-            if Path(file_name).suffix.lower() in H5_SUFFIXES
+            if is_hdf5_path(file_name)
         )
         if not h5_files:
             continue
@@ -68,8 +83,27 @@ def iter_grouped_h5_files_in_zip(
     *,
     sort_key: Callable[[GroupedH5File], Any] | None = None,
 ) -> Iterator[GroupedH5File]:
-    with extracted_zip_tree(zip_path) as batch_root:
-        yield from iter_grouped_h5_files(batch_root, sort_key=sort_key)
+    members = list_h5_members(zip_path)
+    sortable_members = [
+        (
+            member,
+            _grouped_record_for_member(member, member.relative_path),
+        )
+        for member in members
+    ]
+    if sort_key is None:
+        sortable_members.sort(
+            key=lambda item: (
+                item[1].group_name.lower(),
+                item[1].file_name.lower(),
+            )
+        )
+    else:
+        sortable_members.sort(key=lambda item: sort_key(item[1]))
+
+    for member, _record in sortable_members:
+        for extracted in iter_extracted_h5_members(zip_path, [member]):
+            yield _grouped_record_for_member(member, extracted.path)
 
 
 def build_grouped_h5_index(
@@ -111,3 +145,4 @@ __all__ = [
     "iter_grouped_h5_files",
     "iter_grouped_h5_files_in_zip",
 ]
+
