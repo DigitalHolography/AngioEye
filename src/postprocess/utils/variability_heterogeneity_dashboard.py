@@ -31,7 +31,7 @@ EPS = 1e-12
 
 DEFAULT_TOP_N = 10
 
-CONTROL_GROUP_PATTERNS = [  
+CONTROL_GROUP_PATTERNS = [
     r"^control$",
     r"^controle$",
     r"^controls$",
@@ -51,84 +51,56 @@ INPUT_METRICS = [
     "sigma_t_over_T",
     "W50_over_T",
     "W80_over_T",
-    "E_low_over_E_total",
+    "E_LF_over_E_HF",
     "t_max_over_T",
     "t_min_over_T",
-    "Delta_t_over_T",
-    "slope_rise_normalized",
-    "slope_fall_normalized",
-    "t_up_over_T",
-    "t_down_over_T",
-    "crest_factor",
+    "S_rise",
+    "S_fall",
+    "t_rise_over_T",
+    "t_fall_over_T",
+    "CF",
     "Delta_DTI",
     "gamma_t",
     "N_eff_over_T",
     "N_t_over_T",
-    "s_t",
-    "w_t",
-    "s_d",
-    "w_d",
-    "v_end_over_v_mean",
+    "Q_t_skew",
+    "Q_t_width",
+    "Q_d_skew",
+    "Q_d_width",
+    "v_end_over_vbar",
     "E_slope",
     "t50_over_T",
-    "t_phi_over_T",
-    "rho_h",
-    "w_h",
-    "N_h_over_H_minus_1",
-    "D_phi",
-    "s_phi_over_T",
-    "eta_h",
 ]
 
 
 METRIC_LABELS = {
     "RI": r"$\rm RI$",
-    "rho_h_90": r"$\rho_{h,90}$",
-    "rho_h_95": r"$\rho_{h,95}$",
-    "crest_factor": r"$\rm CF$",
+    "CF": r"$\rm CF$",
     "t50_over_T": r"$t_{50}/T$",
     "R_VTI": r"$R_{VTI}$",
-    "spectral_entropy": r"$H_{spec}$",
     "mu_t_over_T": r"$\mu_t/T$",
     "PI": r"$\rm PI$",
     "SF_VTI": r"$SF_{VTI}$",
     "sigma_t_over_T": r"$\sigma_t/T$",
-    "delta_phi2": r"$\Delta\phi_2$",
     "t_max_over_T": r"$t_{\mathrm{max}}/T$",
     "t_min_over_T": r"$t_{\mathrm{min}}/T$",
-    "Delta_t_over_T": r"$\Delta_{\mathrm{t}}/T$",
-    "t_up_over_T": r"$t_{\mathrm{up}}/T$",
-    "t_down_over_T": r"$t_{\mathrm{down}}/T$",
-    "S_decay": r"$S_{\mathrm{decay}}$",
+    "t_rise_over_T": r"$t_{\mathrm{rise}}/T$",
+    "t_fall_over_T": r"$t_{\mathrm{fall}}/T$",
     "Delta_DTI": r"$\Delta_{\mathrm{DTI}}$",
-    "E_high_over_E_total": r"$E_{\mathrm{high}}/E_{\mathrm{total}}$",
-    "E_low_over_E_total": r"$E_{\mathrm{low}}/E_{\mathrm{total}}$",
-    "R_SD": r"$R_{SD}$",
-    "slope_fall_normalized": r"$S_{\mathrm{fall}}$",
-    "slope_rise_normalized": r"$S_{\mathrm{rise}}$",
+    "E_LF_over_E_HF": r"$E_{\mathrm{LF}}/E_{\mathrm{HF}}$",
+    "S_fall": r"$S_{\mathrm{fall}}$",
+    "S_rise": r"$S_{\mathrm{rise}}$",
     "gamma_t": r"$\gamma_t$",
-    "mu_h": r"$\mu_h$",
-    "sigma_h": r"$\sigma_h$",
     "N_eff_over_T": r"$N_{\mathrm{eff}}/T$",
-    "E_recon_H_MAX": r"$E_{\mathrm{recon},H_{\max}}$",
-    "s_t": r"$s_{\mathrm{t}}$",
-    "w_t": r"$w_{\mathrm{t}}$",
-    "s_d": r"$s_{\mathrm{d}}$",
-    "w_d": r"$w_{\mathrm{d}}$",
-    "v_end_over_v_mean": r"$R_{EM}$",
+    "Q_t_skew": r"$Q_{\mathrm{t,skew}}$",
+    "Q_t_width": r"$Q_{\mathrm{t,width}}$",
+    "Q_d_skew": r"$Q_{\mathrm{d,skew}}$",
+    "Q_d_width": r"$Q_{\mathrm{d,width}}$",
+    "v_end_over_vbar": r"$v_{\mathrm{end}}/\bar{\mathrm{v}}$",
     "E_slope": r"$E_{\mathrm{slope}}$",
-    "phase_locking_residual": r"$E_{\phi}$",
     "W50_over_T": r"$W_{50}/T$",
     "W80_over_T": r"$W_{80}/T$",
     "N_t_over_T": r"$N_t/T$",
-    "t_phi_n_over_T": r"$t_{\Delta\phi_n}/T$",
-    "t_phi_over_T": r"$t_{\phi}/T$",
-    "D_phi": r"$D_{\phi}$",
-    "s_phi_over_T": r"$s_{\Delta\phi}/T$",
-    "eta_h": r"$\eta_h$",
-    "rho_h": r"$\rho_{h}$",
-    "w_h": r"$w_{h}$",
-    "N_h_over_H_minus_1": r"$N_{H}/(H-1)$",
 }
 
 
@@ -155,7 +127,7 @@ SPATIAL_VARIABILITY_COLUMNS = [
 
 TEMPORAL_VARIABILITY_COLUMNS = [
     "STD_beat_medseg",
-    #"IQR_beat_medseg",
+    # "IQR_beat_medseg",
     "MAD_beat_medseg",
     "CV_beat_medseg",
 ]
@@ -173,11 +145,15 @@ SUMMARY_PVALUE_METRICS = [
 SPATIAL_SELECTED_METRICS = [
     "RI",
     "PI",
+    "t50_over_T",
+    "v_end_over_vbar",
 ]
 
 TEMPORAL_SELECTED_METRICS = [
     "N_t_over_T",
     "N_eff_over_T",
+    "RI",
+    "t50_over_T",
 ]
 
 
@@ -534,12 +510,9 @@ def format_pvalue_latex(value, sig_digits=3, threshold=1e-3):
     if value == 0.0:
         return r"$<10^{-300}$"
 
-    if abs(value) < threshold:
-        exponent = int(np.floor(np.log10(abs(value))))
-        mantissa = value / (10**exponent)
-        return rf"${mantissa:.{sig_digits}g} \times 10^{{{exponent}}}$"
-
-    return f"{value:.{sig_digits}g}"
+    exponent = int(np.floor(np.log10(abs(value))))
+    mantissa = value / (10**exponent)
+    return rf"${mantissa:.{sig_digits}g} \times 10^{{{exponent}}}$"
 
 
 def latex_escape_text(value):
@@ -719,77 +692,97 @@ def mann_whitney_pvalue(control_values, group_values):
         return np.nan
 
 
-def rank_biserial_effect_size(control_values, group_values):
-    """
-    Rank-biserial correlation derived from the Mann-Whitney U statistic.
-    Positive value means the compared group tends to have larger values than control.
-    """
-    x = clean_values(control_values)
-    y = clean_values(group_values)
-
-    if x.size == 0 or y.size == 0:
-        return np.nan
-
-    try:
-        res = mannwhitneyu(y, x, alternative="two-sided", method="auto")
-        u = float(res.statistic)
-        return float((2.0 * u) / (x.size * y.size) - 1.0)
-    except ValueError:
-        return np.nan
-
-
 def build_variability_ranking_table(
-    results_for_group,
+    control_results,
+    group_results,
     higher_metrics,
+    control_name,
+    group_name,
     metrics=INPUT_METRICS,
     n=DEFAULT_TOP_N,
     ascending=False,
-    digits=4,
+    digits=3,
+    domain_name="spatial",
 ):
+    """
+    Builds the Top-N most/least variable metrics table between one group and control.
+
+    Output columns:
+      Rank, Metric, V_group, V_ctrl, V_global
+
+    V_group  = median composite variability score in compared group
+    V_ctrl   = median composite variability score in control group
+    V_global = mean(V_group, V_ctrl)
+
+    Sorting is done on V_global:
+      ascending=False -> most variable
+      ascending=True  -> least variable
+    """
     rows = []
 
+    control_tex = latex_escape_text(control_name)
+    group_tex = latex_escape_text(group_name)
+    v_group_col = f"$V^{{{domain_name}}}_{{{group_tex}}}$"
+    v_ctrl_col = f"$V^{{{domain_name}}}_{{{control_tex}}}$"
+    v_global_col = f"$V^{{{domain_name}}}_{{global}}$"
     for metric_name in metrics:
-        values = combine_variability_score(
-            results_for_group,
+        x_ctrl = combine_variability_score(
+            control_results,
             metric_name,
             higher_metrics,
         )
-        stats = summarize_values(values)
+        x_group = combine_variability_score(
+            group_results,
+            metric_name,
+            higher_metrics,
+        )
+
+        s_ctrl = summarize_values(x_ctrl)
+        s_group = summarize_values(x_group)
+
+        v_ctrl = s_ctrl["median"]
+        v_group = s_group["median"]
+
+        if not np.isfinite(v_ctrl) or not np.isfinite(v_group):
+            continue
+
+        v_global = 0.5 * (v_ctrl + v_group)
 
         rows.append(
             {
                 "Metric": metric_label(metric_name),
-                "metric_name": metric_name,
-                "n": stats["n"],
-                "score_mean": stats["mean"],
-                "score_std": stats["std"],
-                "score_median": stats["median"],
-                "score_iqr": stats["iqr"],
+                v_group_col: v_group,
+                v_ctrl_col: v_ctrl,
+                v_global_col: v_global,
             }
         )
 
     df = pd.DataFrame(rows)
-    df = df[np.isfinite(df["score_mean"])]
-    df = df.sort_values("score_mean", ascending=ascending).head(n)
 
-    df["Score mean ± SD"] = df.apply(
-        lambda r: (
-            "NA"
-            if not np.isfinite(r["score_mean"])
-            else f"{r['score_mean']:.{digits}g} $\\pm$ {r['score_std']:.{digits}g}"
-        ),
-        axis=1,
-    )
-    df["Score median [IQR]"] = df.apply(
-        lambda r: (
-            "NA"
-            if not np.isfinite(r["score_median"])
-            else f"{r['score_median']:.{digits}g} [{r['score_iqr']:.{digits}g}]"
-        ),
-        axis=1,
-    )
+    if df.empty:
+        return df
 
-    return df[["Metric", "n", "Score mean ± SD", "Score median [IQR]"]]
+    df = df.sort_values(v_global_col, ascending=ascending).head(n)
+    df.insert(0, "Rank", np.arange(1, len(df) + 1))
+
+    value_cols = [
+        v_group_col,
+        v_ctrl_col,
+        v_global_col,
+    ]
+
+    for col in value_cols:
+        df[col] = df[col].apply(lambda v: format_float(v, digits=digits))
+
+    return df[
+        [
+            "Rank",
+            "Metric",
+            v_group_col,
+            v_ctrl_col,
+            v_global_col,
+        ]
+    ]
 
 
 def build_contrast_table(
@@ -800,58 +793,94 @@ def build_contrast_table(
     group_name,
     metrics=INPUT_METRICS,
     n=DEFAULT_TOP_N,
-    digits=4,
+    digits=3,
+    domain_name="spatial",
 ):
+    """
+    Builds the strongest variability contrast table.
+
+    Output columns:
+      Rank, Metric, More variable group, V_group, V_ctrl, Ratio
+
+    Ratio = max(V_group, V_ctrl) / min(V_group, V_ctrl)
+
+    The table is sorted by Ratio in descending order.
+    """
     rows = []
 
-    for metric_name in metrics:
-        x = combine_variability_score(control_results, metric_name, higher_metrics)
-        y = combine_variability_score(group_results, metric_name, higher_metrics)
-        sx = summarize_values(x)
-        sy = summarize_values(y)
+    control_tex = latex_escape_text(control_name)
+    group_tex = latex_escape_text(group_name)
+    v_group_col = f"$V^{{{domain_name}}}_{{{group_tex}}}$"
+    v_ctrl_col = f"$V^{{{domain_name}}}_{{{control_tex}}}$"
 
-        diff = sy["median"] - sx["median"]
-        ratio = (
-            sy["median"] / (abs(sx["median"]) + EPS)
-            if np.isfinite(sx["median"])
-            else np.nan
+    for metric_name in metrics:
+        x_ctrl = combine_variability_score(
+            control_results,
+            metric_name,
+            higher_metrics,
         )
+        x_group = combine_variability_score(
+            group_results,
+            metric_name,
+            higher_metrics,
+        )
+
+        s_ctrl = summarize_values(x_ctrl)
+        s_group = summarize_values(x_group)
+
+        v_ctrl = s_ctrl["median"]
+        v_group = s_group["median"]
+
+        if not np.isfinite(v_ctrl) or not np.isfinite(v_group):
+            continue
+
+        if abs(v_ctrl) < EPS and abs(v_group) < EPS:
+            ratio = np.nan
+        else:
+            ratio = max(abs(v_ctrl), abs(v_group)) / (
+                min(abs(v_ctrl), abs(v_group)) + EPS
+            )
+
+        if not np.isfinite(ratio):
+            continue
+
+        more_variable_group = group_tex if v_group >= v_ctrl else control_tex
 
         rows.append(
             {
                 "Metric": metric_label(metric_name),
-                "metric_name": metric_name,
-                f"n {control_name}": sx["n"],
-                f"n {group_name}": sy["n"],
-                f"Median {control_name}": sx["median"],
-                f"Median {group_name}": sy["median"],
-                "Median difference": diff,
-                "Median ratio": ratio,
-                "Abs median difference": abs(diff) if np.isfinite(diff) else np.nan,
+                "More variable group": more_variable_group,
+                v_group_col: v_group,
+                v_ctrl_col: v_ctrl,
+                "Ratio": ratio,
             }
         )
 
     df = pd.DataFrame(rows)
-    df = df[np.isfinite(df["Abs median difference"])]
-    df = df.sort_values("Abs median difference", ascending=False).head(n)
 
-    for col in [
-        f"Median {control_name}",
-        f"Median {group_name}",
-        "Median difference",
-        "Median ratio",
-    ]:
+    if df.empty:
+        return df
+
+    df = df.sort_values("Ratio", ascending=False).head(n)
+    df.insert(0, "Rank", np.arange(1, len(df) + 1))
+
+    value_cols = [
+        v_group_col,
+        v_ctrl_col,
+        "Ratio",
+    ]
+
+    for col in value_cols:
         df[col] = df[col].apply(lambda v: format_float(v, digits=digits))
 
     return df[
         [
+            "Rank",
             "Metric",
-            f"n {control_name}",
-            f"n {group_name}",
-            f"Median {control_name}",
-            f"Median {group_name}",
-            "Median difference",
-            "Median ratio",
+            "More variable group",
+            v_group_col,
+            v_ctrl_col,
+            "Ratio",
         ]
     ]
 
@@ -875,7 +904,6 @@ def build_mannwhitney_ranking_table(
         sy = summarize_values(y)
 
         p = mann_whitney_pvalue(x, y)
-        rbc = rank_biserial_effect_size(x, y)
         diff = sy["median"] - sx["median"]
 
         rows.append(
@@ -888,7 +916,6 @@ def build_mannwhitney_ranking_table(
                 f"Median {group_name}": sy["median"],
                 "Median difference": diff,
                 "Mann-Whitney p-value": p,
-                "Rank-biserial effect": rbc,
             }
         )
 
@@ -903,7 +930,6 @@ def build_mannwhitney_ranking_table(
         f"Median {control_name}",
         f"Median {group_name}",
         "Median difference",
-        "Rank-biserial effect",
     ]:
         df[col] = df[col].apply(lambda v: format_float(v, digits=digits))
 
@@ -919,10 +945,10 @@ def build_mannwhitney_ranking_table(
             f"Median {control_name}",
             f"Median {group_name}",
             "Median difference",
-            "Rank-biserial effect",
             "Mann-Whitney p-value",
         ]
     ]
+
 
 DESCRIPTOR_LABELS = {
     "STD": r"$\mathrm{STD}$",
@@ -930,6 +956,7 @@ DESCRIPTOR_LABELS = {
     "MAD": r"$\mathrm{MAD}$",
     "CV": r"$\mathrm{CV}$",
 }
+
 
 def get_descriptor_values_for_test(
     results_for_group,
@@ -1244,8 +1271,6 @@ def build_group_separation_metrics_table(
             digits=digits,
         )
 
-        mean_diff_label = f"Mean difference ({group_tex} $-$ {control_tex})"
-
         metric_results[metric_label(metric_name)] = {
             n_control_label: str(sx["n"]),
             n_group_label: str(sy["n"]),
@@ -1254,13 +1279,11 @@ def build_group_separation_metrics_table(
             "More variable group": more_variable_group,
             "Mann--Whitney p-value": format_pvalue_latex(p, sig_digits=digits),
             "Cohen's $d$": format_float(d, digits=digits),
-            mean_diff_label: format_float(diff, digits=digits),
             ci_label: (
                 f"[{format_float(ci_low, digits=digits)}, "
                 f"{format_float(ci_high, digits=digits)}]"
             ),
             "AUC separability": format_float(auc_sep, digits=digits),
-            "Best decision rule": decision_rule,
             "Sensitivity": format_float(sensitivity, digits=digits),
             "Specificity": format_float(specificity, digits=digits),
             "Overlap OVL": format_float(ovl, digits=digits),
@@ -1274,10 +1297,8 @@ def build_group_separation_metrics_table(
         "More variable group",
         "Mann--Whitney p-value",
         "Cohen's $d$",
-        f"Mean difference ({group_tex} $-$ {control_tex})",
         ci_label,
         "AUC separability",
-        "Best decision rule",
         "Sensitivity",
         "Specificity",
         "Overlap OVL",
@@ -1359,11 +1380,9 @@ def build_auc_separability_ranking_table(
                 "AUC separability": auc_sep,
                 "Mann--Whitney p-value": p,
                 "Cohen's $d$": d,
-                f"Mean difference ({group_tex} $-$ {control_tex})": diff,
                 "Sensitivity": sensitivity,
                 "Specificity": specificity,
                 "Overlap OVL": ovl,
-                "Best decision rule": decision_rule,
             }
         )
 
@@ -1380,7 +1399,6 @@ def build_auc_separability_ranking_table(
         f"Median {group_tex}",
         "AUC separability",
         "Cohen's $d$",
-        f"Mean difference ({group_tex} $-$ {control_tex})",
         "Sensitivity",
         "Specificity",
         "Overlap OVL",
@@ -1404,11 +1422,9 @@ def build_auc_separability_ranking_table(
             "AUC separability",
             "Mann--Whitney p-value",
             "Cohen's $d$",
-            f"Mean difference ({group_tex} $-$ {control_tex})",
             "Sensitivity",
             "Specificity",
             "Overlap OVL",
-            "Best decision rule",
         ]
     ]
 
@@ -1422,7 +1438,7 @@ SPATIAL_DESCRIPTOR_MAP = {
 
 TEMPORAL_DESCRIPTOR_MAP = {
     "STD": "STD_beat_medseg",
-    #"IQR": "IQR_beat_medseg",
+    # "IQR": "IQR_beat_medseg",
     "MAD": "MAD_beat_medseg",
     "CV": "CV_beat_medseg",
 }
@@ -1569,10 +1585,7 @@ def dataframe_to_latex_table(
 
     lines = [
         r"\begin{table}[H]",
-        r"\raggedright",
-        font_size,
-        r"\setlength{\tabcolsep}{3pt}",
-        r"\renewcommand{\arraystretch}{0.9}",
+        r"\centering",
     ]
 
     if caption:
@@ -1747,12 +1760,16 @@ def export_group_tables(
         # Spatial comparison tables
         # ------------------------------
         df = build_variability_ranking_table(
+            control_results,
             group_results,
             higher_metrics=SPATIAL_VARIABILITY_COLUMNS,
+            control_name=control_group,
+            group_name=group_name,
             metrics=metrics,
             n=top_n,
             ascending=False,
             digits=digits,
+            domain_name="spatial",
         )
         generated.extend(
             save_table(
@@ -1766,12 +1783,16 @@ def export_group_tables(
         )
 
         df = build_variability_ranking_table(
+            control_results,
             group_results,
             higher_metrics=SPATIAL_VARIABILITY_COLUMNS,
+            control_name=control_group,
+            group_name=group_name,
             metrics=metrics,
             n=top_n,
             ascending=True,
             digits=digits,
+            domain_name="spatial",
         )
         generated.extend(
             save_table(
@@ -1793,6 +1814,7 @@ def export_group_tables(
             metrics=metrics,
             n=top_n,
             digits=digits,
+            domain_name="spatial",
         )
         generated.extend(
             save_table(
@@ -1842,7 +1864,7 @@ def export_group_tables(
                 spatial_cmp_dir / f"{pair}_spatial_descriptor_pvalue_summary_RI_PI.tex",
                 caption=(
                     f"Spatial descriptor-specific Mann-Whitney p-values between "
-                    f"{control_group} and {group_name} for $\rm RI$ and $\rm PI$"
+                    f"{control_group} and {group_name}"
                 ),
                 label=f"tab:{pair}_spatial_descriptor_pvalue_summary",
                 digits=digits,
@@ -1865,7 +1887,7 @@ def export_group_tables(
                 spatial_cmp_dir / f"{pair}_spatial_group_separation_metrics_RI_PI.tex",
                 caption=(
                     f"Spatial group-separation metrics between {control_group} and "
-                    f"{group_name} for $\rm RI$ and $\rm PI$"
+                    f"{group_name}"
                 ),
                 label=f"tab:{pair}_spatial_group_separation_metrics",
                 digits=digits,
@@ -1901,12 +1923,16 @@ def export_group_tables(
         # Temporal comparison tables
         # ------------------------------
         df = build_variability_ranking_table(
+            control_results,
             group_results,
-            higher_metrics=TEMPORAL_VARIABILITY_COLUMNS,
+            higher_metrics=SPATIAL_VARIABILITY_COLUMNS,
+            control_name=control_group,
+            group_name=group_name,
             metrics=metrics,
             n=top_n,
             ascending=False,
             digits=digits,
+            domain_name="temporal",
         )
         generated.extend(
             save_table(
@@ -1920,12 +1946,16 @@ def export_group_tables(
         )
 
         df = build_variability_ranking_table(
+            control_results,
             group_results,
-            higher_metrics=TEMPORAL_VARIABILITY_COLUMNS,
+            higher_metrics=SPATIAL_VARIABILITY_COLUMNS,
+            control_name=control_group,
+            group_name=group_name,
             metrics=metrics,
             n=top_n,
             ascending=True,
             digits=digits,
+            domain_name="temporal",
         )
         generated.extend(
             save_table(
@@ -1947,6 +1977,7 @@ def export_group_tables(
             metrics=metrics,
             n=top_n,
             digits=digits,
+            domain_name="temporal",
         )
         generated.extend(
             save_table(
@@ -2005,8 +2036,7 @@ def export_group_tables(
                 / f"{pair}_temporal_descriptor_pvalue_summary_Nt_Neff.tex",
                 caption=(
                     f"Temporal descriptor-specific Mann-Whitney p-values between "
-                    f"{control_group} and {group_name} for $N_t/T$ and "
-                    f"$N_{{\mathrm{{eff}}}}/T$"
+                    f"{control_group} and {group_name} "
                 ),
                 label=f"tab:{pair}_temporal_descriptor_pvalue_summary",
                 digits=digits,
@@ -2031,7 +2061,7 @@ def export_group_tables(
                 / f"{pair}_temporal_group_separation_metrics_Nt_Neff.tex",
                 caption=(
                     f"Temporal group-separation metrics between {control_group} and "
-                    f"{group_name} for $N_t/T$ and $N_{{\mathrm{{eff}}}}/T$"
+                    f"{group_name}"
                 ),
                 label=f"tab:{pair}_temporal_group_separation_metrics",
                 digits=digits,
