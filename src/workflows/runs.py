@@ -18,6 +18,7 @@ from ._pipeline_runs import (
     run_zip_pipeline_run,
 )
 from ._zip_batches import ZipBatchSettings
+from .timing import TimingSamples
 
 
 @dataclass
@@ -198,15 +199,18 @@ def run_filesystem_workflow(
             set_status=set_status,
             make_zip_progress_callback=make_zip_progress_callback,
             on_zip_error=on_zip_error,
+            timings=pipeline_result.timings,
         )
         cleanup_workspace = (
             workspace.uses_temporary_output_dir and not finalized_outputs.zip_failed
         )
-        return _workflow_result(
+        workflow_result = _workflow_result(
             output_dir=workspace.output_dir,
             pipeline_result=pipeline_result,
             finalized_outputs=finalized_outputs,
         )
+        _log_timing_averages(log, pipeline_result.timings)
+        return workflow_result
     finally:
         if cleanup_workspace:
             workspace.cleanup_temporary_output_dir()
@@ -283,15 +287,18 @@ def run_zip_workflow(
             set_status=set_status,
             make_zip_progress_callback=make_zip_progress_callback,
             on_zip_error=on_zip_error,
+            timings=pipeline_result.timings,
         )
         cleanup_workspace = (
             workspace.uses_temporary_output_dir and not finalized_outputs.zip_failed
         )
-        return _workflow_result(
+        workflow_result = _workflow_result(
             output_dir=workspace.output_dir,
             pipeline_result=pipeline_result,
             finalized_outputs=finalized_outputs,
         )
+        _log_timing_averages(log, pipeline_result.timings)
+        return workflow_result
     finally:
         if cleanup_workspace:
             workspace.cleanup_temporary_output_dir()
@@ -454,6 +461,7 @@ def _finalize_workflow_outputs(
     set_status: Callable[[str], None],
     make_zip_progress_callback: Callable[[], ZipProgressCallback | None],
     on_zip_error: Callable[[str], None] | None,
+    timings: TimingSamples | None = None,
 ) -> _FinalizedOutputs:
     if zip_outputs:
         finalize_started_at = time.monotonic()
@@ -468,6 +476,7 @@ def _finalize_workflow_outputs(
             make_zip_progress_callback=make_zip_progress_callback,
             on_zip_error=on_zip_error,
             finalize_started_at=finalize_started_at,
+            timings=timings,
         )
 
     if len(processed_outputs) == 1:
@@ -487,20 +496,31 @@ def _zip_workflow_outputs(
     make_zip_progress_callback: Callable[[], ZipProgressCallback | None],
     on_zip_error: Callable[[str], None] | None,
     finalize_started_at: float,
+    timings: TimingSamples | None = None,
 ) -> _FinalizedOutputs:
     try:
         final_zip_name = _zip_filename(zip_name)
         set_status("Creating ZIP...")
         log("[ZIP] Preparing archive...")
+        zip_started_at = time.monotonic()
         zip_path = zip_output_dir(
             output_dir,
             base_output_dir / final_zip_name,
             make_zip_progress_callback(),
         )
+        if timings is not None:
+            _add_timing(timings, "final ZIP creation", time.monotonic() - zip_started_at)
+        copy_started_at = time.monotonic()
         companion_paths = copy_zip_companion_output_folders(
             output_dir,
             base_output_dir,
         )
+        if timings is not None:
+            _add_timing(
+                timings,
+                "companion output copy",
+                time.monotonic() - copy_started_at,
+            )
         log(f"[ZIP] Archive created: {zip_path}")
         _log_elapsed(log, "ZIP finalization", finalize_started_at)
         return _FinalizedOutputs(
@@ -542,6 +562,37 @@ def _log_elapsed(
     started_at: float,
 ) -> None:
     log(f"[TIME] {label} completed in {_format_elapsed(time.monotonic() - started_at)}")
+
+
+def _log_timing_averages(
+    log: Callable[[str], None],
+    timings: TimingSamples,
+) -> None:
+    if not timings:
+        return
+
+    samples_by_label = (
+        timings.snapshot() if hasattr(timings, "snapshot") else dict(timings)
+    )
+    summary_items: list[str] = []
+    for label in sorted(samples_by_label):
+        samples = samples_by_label[label]
+        if not samples:
+            continue
+        average = sum(samples) / len(samples)
+        summary_items.append(
+            f"{label} average {_format_elapsed(average)} over {len(samples)} sample(s)"
+        )
+
+    if summary_items:
+        log(f"[TIMING] {'; '.join(summary_items)}")
+
+
+def _add_timing(timings: TimingSamples, label: str, seconds: float) -> None:
+    if hasattr(timings, "add"):
+        timings.add(label, seconds)
+        return
+    timings.setdefault(label, []).append(seconds)
 
 
 def _format_elapsed(seconds: float) -> str:

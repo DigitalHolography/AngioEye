@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from input_output import relative_hdf5_parent
-from pipeline_engine import run_pipeline_file, run_postprocesses
+from pipeline_engine import OutputPathAllocator, run_pipeline_file, run_postprocesses
 
 from ._holo import HoloInputContext
 from ._holo import reset_output_dir as reset_holo_output_dir
@@ -197,7 +197,12 @@ def _dispatch_zip_workflow(
         zip_outputs=request.zip_outputs,
         zip_name=request.zip_name,
         settings=request.zip_batch_settings,
-        run_pipeline_file=_pipeline_file_runner(request, callbacks, worker_safe=True),
+        run_pipeline_file=_pipeline_file_runner(
+            request,
+            callbacks,
+            worker_safe=True,
+            output_path_allocator=OutputPathAllocator(),
+        ),
         run_postprocesses=_postprocess_runner(request, callbacks),
         zip_output_dir=request.zip_output_dir,
         log=callbacks.log,
@@ -254,7 +259,12 @@ def _dispatch_filesystem_workflow(
             input_plan.h5_paths,
         ),
         settings=request.zip_batch_settings,
-        run_pipeline_file=_pipeline_file_runner(request, callbacks, worker_safe=True),
+        run_pipeline_file=_pipeline_file_runner(
+            request,
+            callbacks,
+            worker_safe=True,
+            output_path_allocator=OutputPathAllocator(),
+        ),
         run_postprocesses=_postprocess_runner(request, callbacks),
         relative_parent=relative_hdf5_parent,
         zip_output_dir=request.zip_output_dir,
@@ -273,6 +283,7 @@ def _pipeline_file_runner(
     callbacks: WorkflowCallbacks,
     *,
     worker_safe: bool,
+    output_path_allocator: OutputPathAllocator | None = None,
 ):
     def _run_pipeline_file(
         h5_path: Path,
@@ -280,6 +291,8 @@ def _pipeline_file_runner(
         output_root: Path,
         output_relative_parent: Path = Path("."),
         output_filename: str | None = None,
+        *,
+        record_timing=None,
     ) -> Path:
         return run_pipeline_file(
             h5_path,
@@ -291,6 +304,8 @@ def _pipeline_file_runner(
             log=None if worker_safe else callbacks.log,
             advance_progress=None if worker_safe else callbacks.advance_progress,
             write_idle_callback=None if worker_safe else callbacks.idle_callback,
+            output_path_allocator=output_path_allocator,
+            record_timing=record_timing,
         )
 
     return _run_pipeline_file

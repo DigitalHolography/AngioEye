@@ -1,5 +1,6 @@
 from .base import (
     BatchPostprocess,
+    FunctionPostprocess,
     MissingPostprocess,
     PostprocessContext,
     PostprocessDescriptor,
@@ -9,6 +10,7 @@ from .base import (
 
 __all__ = [
     "BatchPostprocess",
+    "FunctionPostprocess",
     "MissingPostprocess",
     "PostprocessContext",
     "PostprocessDescriptor",

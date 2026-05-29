@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
@@ -22,6 +23,36 @@ from postprocess import PostprocessContext, PostprocessDescriptor
 LogCallback = Callable[[str], None]
 ProgressCallback = Callable[[float], None]
 IdleCallback = Callable[[], None]
+TimingCallback = Callable[[str, float], None]
+
+
+class OutputPathAllocator:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._reserved: set[Path] = set()
+
+    def reserve(
+        self,
+        *,
+        h5_path: Path,
+        output_root: Path,
+        output_relative_parent: Path,
+        output_filename: str | None,
+    ) -> Path:
+        with self._lock:
+            output_path = _unique_pipeline_output_path(
+                h5_path=h5_path,
+                output_root=output_root,
+                output_relative_parent=output_relative_parent,
+                output_filename=output_filename,
+                reserved_paths=self._reserved,
+            )
+            self._reserved.add(output_path)
+            return output_path
+
+    def release(self, output_path: Path) -> None:
+        with self._lock:
+            self._reserved.discard(output_path)
 
 
 def run_pipeline_file(
@@ -35,31 +66,58 @@ def run_pipeline_file(
     log: LogCallback | None = None,
     advance_progress: ProgressCallback | None = None,
     write_idle_callback: IdleCallback | None = None,
+    output_path_allocator: OutputPathAllocator | None = None,
+    record_timing: TimingCallback | None = None,
 ) -> Path:
-    output_path = _unique_pipeline_output_path(
-        h5_path=h5_path,
-        output_root=output_root,
-        output_relative_parent=output_relative_parent,
-        output_filename=output_filename,
-    )
-    pipeline_results = _run_pipeline_descriptors(
-        h5_path=h5_path,
-        pipelines=pipelines,
-        log=log,
-        advance_progress=advance_progress,
-    )
-    _log(log, f"[SAVE] Writing output file -> {output_path.name}")
-    _write_pipeline_output(
-        pipeline_results=pipeline_results,
-        output_path=output_path,
-        source_file=str(h5_path),
-        trim_source=trim_source,
-        idle_callback=write_idle_callback,
-    )
-    for _, result in pipeline_results:
-        result.output_h5_path = str(output_path)
-    _log(log, f"[OK] {h5_path.name}: combined results -> {output_path}")
-    return output_path
+    if output_path_allocator is None:
+        output_path = _unique_pipeline_output_path(
+            h5_path=h5_path,
+            output_root=output_root,
+            output_relative_parent=output_relative_parent,
+            output_filename=output_filename,
+        )
+    else:
+        output_path = output_path_allocator.reserve(
+            h5_path=h5_path,
+            output_root=output_root,
+            output_relative_parent=output_relative_parent,
+            output_filename=output_filename,
+        )
+
+    try:
+        compute_started_at = time.monotonic()
+        pipeline_results = _run_pipeline_descriptors(
+            h5_path=h5_path,
+            pipelines=pipelines,
+            log=log,
+            advance_progress=advance_progress,
+        )
+        _record_timing(
+            record_timing,
+            "per-file pipeline compute",
+            time.monotonic() - compute_started_at,
+        )
+        _log(log, f"[SAVE] Writing output file -> {output_path.name}")
+        write_started_at = time.monotonic()
+        _write_pipeline_output(
+            pipeline_results=pipeline_results,
+            output_path=output_path,
+            source_file=str(h5_path),
+            trim_source=trim_source,
+            idle_callback=write_idle_callback,
+        )
+        _record_timing(
+            record_timing,
+            "per-file output write",
+            time.monotonic() - write_started_at,
+        )
+        for _, result in pipeline_results:
+            result.output_h5_path = str(output_path)
+        _log(log, f"[OK] {h5_path.name}: combined results -> {output_path}")
+        return output_path
+    finally:
+        if output_path_allocator is not None:
+            output_path_allocator.release(output_path)
 
 
 def run_postprocesses(
@@ -115,9 +173,11 @@ def _unique_pipeline_output_path(
     output_root: Path,
     output_relative_parent: Path,
     output_filename: str | None,
+    reserved_paths: set[Path] | None = None,
 ) -> Path:
     target_dir = output_root / output_relative_parent
     target_dir.mkdir(parents=True, exist_ok=True)
+    reserved = reserved_paths or set()
 
     if output_filename:
         base_output_path = target_dir / output_filename
@@ -127,7 +187,7 @@ def _unique_pipeline_output_path(
         output_path = base_output_path
 
     suffix = 1
-    while output_path.exists():
+    while output_path.exists() or output_path in reserved:
         if output_filename:
             output_path = (
                 target_dir
@@ -239,3 +299,12 @@ def _log(log: LogCallback | None, message: str) -> None:
 def _advance(advance_progress: ProgressCallback | None) -> None:
     if advance_progress is not None:
         advance_progress(1.0)
+
+
+def _record_timing(
+    record_timing: TimingCallback | None,
+    label: str,
+    seconds: float,
+) -> None:
+    if record_timing is not None:
+        record_timing(label, seconds)

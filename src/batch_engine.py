@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Generic, TypeVar
 
 T = TypeVar("T")
@@ -14,7 +14,12 @@ IdleCallback = Callable[[], None]
 
 def default_task_workers() -> int:
     cpu_count = os.cpu_count() or 2
-    return max(1, min(2, cpu_count - 1))
+    return min(max(1, cpu_count - 1), 8)
+
+
+def default_staging_workers() -> int:
+    cpu_count = os.cpu_count() or 2
+    return max(1, cpu_count // 2)
 
 
 def env_int(name: str, default: int) -> int:
@@ -26,9 +31,17 @@ def env_int(name: str, default: int) -> int:
 
 @dataclass(frozen=True)
 class BatchExecutionSettings:
-    batch_size: int = 4
-    staging_workers: int = 2
-    task_workers: int = default_task_workers()
+    batch_size: int = 8
+    staging_workers: int = field(default_factory=default_staging_workers)
+    task_workers: int = field(default_factory=default_task_workers)
+
+    @classmethod
+    def default_staging_workers(cls) -> int:
+        return default_staging_workers()
+
+    @classmethod
+    def default_task_workers(cls) -> int:
+        return default_task_workers()
 
     @classmethod
     def from_env(cls) -> BatchExecutionSettings:
@@ -36,11 +49,11 @@ class BatchExecutionSettings:
             batch_size=env_int("ANGIOEYE_BATCH_SIZE", cls.batch_size),
             staging_workers=env_int(
                 "ANGIOEYE_BATCH_STAGING_WORKERS",
-                cls.staging_workers,
+                cls.default_staging_workers(),
             ),
             task_workers=env_int(
                 "ANGIOEYE_BATCH_TASK_WORKERS",
-                cls.task_workers,
+                cls.default_task_workers(),
             ),
         )
 

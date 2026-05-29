@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import inspect
+import time
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -14,6 +16,7 @@ from batch_engine import (
 from input_output import ZipH5Member
 
 from ._zip_batches import ZipBatchSettings, iter_extracted_zip_batches
+from .timing import TimingRecorder
 
 
 @dataclass
@@ -21,6 +24,7 @@ class PipelineRunResult:
     processed_outputs: list[Path] = field(default_factory=list)
     processed_input_paths: list[Path] = field(default_factory=list)
     failures: list[str] = field(default_factory=list)
+    timings: TimingRecorder = field(default_factory=TimingRecorder)
 
 
 RunPipelineFile = Callable[
@@ -84,6 +88,7 @@ def run_filesystem_pipeline_run(
             advance_progress=advance_progress,
             max_workers=settings.task_workers,
             idle_callback=idle_callback,
+            timings=result.timings,
         )
     return result
 
@@ -107,6 +112,7 @@ def run_zip_pipeline_run(
         members,
         member_count=member_count,
         settings=settings,
+        timings=result.timings,
     ):
         log(
             f"[ZIP] Extracting batch {extracted_batch.index}/"
@@ -152,6 +158,7 @@ def run_zip_pipeline_run(
             advance_progress=advance_progress,
             max_workers=worker_count,
             idle_callback=idle_callback,
+            timings=result.timings,
         )
     return result
 
@@ -167,6 +174,7 @@ def _run_pipeline_job_batch(
     advance_progress: Callable[[float], None],
     max_workers: int,
     idle_callback: Callable[[], None] | None,
+    timings: TimingRecorder | None = None,
 ) -> None:
     for task_result in run_task_batch(
         jobs,
@@ -175,6 +183,7 @@ def _run_pipeline_job_batch(
             pipelines=pipelines,
             output_dir=output_dir,
             run_pipeline_file=run_pipeline_file,
+            timings=timings,
         ),
         max_workers=max_workers,
         idle_callback=idle_callback,
@@ -203,14 +212,31 @@ def _run_pipeline_job(
     pipelines: Sequence[Any],
     output_dir: Path,
     run_pipeline_file: RunPipelineFile,
+    timings: TimingRecorder | None = None,
 ) -> Path:
-    return run_pipeline_file(
-        job.h5_path,
-        pipelines,
-        output_dir,
-        job.output_relative_parent,
-        job.output_filename,
-    )
+    started_at = time.monotonic()
+    try:
+        args = (
+            job.h5_path,
+            pipelines,
+            output_dir,
+            job.output_relative_parent,
+            job.output_filename,
+        )
+        if timings is not None and _accepts_record_timing(run_pipeline_file):
+            return run_pipeline_file(*args, record_timing=timings.add)
+        return run_pipeline_file(*args)
+    finally:
+        if timings is not None:
+            timings.add("per-file pipeline total", time.monotonic() - started_at)
+
+
+def _accepts_record_timing(run_pipeline_file: RunPipelineFile) -> bool:
+    try:
+        parameters = inspect.signature(run_pipeline_file).parameters
+    except (TypeError, ValueError):
+        return False
+    return "record_timing" in parameters
 
 
 def _record_pipeline_success(
