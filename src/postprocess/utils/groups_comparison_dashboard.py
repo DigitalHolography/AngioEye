@@ -127,9 +127,7 @@ SELECTED_METRICS = {
     "t50_over_T",
     "eta_h",
 }
-METRIC_ALIASES = {
-    "Hspec": "spectral_entropy",
-}
+
 EPS = 1e-12
 LATEX_FORMULAS = {
     "RI": r"$\rm RI$",
@@ -335,7 +333,7 @@ def select_support_beat(support, beat_idx):
 
 
 def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
-    main_color = "#EC5241" if vessel == "artery" else "#1B82F1"
+    main_color = "#EC5241" if vessel == "artery" else "#414CEC"
     fill_color1 = "#f9c2ca" if vessel == "artery" else "#A1B2F2"
     fill_color2 = "#F2CCC7" if vessel == "artery" else "#BDDBE7"
     if not support:
@@ -539,6 +537,8 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
         t50 = float(support["t50_over_T"])
         t90 = float(support["t90_over_T"])
 
+        ax.plot([0, 1], [0, 1], "--", color="grey", linewidth=2)
+
         ax.plot(tau, C, linewidth=3, color=main_color)
         for tq in [t10, t50, t90]:
             yq = _y_at(tq, tau, C)
@@ -546,21 +546,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
                 ax.vlines(tq, 0.0, yq, linestyles="--", linewidth=1, color="#000000")
                 ax.hlines(yq, 0.0, tq, linestyles="--", linewidth=1, color="#000000")
         
-        y90 = _y_at(t90, tau, C)
-        v_const = y90 / t90
-
-        xv = np.array([0, t90])
-        yv = v_const * xv
-
-        ax.plot(
-            xv,
-            yv,
-            "--",
-            color="grey",
-            linewidth=2,
-            label="constant speed",
-        )
-
+    
         info_box(
             [
                 rf"$t_{{10}}/T = {t10:.3f}, t_{{50}}/T = {t50:.3f}$",
@@ -1012,13 +998,13 @@ def export_selected_metric(
 
             for vessel in VALID_VESSELS:
 
-                main_color = "#EC5241" if vessel == "artery" else "#1B82F1"
+                main_color = "#EC5241" if vessel == "artery" else "#414CEC"
 
                 if vessel not in all_results[current_mode]:
                     continue
 
                 for metric in sorted(SELECTED_METRICS):
-                    metric_key = METRIC_ALIASES.get(metric, metric)
+                    metric_key = metric
 
                     if metric_key not in all_results[current_mode][vessel]:
                         continue
