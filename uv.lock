@@ -26,8 +26,15 @@ version = "1.15.0"
 source = { editable = "." }
 dependencies = [
     { name = "h5py" },
+    { name = "jinja2" },
+    { name = "matplotlib" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "pandas", version = "3.0.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "plotly" },
+    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "sv-ttk" },
     { name = "tkinterdnd2" },
 ]
@@ -55,15 +62,20 @@ postprocess = [
 [package.metadata]
 requires-dist = [
     { name = "h5py", specifier = ">=3.9" },
+    { name = "jinja2", specifier = ">=3.1.6" },
     { name = "jinja2", marker = "extra == 'postprocess'", specifier = ">=3.1" },
+    { name = "matplotlib", specifier = ">=3.10.9" },
     { name = "matplotlib", marker = "extra == 'postprocess'", specifier = ">=3.8" },
     { name = "numpy", specifier = ">=1.24" },
+    { name = "pandas", specifier = ">=2.3.3" },
     { name = "pandas", marker = "extra == 'pipelines'", specifier = ">=2.1" },
     { name = "pandas", marker = "extra == 'postprocess'", specifier = ">=2.1" },
+    { name = "plotly", specifier = ">=5.18" },
     { name = "plotly", marker = "extra == 'postprocess'", specifier = ">=5.18" },
     { name = "pre-commit", marker = "extra == 'dev'" },
     { name = "pyinstaller", marker = "extra == 'dev'" },
     { name = "ruff", marker = "extra == 'dev'" },
+    { name = "scipy", specifier = ">=1.15.3" },
     { name = "scipy", marker = "extra == 'postprocess'", specifier = ">=1.10" },
     { name = "sv-ttk", specifier = ">=2.6" },
     { name = "tkinterdnd2" },

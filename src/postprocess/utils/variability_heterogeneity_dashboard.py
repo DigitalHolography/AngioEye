@@ -21,12 +21,15 @@ except ImportError as exc:
 
 from input_output.hdf5_io import find_first_existing_path
 from input_output.archive_io import replace_folder_in_zip
-from ..core.grouped_batch import iter_grouped_h5_files_in_zip
+from ..core.grouped_batch import extract_group_name, iter_grouped_h5_files_in_zip
 from input_output.hdf5_io import MetricsTree
 
 
-SEGMENT_METRIC_FOLDER = "/AngioEye/Processing/waveform_shape_metrics/artery/by_segment/"
-SEGMENT_MODE = "bandlimited_segment"
+SEGMENT_METRIC_FOLDERS = (
+    "/AngioEye/Processing/waveform_shape_metrics_denoised/artery/by_segment/",
+    "/AngioEye/Processing/waveform_shape_metrics/artery/by_segment/",
+)
+SEGMENT_MODE = "raw_segment"
 EPS = 1e-12
 
 DEFAULT_TOP_N = 10
@@ -186,7 +189,9 @@ def extract_sort_key(filename):
 
 def extract_segment_metric(h5_path, metric_name, mode=SEGMENT_MODE):
     suffix = f"{mode}/{metric_name}"
-    candidate_paths = [f"{SEGMENT_METRIC_FOLDER.rstrip('/')}/{suffix}"]
+    candidate_paths = [
+        f"{folder.rstrip('/')}/{suffix}" for folder in SEGMENT_METRIC_FOLDERS
+    ]
 
     with h5py.File(h5_path, "r") as f:
         dataset_path = find_first_existing_path(f, candidate_paths)
@@ -363,11 +368,15 @@ def compute_file_higher_metrics_from_segment_array(arr, eps=EPS):
     }
 
 
-def write_variability_tree(file_path):
-    metrics = {}
+def compute_file_higher_metric_blocks(
+    file_path,
+    metrics=INPUT_METRICS,
+    mode=SEGMENT_MODE,
+):
+    blocks = {}
 
-    for metric_name in INPUT_METRICS:
-        arr = extract_segment_metric(file_path, metric_name)
+    for metric_name in metrics:
+        arr = extract_segment_metric(file_path, metric_name, mode=mode)
         if arr is None:
             continue
 
@@ -375,6 +384,21 @@ def write_variability_tree(file_path):
         if high is None:
             continue
 
+        blocks[metric_name] = high
+
+    return blocks
+
+
+def add_file_blocks_to_results(results, group_name, blocks):
+    for metric_name, high in blocks.items():
+        for high_name, value in high.items():
+            results[group_name][metric_name][high_name].append(value)
+
+
+def variability_tree_from_blocks(blocks):
+    metrics = {}
+
+    for metric_name, high in blocks.items():
         for high_name, value in high.items():
             key = f"{high_name}/{metric_name}"
             metrics[key] = np.asarray(value, dtype=float)
@@ -390,6 +414,11 @@ def write_variability_tree(file_path):
             "source": "segment_metrics",
         },
     )
+
+
+def write_variability_tree(file_path):
+    blocks = compute_file_higher_metric_blocks(file_path)
+    return variability_tree_from_blocks(blocks)
 
 
 # -----------------------------------------------------------------------------
@@ -413,26 +442,45 @@ def analyze_zip(zip_path, metrics=INPUT_METRICS, mode=SEGMENT_MODE):
             extract_sort_key(record.file_name),
         ),
     ):
-        for metric_name in metrics:
-            arr = extract_segment_metric(
-                grouped_file.file_path,
-                metric_name,
-                mode=mode,
+        blocks = compute_file_higher_metric_blocks(
+            grouped_file.file_path,
+            metrics=metrics,
+            mode=mode,
+        )
+        add_file_blocks_to_results(results, grouped_file.group_name, blocks)
+
+    return results
+
+
+def analyze_files(file_paths, output_dir, metrics=INPUT_METRICS, mode=SEGMENT_MODE):
+    """
+    Analyze already-extracted/processed HDF5 outputs directly.
+
+    This avoids creating a temporary ZIP and repeatedly extracting members during
+    AngioEye postprocessing runs.
+    """
+    output_dir = Path(output_dir).expanduser().resolve()
+    records = []
+    for file_path in file_paths:
+        path = Path(file_path).expanduser().resolve()
+        records.append(
+            (
+                extract_group_name(path.parent, output_dir),
+                path.name,
+                path,
             )
+        )
 
-            if arr is None:
-                continue
+    records.sort(key=lambda item: (item[0], extract_sort_key(item[1])))
+    results = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
 
-            high = compute_file_higher_metrics_from_segment_array(
-                arr,
-                eps=EPS,
-            )
-
-            if high is None:
-                continue
-
-            for high_name, value in high.items():
-                results[grouped_file.group_name][metric_name][high_name].append(value)
+    for group_name, _file_name, file_path in records:
+        blocks = compute_file_higher_metric_blocks(
+            file_path,
+            metrics=metrics,
+            mode=mode,
+        )
+        add_file_blocks_to_results(results, group_name, blocks)
 
     return results
 
@@ -1621,36 +1669,21 @@ def save_table(df, csv_path, tex_path, caption, label, digits=3):
 # -----------------------------------------------------------------------------
 
 
-def export_group_tables(
-    zip_path,
+def export_group_tables_from_results(
+    results,
+    output_dir,
     metrics=INPUT_METRICS,
-    mode=SEGMENT_MODE,
     digits=3,
     top_n=DEFAULT_TOP_N,
+    idle_callback=None,
 ):
     """
-    Creates inside the ZIP:
+    Creates table and figure files in output_dir:
 
-    latex_tables/
-      spatial/
-        raw/
-          <group>_spatial_variability_table.{csv,tex}
-        comparisons_vs_control/
-          <group>_vs_<control>_n_most_spatially_variable_metrics.{csv,tex}
-          <group>_vs_<control>_n_least_spatially_variable_metrics.{csv,tex}
-          <group>_vs_<control>_strongest_spatial_variability_contrast.{csv,tex}
-          <group>_vs_<control>_best_spatial_variability_mannwhitney.{csv,tex}
-      temporal/
-        raw/
-          <group>_temporal_variability_table.{csv,tex}
-        comparisons_vs_control/
-          <group>_vs_<control>_n_most_temporally_variable_metrics.{csv,tex}
-          <group>_vs_<control>_n_least_temporally_variable_metrics.{csv,tex}
-          <group>_vs_<control>_strongest_temporal_variability_contrast.{csv,tex}
-          <group>_vs_<control>_best_temporal_variability_mannwhitney.{csv,tex}
+    spatial/raw, spatial/comparisons_vs_control, temporal/raw,
+    temporal/comparisons_vs_control, and figure subfolders.
     """
-    zip_path = Path(zip_path)
-    out_dir = zip_path.parent / "latex_tables"
+    out_dir = Path(output_dir)
 
     spatial_raw_dir = out_dir / "spatial" / "raw"
     temporal_raw_dir = out_dir / "temporal" / "raw"
@@ -1672,7 +1705,6 @@ def export_group_tables(
     ]:
         d.mkdir(parents=True, exist_ok=True)
 
-    results = analyze_zip(zip_path, metrics=metrics, mode=mode)
     print("Groups found:", list(results.keys()))
 
     control_group = find_control_group(results)
@@ -1693,6 +1725,8 @@ def export_group_tables(
             metrics=SPATIAL_SELECTED_METRICS,
         )
     )
+    if idle_callback is not None:
+        idle_callback()
     generated.extend(
         export_variability_value_plots(
             results,
@@ -1702,6 +1736,8 @@ def export_group_tables(
             metrics=TEMPORAL_SELECTED_METRICS,
         )
     )
+    if idle_callback is not None:
+        idle_callback()
 
     # ------------------------------------------------------------------
     # Raw tables for every group, including control.
@@ -1741,6 +1777,8 @@ def export_group_tables(
                 digits=digits,
             )
         )
+        if idle_callback is not None:
+            idle_callback()
 
     # ------------------------------------------------------------------
     # Control vs every other group.
@@ -1781,6 +1819,8 @@ def export_group_tables(
                 digits=digits,
             )
         )
+        if idle_callback is not None:
+            idle_callback()
 
         df = build_variability_ranking_table(
             control_results,
@@ -2092,6 +2132,35 @@ def export_group_tables(
                 digits=digits,
             )
         )
+        if idle_callback is not None:
+            idle_callback()
+
+    print(
+        f"Generated {len(generated)} variability/heterogeneity file(s) in {out_dir}."
+    )
+    return generated
+
+
+def export_group_tables(
+    zip_path,
+    metrics=INPUT_METRICS,
+    mode=SEGMENT_MODE,
+    digits=3,
+    top_n=DEFAULT_TOP_N,
+):
+    """
+    Backward-compatible ZIP export entry point.
+    """
+    zip_path = Path(zip_path)
+    out_dir = zip_path.parent / "latex_tables"
+    results = analyze_zip(zip_path, metrics=metrics, mode=mode)
+    generated = export_group_tables_from_results(
+        results,
+        out_dir,
+        metrics=metrics,
+        digits=digits,
+        top_n=top_n,
+    )
 
     replace_folder_in_zip(zip_path, out_dir, arc_folder="latex_tables")
 

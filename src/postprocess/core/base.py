@@ -76,6 +76,7 @@ class PostprocessContext:
     input_path: Path
     zip_outputs: bool
     input_h5_paths: tuple[Path, ...] = ()
+    idle_callback: Callable[[], None] | None = None
 
 
 @dataclass
