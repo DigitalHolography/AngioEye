@@ -2,12 +2,14 @@ from ._holo import (
     HoloInputContext,
     dataset_dir,
     ef_dir,
+    find_ae_h5,
     find_ef_h5,
     output_dir,
     output_filename,
     reset_output_dir,
     resolve_context,
 )
+from ._postprocess_requirements import missing_required_pipeline_errors
 from ._zip_batches import ZipBatchSettings
 from .dispatch import (
     WorkflowCallbacks,
@@ -45,6 +47,7 @@ __all__ = [
     "dataset_dir",
     "ef_dir",
     "find_ef_h5",
+    "find_ae_h5",
     "dispatch_workflow",
     "log_throttled_zip_progress",
     "make_zip_progress_callback",
@@ -52,6 +55,7 @@ __all__ = [
     "output_filename",
     "prepare_run_input",
     "prepare_run_inputs",
+    "missing_required_pipeline_errors",
     "reset_output_dir",
     "resolve_context",
     "run_filesystem_workflow",

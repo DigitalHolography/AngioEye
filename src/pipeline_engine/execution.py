@@ -24,6 +24,10 @@ LogCallback = Callable[[str], None]
 ProgressCallback = Callable[[float], None]
 IdleCallback = Callable[[], None]
 TimingCallback = Callable[[str, float], None]
+PostprocessFileResolver = Callable[
+    [PostprocessDescriptor, Sequence[Path], Sequence[Path]],
+    tuple[tuple[Path, ...], tuple[Path, ...]],
+]
 
 
 class OutputPathAllocator:
@@ -132,18 +136,41 @@ def run_postprocesses(
     zip_outputs: bool,
     log: LogCallback,
     advance_progress: ProgressCallback,
+    idle_callback: IdleCallback | None = None,
+    resolve_postprocess_files: PostprocessFileResolver | None = None,
 ) -> None:
-    context = PostprocessContext(
-        output_dir=output_dir,
-        processed_files=tuple(processed_outputs),
-        selected_pipelines=tuple(selected_pipeline_names),
-        input_path=input_path,
-        zip_outputs=zip_outputs,
-        input_h5_paths=tuple(input_h5_paths),
-    )
     for descriptor in postprocesses:
         postprocess = descriptor.instantiate()
+        skipped_files: tuple[Path, ...] = ()
+        if resolve_postprocess_files is None:
+            processed_files = tuple(processed_outputs)
+        else:
+            processed_files, skipped_files = resolve_postprocess_files(
+                descriptor,
+                processed_outputs,
+                input_h5_paths,
+            )
+        context = PostprocessContext(
+            output_dir=output_dir,
+            processed_files=processed_files,
+            selected_pipelines=tuple(selected_pipeline_names),
+            input_path=input_path,
+            zip_outputs=zip_outputs,
+            input_h5_paths=tuple(input_h5_paths),
+            idle_callback=idle_callback,
+        )
         log(f"[POST] Running {descriptor.name}...")
+        if skipped_files:
+            skipped_message = (
+                f"{descriptor.name} skipped {len(skipped_files)} file(s) "
+                "without required pipeline data."
+            )
+            failures.append(skipped_message)
+            log(f"[POST WARN] {skipped_message}")
+        if not processed_files and getattr(descriptor, "required_pipelines", ()):
+            log(f"[POST SKIP] {descriptor.name}: no compatible input files.")
+            advance_progress(1.0)
+            continue
         try:
             result = postprocess.run(context)
         except Exception as exc:  # noqa: BLE001
@@ -269,10 +296,11 @@ def _write_pipeline_output_sync(
     source_file: str,
     trim_source: bool,
 ) -> None:
+    copy_source = not pipeline_results
     create_h5_file(
         output_path,
         source_file=source_file,
-        trim_source=trim_source,
+        trim_source=trim_source and not copy_source,
     )
     write_metrics_trees_to_h5(
         output_path,

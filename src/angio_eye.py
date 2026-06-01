@@ -46,6 +46,7 @@ from workflows import (
     WorkflowRunRequest,
     dispatch_workflow,
     make_zip_progress_callback,
+    missing_required_pipeline_errors,
     prepare_run_input,
     prepare_run_inputs,
 )
@@ -119,19 +120,18 @@ def _resolve_run_selection(app) -> _RunSelection | None:
         for pipeline in app.pipeline_rows
         if pipeline.available and app.pipeline_visibility.get(pipeline.name, False)
     ]
-    if not pipeline_names:
-        messagebox.showwarning(
-            "No pipelines",
-            "Select at least one pipeline in Pipeline Library.",
-        )
-        return None
-
     selected_postprocess_names = [
         postprocess.name
         for postprocess in app.postprocess_rows
         if postprocess.available
         and app.postprocess_visibility.get(postprocess.name, False)
     ]
+    if not pipeline_names and not selected_postprocess_names:
+        messagebox.showwarning(
+            "No work selected",
+            "Select at least one pipeline or postprocess step.",
+        )
+        return None
 
     pipelines: list[PipelineDescriptor] = []
     missing: list[str] = []
@@ -160,17 +160,6 @@ def _resolve_run_selection(app) -> _RunSelection | None:
         messagebox.showerror(
             "Postprocess missing",
             f"Postprocess step(s) not registered: {', '.join(missing_postprocesses)}",
-        )
-        return None
-
-    postprocess_requirement_errors = app._validate_postprocess_selection(
-        postprocesses,
-        selected_pipeline_names=pipeline_names,
-    )
-    if postprocess_requirement_errors:
-        messagebox.showerror(
-            "Postprocess requirements",
-            "\n".join(postprocess_requirement_errors),
         )
         return None
 
@@ -204,6 +193,24 @@ def _build_workflow_request(
                 f"Cannot prepare input: {exc}",
             ) from exc
         request_mode = input_plan.kind
+
+    reusable_h5_paths = (
+        input_plan.h5_paths
+        if input_plan is not None and not input_plan.is_zip
+        else ()
+    )
+    postprocess_requirement_errors = app._validate_postprocess_selection(
+        selection.postprocesses,
+        selected_pipeline_names=selection.pipeline_names,
+        reusable_h5_paths=reusable_h5_paths,
+        defer_when_no_reusable_paths=bool(input_plan and input_plan.is_zip)
+        or (mode == "holo" and not selection.pipelines),
+    )
+    if postprocess_requirement_errors:
+        raise WorkflowInputError(
+            "Postprocess requirements",
+            "\n".join(postprocess_requirement_errors),
+        )
 
     return WorkflowRunRequest(
         mode=request_mode,
@@ -1924,21 +1931,15 @@ class ProcessApp(_BaseAppTk):
         self,
         postprocesses: Sequence[PostprocessDescriptor],
         selected_pipeline_names: Sequence[str],
+        reusable_h5_paths: Sequence[Path] = (),
+        defer_when_no_reusable_paths: bool = False,
     ) -> list[str]:
-        selected_set = set(selected_pipeline_names)
-        errors: list[str] = []
-        for postprocess in postprocesses:
-            missing_required = [
-                name
-                for name in postprocess.required_pipelines
-                if name not in selected_set
-            ]
-            if missing_required:
-                errors.append(
-                    f"{postprocess.name} requires pipeline(s): "
-                    f"{', '.join(missing_required)}"
-                )
-        return errors
+        return missing_required_pipeline_errors(
+            postprocesses=postprocesses,
+            selected_pipeline_names=selected_pipeline_names,
+            reusable_h5_paths=reusable_h5_paths,
+            defer_when_no_reusable_paths=defer_when_no_reusable_paths,
+        )
 
     def _zip_output_dir(
         self,

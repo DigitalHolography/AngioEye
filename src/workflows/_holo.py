@@ -77,6 +77,25 @@ def find_ef_h5(holo_path: Path) -> Path | None:
     return min(candidates, key=candidate_rank)
 
 
+def find_ae_h5(holo_path: Path) -> Path | None:
+    output_dir_path = output_dir(holo_path)
+    expected = output_dir_path / output_filename(holo_path)
+    if expected.is_file():
+        return expected
+    if not output_dir_path.is_dir():
+        return None
+    candidates = find_hdf5_inputs(output_dir_path)
+    if not candidates:
+        return None
+    return min(
+        candidates,
+        key=lambda path: (
+            path.stem != f"{holo_path.stem}_AE",
+            str(path).lower(),
+        ),
+    )
+
+
 def resolve_context(holo_path: Path) -> HoloInputContext:
     holo_path = holo_path.expanduser()
     if holo_path.suffix.lower() != ".holo":
