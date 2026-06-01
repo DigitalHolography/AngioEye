@@ -1,4 +1,4 @@
-import os
+﻿import os
 import tempfile
 import zipfile
 from collections import defaultdict
@@ -16,9 +16,9 @@ from matplotlib.ticker import FormatStrFormatter
 from tkinter import Tk, filedialog
 import html
 import base64
-from angioeye_io.hdf5_io import find_first_existing_path
-from angioeye_io.hdf5_schema import pipeline_path_candidates
-from angioeye_io.archive_io import (
+from input_output.hdf5_io import find_first_existing_path
+from input_output.hdf5_schema import pipeline_path_candidates
+from input_output.archive_io import (
     replace_folder_in_zip,
     reset_output_dir,
 )
@@ -731,3 +731,4 @@ if __name__ == "__main__":
     zip_path = choose_zip()
     
     save_dashboard(zip_path)
+

@@ -1,28 +1,22 @@
-import os
-import shutil
+﻿import os
 import subprocess
 import sys
-import tempfile
-import threading
 import tkinter as tk
 import tkinter.font as tkfont
-import zipfile
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-import h5py
-
-from angioeye_io import (
-    ANGIOEYE_PROCESSING_ROOT,
-    create_h5_file,
-    write_metrics_trees_to_h5,
-)
 from app_settings import (
     LAST_BATCH_LOG_FILENAME,
     AppSettingsStore,
     normalize_pipeline_visibility,
     normalize_postprocess_visibility,
+)
+from input_output import (
+    create_zip_from_tree,
+    is_hdf5_path,
 )
 
 try:
@@ -38,18 +32,292 @@ except ImportError:  #  optional dependency
 
 from pipelines import (
     PipelineDescriptor,
-    ProcessResult,
     load_pipeline_catalog,
-    process_results_to_metric_trees,
 )
-from pipelines.core.errors import format_pipeline_exception
 from postprocess import (
-    PostprocessContext,
     PostprocessDescriptor,
     load_postprocess_catalog,
 )
-from ui import batch_runner, holo
-from ui.holo import HoloInputContext
+from workflows import (
+    ZIP_COMPANION_OUTPUT_FOLDERS,
+    HoloInputContext,
+    WorkflowCallbacks,
+    WorkflowInputError,
+    WorkflowRunRequest,
+    dispatch_workflow,
+    make_zip_progress_callback,
+    prepare_run_input,
+    prepare_run_inputs,
+)
+from workflows import (
+    dataset_dir as holo_dataset_dir,
+)
+from workflows import (
+    ef_dir as holo_ef_dir,
+)
+from workflows import (
+    find_ef_h5 as find_holo_ef_h5,
+)
+from workflows import (
+    output_dir as holo_output_dir,
+)
+from workflows import (
+    output_filename as holo_output_filename,
+)
+from workflows import (
+    reset_output_dir as reset_holo_output_dir,
+)
+from workflows import (
+    resolve_context as resolve_holo_context,
+)
+
+
+@dataclass(frozen=True)
+class _RunSelection:
+    pipeline_names: list[str]
+    pipelines: list[PipelineDescriptor]
+    postprocesses: list[PostprocessDescriptor]
+
+
+def _run_batch_from_app(app) -> None:
+    app._reset_progress()
+    mode = "holo" if app._uses_holo_input_convention() else "legacy"
+    data_value = (app.batch_input_var.get() or "").strip()
+    legacy_input_paths = app._selected_batch_input_paths() if mode == "legacy" else []
+    if mode == "legacy" and not data_value and not legacy_input_paths:
+        messagebox.showwarning(
+            "Missing input",
+            "Select a folder, HDF5 file, or .zip archive to process.",
+        )
+        return
+
+    selection = _resolve_run_selection(app)
+    if selection is None:
+        return
+
+    app._reset_batch_output("Starting batch run...\n")
+    app._set_minimal_status("Preparing batch...")
+
+    try:
+        request = _build_workflow_request(
+            app=app,
+            mode=mode,
+            data_value=data_value,
+            selection=selection,
+        )
+        dispatch_result = dispatch_workflow(request, _workflow_callbacks(app))
+    except WorkflowInputError as exc:
+        _show_workflow_input_error(app, exc)
+        return
+
+    _finish_dispatch_result(app, dispatch_result)
+
+
+def _resolve_run_selection(app) -> _RunSelection | None:
+    pipeline_names = [
+        pipeline.name
+        for pipeline in app.pipeline_rows
+        if pipeline.available and app.pipeline_visibility.get(pipeline.name, False)
+    ]
+    if not pipeline_names:
+        messagebox.showwarning(
+            "No pipelines",
+            "Select at least one pipeline in Pipeline Library.",
+        )
+        return None
+
+    selected_postprocess_names = [
+        postprocess.name
+        for postprocess in app.postprocess_rows
+        if postprocess.available
+        and app.postprocess_visibility.get(postprocess.name, False)
+    ]
+
+    pipelines: list[PipelineDescriptor] = []
+    missing: list[str] = []
+    for name in pipeline_names:
+        pipeline = app.pipeline_registry.get(name)
+        if pipeline is None:
+            missing.append(name)
+        else:
+            pipelines.append(pipeline)
+    if missing:
+        messagebox.showerror(
+            "Pipeline missing",
+            f"Pipeline(s) not registered: {', '.join(missing)}",
+        )
+        return None
+
+    postprocesses: list[PostprocessDescriptor] = []
+    missing_postprocesses: list[str] = []
+    for name in selected_postprocess_names:
+        postprocess = app.postprocess_registry.get(name)
+        if postprocess is None:
+            missing_postprocesses.append(name)
+        else:
+            postprocesses.append(postprocess)
+    if missing_postprocesses:
+        messagebox.showerror(
+            "Postprocess missing",
+            f"Postprocess step(s) not registered: {', '.join(missing_postprocesses)}",
+        )
+        return None
+
+    postprocess_requirement_errors = app._validate_postprocess_selection(
+        postprocesses,
+        selected_pipeline_names=pipeline_names,
+    )
+    if postprocess_requirement_errors:
+        messagebox.showerror(
+            "Postprocess requirements",
+            "\n".join(postprocess_requirement_errors),
+        )
+        return None
+
+    return _RunSelection(
+        pipeline_names=pipeline_names,
+        pipelines=pipelines,
+        postprocesses=postprocesses,
+    )
+
+
+def _build_workflow_request(
+    *,
+    app,
+    mode: str,
+    data_value: str,
+    selection: _RunSelection,
+) -> WorkflowRunRequest:
+    input_plan = None
+    request_mode = "holo"
+    if mode != "holo":
+        try:
+            selected_paths = app._selected_batch_input_paths()
+            if selected_paths:
+                input_plan = prepare_run_inputs(selected_paths)
+            else:
+                input_plan = prepare_run_input(Path(data_value).expanduser())
+        except Exception as exc:  # noqa: BLE001
+            app._log_batch(f"Error: {exc}")
+            raise WorkflowInputError(
+                "Invalid input",
+                f"Cannot prepare input: {exc}",
+            ) from exc
+        request_mode = input_plan.kind
+
+    return WorkflowRunRequest(
+        mode=request_mode,
+        input_plan=input_plan,
+        holo_paths=app._selected_holo_paths() if mode == "holo" else (),
+        base_output_dir=Path.cwd() if mode == "holo" else _resolve_base_output_dir(app),
+        pipelines=selection.pipelines,
+        postprocesses=selection.postprocesses,
+        selected_pipeline_names=selection.pipeline_names,
+        zip_outputs=bool(app.batch_zip_var.get()),
+        zip_name=app.batch_zip_name_var.get(),
+        trim_source=_trim_eyeflow_source(app),
+        zip_output_dir=app._zip_output_dir,
+        output_filename_for_run=app._minimal_output_filename_for_run,
+    )
+
+
+def _resolve_base_output_dir(app) -> Path:
+    base_output_value = (app.batch_output_var.get() or "").strip()
+    base_output_dir = (
+        Path(base_output_value).expanduser() if base_output_value else Path.cwd()
+    )
+    if not base_output_dir.is_absolute():
+        base_output_dir = Path.cwd() / base_output_dir
+    base_output_dir.mkdir(parents=True, exist_ok=True)
+    return base_output_dir
+
+
+def _trim_eyeflow_source(app) -> bool:
+    persist_var = getattr(app, "_persist_eyeflow_data", None)
+    return not bool(persist_var.get()) if persist_var is not None else True
+
+
+def _workflow_callbacks(app) -> WorkflowCallbacks:
+    return WorkflowCallbacks(
+        log=app._log_batch,
+        start_primary_progress=lambda units, status: app._start_progress(
+            units,
+            style_name=app._progress_primary_style,
+            status_text=status,
+        ),
+        start_final_progress=lambda units, status: app._start_progress(
+            units,
+            style_name=app._progress_final_style,
+            status_text=status,
+        ),
+        advance_progress=app._advance_progress,
+        set_progress_units=app._set_progress_units,
+        set_status=app._set_minimal_status,
+        make_zip_progress_callback=lambda: make_zip_progress_callback(
+            set_progress_units=app._set_progress_units,
+            progress_base=app._progress_completed_units,
+            log=app._log_batch,
+            update_ui=lambda: _update_ui(app),
+        ),
+        idle_callback=lambda: _update_ui(app),
+    )
+
+
+def _show_workflow_input_error(app, error: WorkflowInputError) -> None:
+    if error.title == "Missing input":
+        messagebox.showwarning(error.title, error.message)
+    else:
+        messagebox.showerror(error.title, error.message)
+    app._set_minimal_status(error.status)
+
+
+def _finish_dispatch_result(app, dispatch_result) -> None:
+    workflow_result = dispatch_result.workflow_result
+    if workflow_result is None:
+        app._update_holo_status_labels()
+        _show_skipped_holo_warning(dispatch_result.skipped_holo_stems)
+        app._set_minimal_status("Run skipped.")
+        return
+
+    app._set_progress_units(app._progress_total_units)
+    app._log_batch(f"Completed. {workflow_result.summary_message}")
+
+    if workflow_result.failures:
+        app._set_minimal_status("Completed with errors.")
+        app._show_batch_error_dialog(
+            f"{len(workflow_result.failures)} failure(s). See log for details.\n\n"
+            f"{workflow_result.summary_message}"
+        )
+    else:
+        app._set_minimal_status(
+            "Completed with errors." if workflow_result.zip_failed else "Process ended."
+        )
+    if workflow_result.zip_failed and workflow_result.zip_error:
+        messagebox.showerror(
+            "ZIP failed",
+            f"Could not create ZIP archive: {workflow_result.zip_error}",
+        )
+    _show_skipped_holo_warning(dispatch_result.skipped_holo_stems)
+
+
+def _show_skipped_holo_warning(skipped_holo_stems: Sequence[str]) -> None:
+    if not skipped_holo_stems:
+        return
+    messagebox.showwarning(
+        "Skipped files",
+        f"Skipped {len(skipped_holo_stems)} files: {', '.join(skipped_holo_stems)}",
+    )
+
+
+def _update_ui(app) -> None:
+    try:
+        update_idletasks = getattr(app, "update_idletasks", None)
+        if update_idletasks is not None:
+            update_idletasks()
+        app.update()
+    except (AttributeError, tk.TclError):
+        pass
+
 
 _BaseAppTk = TkinterDnD.Tk if TkinterDnD is not None else tk.Tk
 
@@ -122,6 +390,7 @@ class ProcessApp(_BaseAppTk):
         self.batch_zip_name_var = tk.StringVar(value="outputs.zip")
         self.batch_progress_var = tk.DoubleVar(value=0.0)
         self.input_convention_var = tk.StringVar(value="legacy")
+        self.batch_input_paths: list[Path] = []
         self.holo_input_paths: list[Path] = []
         self.holo_input_var = tk.StringVar()
         self.holo_status_var = tk.StringVar()
@@ -737,11 +1006,9 @@ class ProcessApp(_BaseAppTk):
             return True
 
         for dropped_path in dropped_paths:
-            if dropped_path.is_file() and dropped_path.suffix.lower() in {
-                ".h5",
-                ".hdf5",
-                ".zip",
-            }:
+            if dropped_path.is_file() and (
+                is_hdf5_path(dropped_path) or dropped_path.suffix.lower() == ".zip"
+            ):
                 self.input_convention_var.set("legacy")
                 self.batch_input_var.set(str(dropped_path))
                 self._apply_input_defaults(dropped_path)
@@ -782,22 +1049,22 @@ class ProcessApp(_BaseAppTk):
         return f"{self._default_output_stem(input_path)}.h5"
 
     def _holo_dataset_dir(self, holo_path: Path) -> Path:
-        return holo.dataset_dir(holo_path)
+        return holo_dataset_dir(holo_path)
 
     def _holo_ef_dir(self, holo_path: Path) -> Path:
-        return holo.ef_dir(holo_path)
+        return holo_ef_dir(holo_path)
 
     def _holo_output_dir(self, holo_path: Path) -> Path:
-        return holo.output_dir(holo_path)
+        return holo_output_dir(holo_path)
 
     def _holo_output_filename(self, holo_path: Path) -> str:
-        return holo.output_filename(holo_path)
+        return holo_output_filename(holo_path)
 
     def _find_holo_ef_h5(self, holo_path: Path) -> Path | None:
-        return holo.find_ef_h5(holo_path)
+        return find_holo_ef_h5(holo_path)
 
     def _resolve_holo_context(self, holo_path: Path) -> HoloInputContext:
-        return holo.resolve_context(holo_path)
+        return resolve_holo_context(holo_path)
 
     def _set_holo_status_visible(self, visible: bool) -> None:
         label_names = (
@@ -946,9 +1213,13 @@ class ProcessApp(_BaseAppTk):
 
     def _apply_input_defaults(self, input_path: Path) -> None:
         self.input_convention_var.set("legacy")
+        self.batch_input_paths = []
         self.holo_input_paths = []
         self.holo_input_var.set("")
-        output_dir = input_path if input_path.is_dir() else input_path.parent
+        if input_path.is_file() and input_path.suffix.lower() == ".zip":
+            output_dir = input_path.parent / self._default_output_stem(input_path)
+        else:
+            output_dir = input_path if input_path.is_dir() else input_path.parent
 
         self.batch_output_var.set(str(output_dir))
         self.batch_zip_name_var.set(self._default_archive_name(input_path))
@@ -972,7 +1243,7 @@ class ProcessApp(_BaseAppTk):
             return None
         if not data_path.is_file():
             return None
-        if data_path.suffix.lower() not in {".h5", ".hdf5"}:
+        if not is_hdf5_path(data_path):
             return None
         return self._default_output_artifact_name(data_path)
 
@@ -1561,10 +1832,14 @@ class ProcessApp(_BaseAppTk):
             if all(path.suffix.lower() == ".holo" for path in input_paths):
                 self._apply_holo_inputs(input_paths)
                 return
+            if len(input_paths) > 1 and all(is_hdf5_path(path) for path in input_paths):
+                self._apply_batch_input_files(input_paths)
+                return
             if len(input_paths) != 1:
                 messagebox.showwarning(
                     "Unsupported selection",
-                    "Select multiple .holo files, or one .h5, .hdf5, or .zip file.",
+                    "Select multiple .holo files, multiple HDF5 files, "
+                    "or one .h5, .hdf5, or .zip file.",
                 )
                 return
 
@@ -1575,12 +1850,31 @@ class ProcessApp(_BaseAppTk):
                 self.batch_input_var.set(str(input_path))
                 self._apply_input_defaults(input_path)
 
+    def _apply_batch_input_files(self, input_paths: Sequence[Path]) -> None:
+        paths = [path.expanduser() for path in input_paths]
+        self.input_convention_var.set("legacy")
+        self.batch_input_paths = paths
+        self.holo_input_paths = []
+        self.holo_input_var.set("")
+        common_parent = Path(os.path.commonpath([str(path.parent) for path in paths]))
+        names = ", ".join(path.name for path in paths[:3])
+        if len(paths) > 3:
+            names = f"{names}, ..."
+        self.batch_input_var.set(f"{len(paths)} HDF5 files selected: {names}")
+        self.batch_output_var.set(str(common_parent))
+        self.batch_zip_name_var.set("outputs.zip")
+        self.batch_zip_var.set(False)
+        self._update_holo_status_labels()
+        self._reset_progress()
+        self._set_minimal_status("Ready.")
+
     def _apply_holo_input(self, holo_path: Path) -> None:
         ProcessApp._apply_holo_inputs(self, [holo_path])
 
     def _apply_holo_inputs(self, holo_paths: Sequence[Path]) -> None:
         paths = [path.expanduser() for path in holo_paths]
         self.input_convention_var.set("holo")
+        self.batch_input_paths = []
         self.holo_input_paths = paths
         self.holo_input_var.set(os.pathsep.join(str(path) for path in paths))
         if len(paths) == 1:
@@ -1606,6 +1900,9 @@ class ProcessApp(_BaseAppTk):
         raw_value = (self.holo_input_var.get() or "").strip()
         return [Path(raw_value)] if raw_value else []
 
+    def _selected_batch_input_paths(self) -> list[Path]:
+        return list(getattr(self, "batch_input_paths", []))
+
     def choose_batch_output(self) -> None:
         path = filedialog.askdirectory(
             initialdir=self.batch_output_var.get() or None,
@@ -1618,28 +1915,10 @@ class ProcessApp(_BaseAppTk):
         return self.input_convention_var.get() == "holo"
 
     def _reset_holo_output_dir(self, context: HoloInputContext) -> None:
-        expected_output_dir = self._holo_output_dir(context.holo_path).resolve()
-        output_dir = context.output_dir.resolve()
-        expected_parent = self._holo_dataset_dir(context.holo_path).resolve()
-        if (
-            output_dir != expected_output_dir
-            or output_dir.parent != expected_parent
-            or not output_dir.name.endswith("_AE")
-        ):
-            raise RuntimeError(
-                f"Refusing to overwrite unexpected output path: {output_dir}"
-            )
-
-        if output_dir.exists():
-            if not output_dir.is_dir():
-                raise RuntimeError(
-                    f"Output path exists and is not a folder: {output_dir}"
-                )
-            shutil.rmtree(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
+        reset_holo_output_dir(context)
 
     def run_batch(self) -> None:
-        batch_runner.run_batch(self)
+        _run_batch_from_app(self)
 
     def _validate_postprocess_selection(
         self,
@@ -1661,166 +1940,6 @@ class ProcessApp(_BaseAppTk):
                 )
         return errors
 
-    def _run_postprocesses(
-        self,
-        postprocesses: Sequence[PostprocessDescriptor],
-        output_dir: Path,
-        processed_outputs: Sequence[Path],
-        input_h5_paths: Sequence[Path],
-        input_path: Path,
-        selected_pipeline_names: Sequence[str],
-        failures: list[str],
-    ) -> None:
-        context = PostprocessContext(
-            output_dir=output_dir,
-            processed_files=tuple(processed_outputs),
-            selected_pipelines=tuple(selected_pipeline_names),
-            input_path=input_path,
-            zip_outputs=self.batch_zip_var.get(),
-            input_h5_paths=tuple(input_h5_paths),
-        )
-        for descriptor in postprocesses:
-            postprocess = descriptor.instantiate()
-            self._log_batch(f"[POST] Running {descriptor.name}...")
-            try:
-                result = postprocess.run(context)
-            except Exception as exc:  # noqa: BLE001
-                error_message = (
-                    f"Postprocess '{descriptor.name}' failed: "
-                    f"{type(exc).__name__}: {exc}"
-                )
-                failures.append(error_message)
-                self._log_batch(f"[POST FAIL] {error_message}")
-                self._advance_progress()
-                continue
-
-            summary = (result.summary or "").strip()
-            if summary:
-                self._log_batch(f"[POST OK] {descriptor.name}: {summary}")
-            else:
-                self._log_batch(f"[POST OK] {descriptor.name}")
-            self._advance_progress()
-
-    def _prepare_data_root(
-        self, data_path: Path
-    ) -> tuple[Path, tempfile.TemporaryDirectory | None]:
-        if data_path.is_file() and data_path.suffix.lower() == ".zip":
-            tempdir = tempfile.TemporaryDirectory()
-            with zipfile.ZipFile(data_path, "r") as zf:
-                zf.extractall(tempdir.name)
-            return Path(tempdir.name), tempdir
-        return data_path, None
-
-    def _find_h5_inputs(self, path: Path) -> list[Path]:
-        if path.is_file():
-            if path.suffix.lower() in {".h5", ".hdf5"}:
-                return [path]
-            raise ValueError(f"File is not an HDF5 file: {path}")
-        if path.is_dir():
-            files = sorted({*path.rglob("*.h5"), *path.rglob("*.hdf5")})
-            return files
-        raise FileNotFoundError(f"Input path does not exist: {path}")
-
-    def _relative_input_parent(self, h5_path: Path, input_root: Path) -> Path:
-        if input_root.is_dir():
-            try:
-                return h5_path.resolve().relative_to(input_root.resolve()).parent
-            except ValueError:
-                pass
-        return Path(".")
-
-    def _run_pipelines_on_file(
-        self,
-        h5_path: Path,
-        pipelines: Sequence[PipelineDescriptor],
-        output_root: Path,
-        output_relative_parent: Path = Path("."),
-        output_filename: str | None = None,
-    ) -> Path:
-        target_dir = output_root / output_relative_parent
-        target_dir.mkdir(parents=True, exist_ok=True)
-        if output_filename:
-            base_output_path = target_dir / output_filename
-            combined_h5_out = base_output_path
-        else:
-            combined_h5_out = target_dir / f"{h5_path.stem}_pipelines_result.h5"
-        suffix = 1
-        while combined_h5_out.exists():
-            if output_filename:
-                combined_h5_out = (
-                    target_dir
-                    / f"{base_output_path.stem}_{suffix}{base_output_path.suffix}"
-                )
-            else:
-                combined_h5_out = (
-                    target_dir / f"{h5_path.stem}_{suffix}_pipelines_result.h5"
-                )
-            suffix += 1
-
-        pipeline_results: list[tuple[str, ProcessResult]] = []
-        with h5py.File(h5_path, "r") as h5file:
-            for pipeline_desc in pipelines:
-                pipeline = pipeline_desc.instantiate()
-                try:
-                    result = pipeline.run(h5file)
-                except Exception as exc:  # noqa: BLE001
-                    raise RuntimeError(
-                        format_pipeline_exception(exc, pipeline)
-                    ) from exc
-                pipeline_results.append((pipeline.name, result))
-                self._log_batch(f"[OK] {h5_path.name} -> {pipeline.name}")
-                self._advance_progress()
-        self._log_batch(f"[SAVE] Writing output file -> {combined_h5_out.name}")
-        self._write_combined_results_with_ui_pump(
-            pipeline_results=pipeline_results,
-            combined_h5_out=combined_h5_out,
-            source_file=str(h5_path),
-        )
-        for _, result in pipeline_results:
-            result.output_h5_path = str(combined_h5_out)
-        self._log_batch(f"[OK] {h5_path.name}: combined results -> {combined_h5_out}")
-        return combined_h5_out
-
-    def _write_combined_results_with_ui_pump(
-        self,
-        pipeline_results: Sequence[tuple[str, ProcessResult]],
-        combined_h5_out: Path,
-        source_file: str,
-    ) -> None:
-        errors: list[Exception] = []
-        done_event = threading.Event()
-
-        def _worker() -> None:
-            try:
-                create_h5_file(
-                    combined_h5_out,
-                    source_file=source_file,
-                    trim_source=not self._persist_eyeflow_data.get(),
-                )
-                write_metrics_trees_to_h5(
-                    combined_h5_out,
-                    ANGIOEYE_PROCESSING_ROOT,
-                    process_results_to_metric_trees(pipeline_results),
-                    overwrite=False,
-                )
-            except Exception as exc:  # noqa: BLE001
-                errors.append(exc)
-            finally:
-                done_event.set()
-
-        writer_thread = threading.Thread(target=_worker, daemon=True)
-        writer_thread.start()
-        while not done_event.wait(timeout=0.05):
-            try:
-                # Let Tk process paint/events while output file is being written.
-                self.update_idletasks()
-                self.update()
-            except tk.TclError:
-                break
-        writer_thread.join()
-        if errors:
-            raise errors[0]
-
     def _zip_output_dir(
         self,
         folder: Path,
@@ -1837,25 +1956,13 @@ class ProcessApp(_BaseAppTk):
             zip_path = target_path.expanduser().resolve()
         if zip_path.exists():
             zip_path.unlink()
-        files = sorted(
-            (file_path for file_path in folder.rglob("*") if file_path.is_file()),
-            key=lambda path: str(path.relative_to(folder)),
-        )
-        total_files = len(files)
-        if progress_callback is not None:
-            progress_callback(0, total_files, Path("."))
-        with zipfile.ZipFile(
+        return create_zip_from_tree(
+            folder,
             zip_path,
-            "w",
-            compression=zipfile.ZIP_DEFLATED,
+            exclude_root_dirs=ZIP_COMPANION_OUTPUT_FOLDERS,
             compresslevel=1,
-        ) as zf:
-            for idx, file_path in enumerate(files, start=1):
-                rel_path = file_path.relative_to(folder)
-                zf.write(file_path, rel_path)
-                if progress_callback is not None:
-                    progress_callback(idx, total_files, rel_path)
-        return zip_path
+            progress_callback=progress_callback,
+        )
 
 
 def main():
@@ -1865,3 +1972,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

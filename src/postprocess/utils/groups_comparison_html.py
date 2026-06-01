@@ -1,4 +1,4 @@
-import os
+﻿import os
 import tempfile
 import zipfile
 from collections import defaultdict
@@ -10,9 +10,9 @@ import pandas as pd
 from matplotlib.ticker import FormatStrFormatter
 from tkinter import Tk, filedialog
 import base64
-from angioeye_io.hdf5_io import find_first_existing_path
-from angioeye_io.hdf5_schema import pipeline_path_candidates
-from angioeye_io.archive_io import (
+from input_output.hdf5_io import find_first_existing_path
+from input_output.hdf5_schema import pipeline_path_candidates
+from input_output.archive_io import (
     replace_folder_in_zip,
     reset_output_dir,
 )
@@ -272,7 +272,7 @@ def export_group_statistics_figures(all_results, out_dir, formats=("png")):
     os.makedirs(out_dir, exist_ok=True)
 
     if "bandlimited" not in all_results:
-        print("Aucune donnée bandlimited trouvée.")
+        print("Aucune donnÃ©e bandlimited trouvÃ©e.")
         return
 
     for vessel in VALID_VESSELS:
@@ -447,7 +447,7 @@ def generate_html_gallery(image_dir, html_dir, html_name="metric_dashboard.html"
         html.extend([
             "        <div class='filter-group-box'>",
             "            <div class='group-header'>",
-            f"                <span class='group-toggle' onclick=\"toggleCollapse('{group_id}', this)\">▼</span>",
+            f"                <span class='group-toggle' onclick=\"toggleCollapse('{group_id}', this)\">â–¼</span>",
             f"                <input type='checkbox' checked onchange=\"toggleGroup('{group_id}', this.checked)\">",
             f"                <label>{group_name}</label>",
             "            </div>",
@@ -510,7 +510,7 @@ def generate_html_gallery(image_dir, html_dir, html_name="metric_dashboard.html"
         html.extend([
             "        <div class='filter-group-box'>",
             "            <div class='group-header'>",
-            "                <span class='group-toggle' onclick=\"toggleCollapse('other', this)\">▼</span>",
+            "                <span class='group-toggle' onclick=\"toggleCollapse('other', this)\">â–¼</span>",
             "                <input type='checkbox' checked onchange=\"toggleGroup('other', this.checked)\">",
             "                <label>Other</label>",
             "            </div>",
@@ -582,7 +582,7 @@ def generate_html_gallery(image_dir, html_dir, html_name="metric_dashboard.html"
     "            if (!container) return;",
     "",
     "            container.classList.toggle('collapsed');",
-    "            element.textContent = container.classList.contains('collapsed') ? '▶' : '▼';",
+    "            element.textContent = container.classList.contains('collapsed') ? 'â–¶' : 'â–¼';",
     "        }",
     "",
     "        function openImageModal(src) {",
@@ -636,7 +636,7 @@ def generate_html_gallery(image_dir, html_dir, html_name="metric_dashboard.html"
     "            });",
     "",
     "            document.querySelectorAll('.group-toggle').forEach(toggle => {",
-    "                toggle.textContent = '▶';",
+    "                toggle.textContent = 'â–¶';",
     "            });",
     "        }",
     "",
@@ -646,7 +646,7 @@ def generate_html_gallery(image_dir, html_dir, html_name="metric_dashboard.html"
     "            });",
     "",
     "            document.querySelectorAll('.group-toggle').forEach(toggle => {",
-    "                toggle.textContent = '▼';",
+    "                toggle.textContent = 'â–¼';",
     "            });",
     "        }",
     "",
@@ -756,3 +756,4 @@ if __name__ == "__main__":
     zip_path = choose_zip()
 
     save_dashboard(zip_path)
+

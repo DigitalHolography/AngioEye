@@ -1,4 +1,4 @@
-"""
+﻿"""
 Command-line interface to run AngioEye pipelines over a collection of HDF5 files.
 
 Usage example:
@@ -11,38 +11,34 @@ Inputs:
     --output / -o      Base directory where results will be written (input subfolder layout is preserved).
     --trim-source / -t When set, source HDF5 contents will not be copied into pipeline output files (reducing output size, but losing provenance).
     --zip / -z         When set, compress the outputs into a .zip archive after completion.
+                       Companion report folders such as png/ are kept next to it.
     --zip-name         Optional filename for the archive (default: outputs.zip).
 """
 
 from __future__ import annotations
 
 import argparse
-import shutil
 import sys
-import tempfile
 import time
-import zipfile
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-import h5py
-
-from angioeye_io import (
-    ANGIOEYE_PROCESSING_ROOT,
-    create_h5_file,
-    write_metrics_trees_to_h5,
+from input_output import (
+    create_zip_from_tree,
 )
 from pipelines import (
     PipelineDescriptor,
-    ProcessResult,
     load_pipeline_catalog,
-    process_results_to_metric_trees,
 )
-from pipelines.core.errors import format_pipeline_exception
-from postprocess import (
-    PostprocessContext,
-    PostprocessDescriptor,
-    load_postprocess_catalog,
+from postprocess import PostprocessDescriptor, load_postprocess_catalog
+from workflows import (
+    ZIP_COMPANION_OUTPUT_FOLDERS,
+    WorkflowCallbacks,
+    WorkflowInputError,
+    WorkflowRunRequest,
+    ZipBatchSettings,
+    dispatch_workflow,
+    prepare_run_input,
 )
 
 
@@ -126,86 +122,6 @@ def _validate_postprocess_selection(
         raise ValueError("\n".join(errors))
 
 
-def _find_h5_inputs(path: Path) -> list[Path]:
-    if path.is_file():
-        if path.suffix.lower() in {".h5", ".hdf5"}:
-            return [path]
-        raise ValueError(f"File is not an HDF5 file: {path}")
-    if path.is_dir():
-        files = sorted({*path.rglob("*.h5"), *path.rglob("*.hdf5")})
-        return files
-    raise FileNotFoundError(f"Input path does not exist: {path}")
-
-
-def _safe_pipeline_suffix(name: str) -> str:
-    cleaned = "".join(ch if ch.isalnum() else "_" for ch in name.lower())
-    while "__" in cleaned:
-        cleaned = cleaned.replace("__", "_")
-    return cleaned.strip("_") or "pipeline"
-
-
-def _prepare_data_root(
-    data_path: Path,
-) -> tuple[Path, tempfile.TemporaryDirectory | None]:
-    """Return a directory containing HDF5 files; extract zip archives when needed."""
-    if data_path.is_file() and data_path.suffix.lower() == ".zip":
-        tempdir = tempfile.TemporaryDirectory()
-        with zipfile.ZipFile(data_path, "r") as zf:
-            zf.extractall(tempdir.name)
-        return Path(tempdir.name), tempdir
-    return data_path, None
-
-
-def _run_pipelines_on_file(
-    h5_path: Path,
-    pipelines: Sequence[PipelineDescriptor],
-    output_root: Path,
-    output_relative_parent: Path = Path("."),
-    trim_source: bool = False,
-) -> Path:
-    target_dir = output_root / output_relative_parent
-    target_dir.mkdir(parents=True, exist_ok=True)
-    combined_h5_out = target_dir / f"{h5_path.stem}_pipelines_result.h5"
-    suffix = 1
-    while combined_h5_out.exists():
-        combined_h5_out = target_dir / f"{h5_path.stem}_{suffix}_pipelines_result.h5"
-        suffix += 1
-    pipeline_results: list[tuple[str, ProcessResult]] = []
-    with h5py.File(h5_path, "r") as h5file:
-        for pipeline_desc in pipelines:
-            pipeline = pipeline_desc.instantiate()
-            try:
-                result = pipeline.run(h5file)
-            except Exception as exc:  # noqa: BLE001
-                raise RuntimeError(format_pipeline_exception(exc, pipeline)) from exc
-            pipeline_results.append((pipeline.name, result))
-            print(f"[OK] {h5_path.name} -> {pipeline.name}")
-    create_h5_file(
-        combined_h5_out,
-        source_file=str(h5_path),
-        trim_source=trim_source,
-    )
-    write_metrics_trees_to_h5(
-        combined_h5_out,
-        ANGIOEYE_PROCESSING_ROOT,
-        process_results_to_metric_trees(pipeline_results),
-        overwrite=False,
-    )
-    for _, result in pipeline_results:
-        result.output_h5_path = str(combined_h5_out)
-    print(f"[OK] {h5_path.name}: combined results -> {combined_h5_out}")
-    return combined_h5_out
-
-
-def _relative_input_parent(h5_path: Path, input_root: Path) -> Path:
-    if input_root.is_dir():
-        try:
-            return h5_path.resolve().relative_to(input_root.resolve()).parent
-        except ValueError:
-            pass
-    return Path(".")
-
-
 def _zip_output_dir(
     folder: Path,
     target_path: Path | None = None,
@@ -221,25 +137,13 @@ def _zip_output_dir(
         zip_path = target_path.expanduser().resolve()
     if zip_path.exists():
         zip_path.unlink()
-    files = sorted(
-        (file_path for file_path in folder.rglob("*") if file_path.is_file()),
-        key=lambda path: str(path.relative_to(folder)),
-    )
-    total_files = len(files)
-    if progress_callback is not None:
-        progress_callback(0, total_files, Path("."))
-    with zipfile.ZipFile(
+    return create_zip_from_tree(
+        folder,
         zip_path,
-        "w",
-        compression=zipfile.ZIP_DEFLATED,
+        exclude_root_dirs=ZIP_COMPANION_OUTPUT_FOLDERS,
         compresslevel=1,
-    ) as zf:
-        for idx, file_path in enumerate(files, start=1):
-            rel_path = file_path.relative_to(folder)
-            zf.write(file_path, rel_path)
-            if progress_callback is not None:
-                progress_callback(idx, total_files, rel_path)
-    return zip_path
+        progress_callback=progress_callback,
+    )
 
 
 def run_cli(
@@ -263,118 +167,43 @@ def run_cli(
         postprocesses,
         selected_pipeline_names=[pipeline.name for pipeline in pipelines],
     )
-    data_root, tempdir = _prepare_data_root(data_path)
-    work_tempdir_path: Path | None = None
-    clean_work_output = False
+    input_plan = prepare_run_input(data_path)
+    output_root = output_dir.expanduser().resolve()
+    output_root.mkdir(parents=True, exist_ok=True)
+
     try:
-        inputs = _find_h5_inputs(data_root)
-        if not inputs:
-            raise ValueError(f"No .h5/.hdf5 files found under {data_path}")
-
-        output_root = output_dir.expanduser().resolve()
-        output_root.mkdir(parents=True, exist_ok=True)
-
-        work_root = output_root
-        if zip_outputs:
-            work_tempdir_path = Path(tempfile.mkdtemp(dir=output_root))
-            work_root = work_tempdir_path
-
-        failures: list[str] = []
-        processed_outputs: list[Path] = []
-        processed_input_paths: list[Path] = []
-        for h5_path in inputs:
-            try:
-                relative_parent = _relative_input_parent(h5_path, data_root)
-                combined_output = _run_pipelines_on_file(
-                    h5_path,
-                    pipelines,
-                    work_root,
-                    output_relative_parent=relative_parent,
-                    trim_source=trim_source,
-                )
-                processed_outputs.append(combined_output)
-                processed_input_paths.append(h5_path)
-            except Exception as exc:  # noqa: BLE001
-                failures.append(f"{h5_path}: {exc}")
-                print(f"[FAIL] {h5_path.name}: {exc}", file=sys.stderr)
-
-        if postprocesses and processed_outputs:
-            context = PostprocessContext(
-                output_dir=work_root,
-                processed_files=tuple(processed_outputs),
-                selected_pipelines=tuple(pipeline.name for pipeline in pipelines),
-                input_path=data_path,
+        dispatch_result = dispatch_workflow(
+            WorkflowRunRequest(
+                mode=input_plan.kind,
+                input_plan=input_plan,
+                pipelines=pipelines,
+                postprocesses=postprocesses,
+                selected_pipeline_names=[pipeline.name for pipeline in pipelines],
+                base_output_dir=output_root,
                 zip_outputs=zip_outputs,
-                input_h5_paths=tuple(processed_input_paths),
-            )
-            for descriptor in postprocesses:
-                print(f"[POST] Running {descriptor.name}...")
-                try:
-                    result = descriptor.instantiate().run(context)
-                except Exception as exc:  # noqa: BLE001
-                    msg = (
-                        f"Postprocess '{descriptor.name}' failed: "
-                        f"{type(exc).__name__}: {exc}"
-                    )
-                    failures.append(msg)
-                    print(f"[POST FAIL] {msg}", file=sys.stderr)
-                    continue
-                if result.summary:
-                    print(f"[POST OK] {descriptor.name}: {result.summary}")
-                else:
-                    print(f"[POST OK] {descriptor.name}")
-        elif postprocesses:
-            print(
-                "[POST SKIP] No successful pipeline outputs were generated, "
-                "so postprocess steps were skipped.",
-                file=sys.stderr,
-            )
+                zip_name=zip_name or "outputs.zip",
+                trim_source=trim_source,
+                zip_output_dir=_zip_output_dir,
+                zip_batch_settings=ZipBatchSettings.from_env(),
+            ),
+            _cli_workflow_callbacks(),
+        )
+    except WorkflowInputError as exc:
+        print(f"Error: {exc.message}", file=sys.stderr)
+        return 1
 
-        if zip_outputs:
-            try:
-                final_name = (zip_name or "outputs.zip").strip() or "outputs.zip"
-                if not final_name.lower().endswith(".zip"):
-                    final_name += ".zip"
-                print("[ZIP] Preparing archive...")
-                last_progress_log = 0.0
+    workflow_result = dispatch_result.workflow_result
+    if workflow_result is None:
+        print("No outputs generated.", file=sys.stderr)
+        return 1
 
-                def _zip_progress(done: int, total: int, _rel_path: Path) -> None:
-                    nonlocal last_progress_log
-                    now = time.monotonic()
-                    if done == total or (now - last_progress_log) >= 0.5:
-                        pct = 100 if total == 0 else int((done * 100) / total)
-                        print(f"[ZIP] {done}/{total} files ({pct}%)")
-                        last_progress_log = now
-
-                zip_path = _zip_output_dir(
-                    work_root,
-                    target_path=output_root / final_name,
-                    progress_callback=_zip_progress,
-                )
-                print(f"[ZIP] Archive created: {zip_path}")
-                summary_msg = f"ZIP archive: {zip_path}"
-                clean_work_output = True
-            except Exception as exc:  # noqa: BLE001
-                print(
-                    f"[ZIP FAIL] Could not create ZIP archive: {exc}", file=sys.stderr
-                )
-                summary_msg = f"Outputs stored under: {work_root}"
-        else:
-            summary_msg = f"Outputs stored under: {work_root}"
-
-        print(f"Completed. {summary_msg}")
-
-        if failures:
-            print(f"{len(failures)} failure(s):", file=sys.stderr)
-            for msg in failures:
-                print(f" - {msg}", file=sys.stderr)
-            return 1
-        return 0
-    finally:
-        if tempdir is not None:
-            tempdir.cleanup()
-        if clean_work_output and work_tempdir_path is not None:
-            shutil.rmtree(work_tempdir_path, ignore_errors=True)
+    print(f"Completed. {workflow_result.summary_message}")
+    if workflow_result.failures:
+        print(f"{len(workflow_result.failures)} failure(s):", file=sys.stderr)
+        for msg in workflow_result.failures:
+            print(f" - {msg}", file=sys.stderr)
+        return 1
+    return 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -418,7 +247,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "-z",
         "--zip",
         action="store_true",
-        help="Zip the outputs after processing (only the archive is kept).",
+        help=(
+            "Zip the outputs after processing, keeping companion report folders "
+            "such as png/ next to the archive."
+        ),
     )
     parser.add_argument(
         "--zip-name",
@@ -443,5 +275,49 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
 
+def _log_cli(message: str) -> None:
+    if message.startswith("[POST FAIL]") or message.startswith("[POST WARN]"):
+        print(message, file=sys.stderr)
+    else:
+        print(message)
+
+
+def _cli_workflow_callbacks() -> WorkflowCallbacks:
+    return WorkflowCallbacks(
+        log=_log_cli,
+        start_primary_progress=lambda _units, _status: None,
+        start_final_progress=lambda _units, _status: None,
+        advance_progress=lambda _units=1.0: None,
+        set_progress_units=lambda _units: None,
+        set_status=lambda _status: None,
+        make_zip_progress_callback=_make_cli_zip_progress_callback,
+    )
+
+
+def _make_cli_zip_progress_callback():
+    last_progress_log = 0.0
+
+    def _zip_progress(done: int, total: int, _rel_path: Path) -> None:
+        nonlocal last_progress_log
+        now = time.monotonic()
+        if done == total or (now - last_progress_log) >= 0.5:
+            pct = 100 if total == 0 else int((done * 100) / total)
+            print(f"[ZIP] {done}/{total} files ({pct}%)")
+            last_progress_log = now
+
+    return _zip_progress
+
+
+def _format_elapsed(seconds: float) -> str:
+    seconds = max(0.0, seconds)
+    if seconds < 1.0:
+        return f"{seconds:.3f}s"
+    if seconds < 60.0:
+        return f"{seconds:.2f}s"
+    minutes, remainder = divmod(seconds, 60.0)
+    return f"{int(minutes)}m {remainder:.1f}s"
+
+
 if __name__ == "__main__":
     raise SystemExit(main())
+

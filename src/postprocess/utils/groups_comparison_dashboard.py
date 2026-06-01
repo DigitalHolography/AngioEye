@@ -1,4 +1,4 @@
-import os
+﻿import os
 import shutil
 from collections import defaultdict
 from tkinter import Tk, filedialog
@@ -8,9 +8,9 @@ import numpy as np
 import pandas as pd
 from matplotlib import gridspec
 from matplotlib.ticker import FormatStrFormatter
-from angioeye_io.hdf5_io import find_first_existing_path, read_array
-from angioeye_io.hdf5_schema import pipeline_path_candidates
-from angioeye_io.archive_io import (
+from input_output.hdf5_io import find_first_existing_path, read_array
+from input_output.hdf5_schema import pipeline_path_candidates
+from input_output.archive_io import (
     extracted_zip_tree,
     reset_output_dir,
     replace_folder_in_zip,
@@ -213,7 +213,7 @@ def plot_windkessel_metric_for_method(df, metric, method, out_path):
     sub = df[(df["metric"] == metric) & (df["method"] == method)].copy()
 
     if sub.empty:
-        print(f"Aucune donnée pour metric={metric}, method={method}")
+        print(f"Aucune donnÃ©e pour metric={metric}, method={method}")
         return
 
     groups = build_group_order(sub["group"].dropna().unique().tolist())
@@ -290,7 +290,7 @@ def export_windkessel_figures(zip_path, out_dir, format="png"):
     df = analyze_zip_windkessel(zip_path)
 
     if df.empty:
-        print("Aucune donnée Windkessel trouvée dans le zip.")
+        print("Aucune donnÃ©e Windkessel trouvÃ©e dans le zip.")
         return
 
     for metric in METRICS_WINDKESSEL:
@@ -471,7 +471,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
     elif metric == "eta_h":
         eta_h = float(support.get("eta_h", np.nan))
         if not np.isfinite(eta_h):
-            # fallback si le support ne donne pas directement la métrique
+            # fallback si le support ne donne pas directement la mÃ©trique
             resid = (
                 np.nansum((sig - vb[: len(sig)]) ** 2)
                 if len(vb) == len(sig)
@@ -1185,6 +1185,9 @@ def choose_zip():
 
 
 def extract_group_metrics(group, results_dict, prefix=""):
+    """
+    Parcourt rÃ©cursivement les groupes/datasets HDF5
+    """
 
     for metric_name in group.keys():
 
@@ -1252,7 +1255,7 @@ def extract_metrics(h5_path):
 
 def select_representative_file_per_group(df_metric: pd.DataFrame, value_col="median"):
     """
-    Renvoie un dict: {group -> filename} du patient le plus proche de la médiane du groupe.
+    Renvoie un dict: {group -> filename} du patient le plus proche de la mÃ©diane du groupe.
     df_metric doit contenir au moins: ["group", "file", value_col]
     """
     rep = {}
@@ -1261,6 +1264,7 @@ def select_representative_file_per_group(df_metric: pd.DataFrame, value_col="med
         if len(vals) == 0 or not np.any(np.isfinite(vals)):
             continue
         med = float(np.nanmedian(vals))
+        # index du patient le plus proche de la mÃ©diane
         idx = int(np.nanargmin(np.abs(vals - med)))
         rep[g] = gdf.iloc[idx]["file"]
 
@@ -1353,3 +1357,4 @@ if __name__ == "__main__":
     results, single_group = analyze_zip(zip_path)
 
     save_dashboard(results, zip_path, single_group)
+
