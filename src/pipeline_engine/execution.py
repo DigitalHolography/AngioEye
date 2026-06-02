@@ -167,7 +167,11 @@ def run_postprocesses(
             )
             failures.append(skipped_message)
             log(f"[POST WARN] {skipped_message}")
-        if not processed_files and getattr(descriptor, "required_pipelines", ()):
+        has_pipeline_requirements = bool(
+            getattr(descriptor, "required_pipeline_options", ())
+            or getattr(descriptor, "required_pipelines", ())
+        )
+        if not processed_files and has_pipeline_requirements:
             log(f"[POST SKIP] {descriptor.name}: no compatible input files.")
             advance_progress(1.0)
             continue
