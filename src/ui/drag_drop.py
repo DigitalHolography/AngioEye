@@ -2,8 +2,6 @@ import tkinter as tk
 from collections.abc import Sequence
 from pathlib import Path
 
-from input_output import is_hdf5_path
-
 from .compat import DND_FILES
 from .services import services_for
 
@@ -30,19 +28,19 @@ class DragDropMixin:
             path.is_file() and path.suffix.lower() == ".holo"
             for path in dropped_paths
         ):
-            self._apply_holo_inputs(dropped_paths)
+            self.run_controller.apply_holo_inputs(dropped_paths)
             self._log_batch(
                 f"[INPUT] Drag and drop -> {len(dropped_paths)} .holo file(s)"
             )
             return True
 
         for dropped_path in dropped_paths:
-            if dropped_path.is_file() and (
-                is_hdf5_path(dropped_path) or dropped_path.suffix.lower() == ".zip"
+            if dropped_path.is_file() and self.run_controller.is_supported_file_input(
+                dropped_path
             ):
                 self.input_convention_var.set("legacy")
                 self.batch_input_var.set(str(dropped_path))
-                self._apply_input_defaults(dropped_path)
+                self.run_controller.apply_input_defaults(dropped_path)
                 self._log_batch(f"[INPUT] Drag and drop -> {dropped_path}")
                 return True
         return False
