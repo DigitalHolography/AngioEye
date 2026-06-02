@@ -10,11 +10,11 @@ T = TypeVar("T")
 R = TypeVar("R")
 
 IdleCallback = Callable[[], None]
+MAX_TASK_WORKERS = 32
 
 
 def default_task_workers() -> int:
-    cpu_count = os.cpu_count() or 2
-    return min(max(1, cpu_count - 1), 8)
+    return min(max(1, (os.cpu_count() or 2) - 1), MAX_TASK_WORKERS)
 
 
 def default_staging_workers() -> int:
@@ -23,38 +23,29 @@ def default_staging_workers() -> int:
 
 
 def env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
     try:
-        return max(1, int(os.getenv(name, str(default))))
+        return max(1, int(value if value else default))
     except ValueError:
-        return default
+        return max(1, int(default))
 
 
 @dataclass(frozen=True)
 class BatchExecutionSettings:
-    batch_size: int = 8
+    batch_size: int = field(default_factory=default_task_workers)
     staging_workers: int = field(default_factory=default_staging_workers)
     task_workers: int = field(default_factory=default_task_workers)
 
     @classmethod
-    def default_staging_workers(cls) -> int:
-        return default_staging_workers()
-
-    @classmethod
-    def default_task_workers(cls) -> int:
-        return default_task_workers()
-
-    @classmethod
     def from_env(cls) -> BatchExecutionSettings:
+        task_workers = env_int("ANGIOEYE_BATCH_TASK_WORKERS", default_task_workers())
         return cls(
-            batch_size=env_int("ANGIOEYE_BATCH_SIZE", cls.batch_size),
+            batch_size=env_int("ANGIOEYE_BATCH_SIZE", task_workers),
             staging_workers=env_int(
                 "ANGIOEYE_BATCH_STAGING_WORKERS",
-                cls.default_staging_workers(),
+                default_staging_workers(),
             ),
-            task_workers=env_int(
-                "ANGIOEYE_BATCH_TASK_WORKERS",
-                cls.default_task_workers(),
-            ),
+            task_workers=task_workers,
         )
 
 
