@@ -1,3 +1,6 @@
+from functools import cache
+import warnings
+
 import numpy as np
 
 from .core.base import ProcessPipeline, ProcessResult, registerPipeline, with_attrs
@@ -104,6 +107,12 @@ class ArterialSegExample(ProcessPipeline):
         return float(np.nanmedian(x))
 
     @staticmethod
+    def _nanmedian_no_warning(x: np.ndarray, axis=None) -> np.ndarray:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            return np.nanmedian(x, axis=axis)
+
+    @staticmethod
     def _ensure_time_by_beat(v2: np.ndarray, n_beats: int) -> np.ndarray:
         """
         Ensure v2 is shaped (n_t, n_beats). If it is (n_beats, n_t), transpose.
@@ -167,6 +176,50 @@ class ArterialSegExample(ProcessPipeline):
         tau_full = np.linspace(0.0, 1.0, v.size + 1)
 
         return float(np.interp(q, d_full, tau_full))
+
+    @staticmethod
+    def _cumulative_profile(v: np.ndarray, m0: float) -> tuple[np.ndarray, np.ndarray]:
+        vv = np.where(np.isfinite(v), v, 0.0)
+        d_full = np.concatenate(([0.0], np.cumsum(vv) / m0))
+        tau_full = np.linspace(0.0, 1.0, v.size + 1)
+        return d_full, tau_full
+
+    @staticmethod
+    def _quantile_times_from_cumulative(
+        d_full: np.ndarray,
+        tau_full: np.ndarray,
+    ) -> dict[str, float]:
+        q = np.asarray([0.10, 0.25, 0.50, 0.75, 0.90], dtype=float)
+        values = np.interp(q, d_full, tau_full)
+        return {
+            "t10_over_T": float(values[0]),
+            "t25_over_T": float(values[1]),
+            "t50_over_T": float(values[2]),
+            "t75_over_T": float(values[3]),
+            "t90_over_T": float(values[4]),
+        }
+
+    @staticmethod
+    def _distance_samples_from_cumulative(
+        d_full: np.ndarray,
+        tau_full: np.ndarray,
+    ) -> dict[str, float]:
+        q = np.asarray([0.10, 0.25, 0.50, 0.75, 0.90], dtype=float)
+        values = np.interp(q, tau_full, d_full)
+        return {
+            "d10_over_D": float(values[0]),
+            "d25_over_D": float(values[1]),
+            "d50_over_D": float(values[2]),
+            "d75_over_D": float(values[3]),
+            "d90_over_D": float(values[4]),
+        }
+
+    @staticmethod
+    def _delta_dti_from_cumulative(
+        d_full: np.ndarray,
+        tau_full: np.ndarray,
+    ) -> float:
+        return float(np.trapezoid(d_full - tau_full, tau_full))
 
     def _peak_width_over_T(self, v: np.ndarray, alpha: float) -> float:
         """
@@ -250,6 +303,19 @@ class ArterialSegExample(ProcessPipeline):
         if P.size < 3:
             return np.nan
 
+        E_LF = float(P[1])
+        E_HF = float(np.sum(P[2:]))
+        if (not np.isfinite(E_LF)) or (not np.isfinite(E_HF)) or E_HF <= 0:
+            return np.nan
+
+        return float(E_LF / E_HF)
+
+    def _spectral_ratio_LF_over_HF_from_harmonic_pack(self, hp: dict) -> float:
+        Vfull = hp.get("Vfull")
+        if Vfull is None or Vfull.size < 3:
+            return np.nan
+
+        P = np.abs(Vfull) ** 2
         E_LF = float(P[1])
         E_HF = float(np.sum(P[2:]))
         if (not np.isfinite(E_LF)) or (not np.isfinite(E_HF)) or E_HF <= 0:
@@ -810,7 +876,7 @@ class ArterialSegExample(ProcessPipeline):
 
         hh_rolloff = self._higher_harmonic_rolloff_metrics(V)
         ph = self._phase_organization_metrics(V, Tbeat)
-        metrics = self._compute_metrics_1d(vv, Tbeat)
+        metrics = self._compute_metrics_1d(vv, Tbeat, harmonic_pack=hp)
 
         vb_out = np.full((n,), np.nan, dtype=float)
         if vb is not None:
@@ -868,6 +934,7 @@ class ArterialSegExample(ProcessPipeline):
         h_mag = self.H_MAX
         h_phi = max(self.H_PHASE_RESIDUAL - 1, 0)
         h_higher = max(self.H_MAX - 1, 0)
+        metric_names = self._metric_names()
 
         out = {
             "A2_cumsum": np.full((n_beats, h_higher), np.nan, dtype=float),
@@ -913,8 +980,8 @@ class ArterialSegExample(ProcessPipeline):
             "vmean": np.full((n_beats,), np.nan, dtype=float),
         }
 
-        for k in self._metric_keys():
-            out[k[0]] = np.full((n_beats,), np.nan, dtype=float)
+        for key in metric_names:
+            out[key] = np.full((n_beats,), np.nan, dtype=float)
 
         for beat_idx in range(n_beats):
             Tbeat = float(T[0][beat_idx])
@@ -960,31 +1027,39 @@ class ArterialSegExample(ProcessPipeline):
             out["vmean"][beat_idx] = s["vmean"]
             out["vend"][beat_idx] = s["vend"]
 
-            for k in self._metric_keys():
-                out[k[0]][beat_idx] = s[k[0]]
+            for key in metric_names:
+                out[key][beat_idx] = s[key]
 
         return out
 
-    def _compute_metrics_1d(self, v: np.ndarray, Tbeat: float) -> dict:
+    def _compute_metrics_1d(
+        self,
+        v: np.ndarray,
+        Tbeat: float,
+        *,
+        harmonic_pack: dict | None = None,
+    ) -> dict:
         """
         Canonical metric kernel: compute all waveform-shape metrics from a single 1D waveform v(t).
         Returns a dict of scalar metrics (floats).
         """
+        metric_names = self._metric_names()
         v = self._rectify_keep_nan(v)
         n = int(v.size)
         if n <= 0:
-            return {k[0]: np.nan for k in self._metric_keys()}
+            return {key: np.nan for key in metric_names}
 
         if (not np.isfinite(Tbeat)) or Tbeat <= 0:
-            return {k[0]: np.nan for k in self._metric_keys()}
+            return {key: np.nan for key in metric_names}
 
         vv = np.where(np.isfinite(v), v, np.nan)
         m0 = float(np.nansum(vv))
         if m0 <= 0:
-            return {k[0]: np.nan for k in self._metric_keys()}
+            return {key: np.nan for key in metric_names}
 
         dt = Tbeat / n
         t = np.arange(n, dtype=float) * dt
+        d_full, tau_full = self._cumulative_profile(vv, m0)
 
         m1 = float(np.nansum(vv * t))
         mu_t = m1 / m0
@@ -1027,23 +1102,23 @@ class ArterialSegExample(ProcessPipeline):
         W50_over_T = self._peak_width_over_T(vv, self.ratio_W50)
         W80_over_T = self._peak_width_over_T(vv, self.ratio_W80)
 
-        t10_over_T = self._quantile_time_over_T(vv, Tbeat, 0.10)
-        t25_over_T = self._quantile_time_over_T(vv, Tbeat, 0.25)
-        t50_over_T = self._quantile_time_over_T(vv, Tbeat, 0.50)
-        t75_over_T = self._quantile_time_over_T(vv, Tbeat, 0.75)
-        t90_over_T = self._quantile_time_over_T(vv, Tbeat, 0.90)
+        t_samples = self._quantile_times_from_cumulative(d_full, tau_full)
+        t10_over_T = t_samples["t10_over_T"]
+        t25_over_T = t_samples["t25_over_T"]
+        t50_over_T = t_samples["t50_over_T"]
+        t75_over_T = t_samples["t75_over_T"]
+        t90_over_T = t_samples["t90_over_T"]
 
-        d_samples = self._normalized_cumulative_distance_samples(vv, Tbeat, m0)
+        d_samples = self._distance_samples_from_cumulative(d_full, tau_full)
         d10 = d_samples["d10_over_D"]
         d25 = d_samples["d25_over_D"]
         d50 = d_samples["d50_over_D"]
         d75 = d_samples["d75_over_D"]
         d90 = d_samples["d90_over_D"]
 
-        E_LF_over_E_HF = self._spectral_ratio_LF_over_HF(vv, Tbeat)
-
-        hp = self._harmonic_pack(vv, Tbeat)
+        hp = harmonic_pack if harmonic_pack is not None else self._harmonic_pack(vv, Tbeat)
         vb = hp["vb"]
+        E_LF_over_E_HF = self._spectral_ratio_LF_over_HF_from_harmonic_pack(hp)
 
         CF = self._crest_factor(vv)
         N_eff_over_T = self._n_eff_over_T(vv, Tbeat, m0)
@@ -1057,7 +1132,7 @@ class ArterialSegExample(ProcessPipeline):
             t_fall_over_T,
         ) = self._normalized_slopes_and_times(vv, Tbeat)
 
-        Delta_DTI = self._delta_dti(vv, Tbeat, m0, t)
+        Delta_DTI = self._delta_dti_from_cumulative(d_full, tau_full)
         gamma_t = self._gamma_t(vv, Tbeat, mu_t, sigma_t, m0, t)
 
         eta_h = self._explained_pulsatile_fraction(vv, vb)
@@ -1143,7 +1218,8 @@ class ArterialSegExample(ProcessPipeline):
         }
 
     @staticmethod
-    def _metric_keys() -> list[list]:
+    @cache
+    def _metric_keys() -> tuple[tuple[str, str, str, str], ...]:
         """
         Canonical manuscript-aligned scalar metrics.
 
@@ -1151,47 +1227,52 @@ class ArterialSegExample(ProcessPipeline):
         Deprecated exploratory harmonic rolloff/support and phase-organization
         metrics are intentionally excluded from this public endpoint list.
         """
-        return [
-            ["mu_t", "VTI-weighted centroid time", "seconds", "timing_and_distribution"],
-            ["mu_t_over_T", "mu_t/T", "", "timing_and_distribution"],
-            ["sigma_t", "VTI-weighted time spread", "seconds", "timing_and_distribution"],
-            ["sigma_t_over_T", "sigma_t/T", "", "timing_and_distribution"],
-            ["gamma_t", "VTI-weighted temporal skewness", "", "timing_and_distribution"],
-            ["t10_over_T", "t_10/T", "", "timing_quantiles"],
-            ["t25_over_T", "t_25/T", "", "timing_quantiles"],
-            ["t50_over_T", "t_50/T", "", "timing_quantiles"],
-            ["t75_over_T", "t_75/T", "", "timing_quantiles"],
-            ["t90_over_T", "t_90/T", "", "timing_quantiles"],
-            ["Q_t_width", "(t_75-t_25)/T", "", "timing_quantiles"],
-            ["Q_t_skew", "((t_90-t_50)-(t_50-t_10))/(t_90-t_10)", "", "timing_quantiles"],
-            ["W50_over_T", "W_50/T", "", "crest_width"],
-            ["W80_over_T", "W_80/T", "", "crest_width"],
-            ["RI", "1-v_min/v_max", "", "pulsatility"],
-            ["PI", "(v_max-v_min)/v_mean", "", "pulsatility"],
-            ["R_VTI", "d(alpha*T)/(D-d(alpha*T))", "", "cumulative_distance_geometry"],
-            ["SF_VTI", "d(alpha*T)/D", "", "cumulative_distance_geometry"],
-            ["Delta_DTI", "integral_0^1(d(tau*T)/D - tau) d tau", "", "cumulative_distance_geometry"],
-            ["d10_over_D", "d(0.10*T)/D", "", "cumulative_distance_geometry"],
-            ["d25_over_D", "d(0.25*T)/D", "", "cumulative_distance_geometry"],
-            ["d50_over_D", "d(0.50*T)/D", "", "cumulative_distance_geometry"],
-            ["d75_over_D", "d(0.75*T)/D", "", "cumulative_distance_geometry"],
-            ["d90_over_D", "d(0.90*T)/D", "", "cumulative_distance_geometry"],
-            ["Q_d_width", "(d_75-d_25)/D", "", "cumulative_distance_geometry"],
-            ["Q_d_skew", "((d_90-d_50)-(d_50-d_10))/(d_90-d_10)", "", "cumulative_distance_geometry"],
-            ["t_max_over_T", "t_max/T", "", "kinetics_and_persistence"],
-            ["t_min_over_T", "t_min/T", "", "kinetics_and_persistence"],
-            ["S_rise", "T*max(dv/dt)/v_mean", "", "kinetics_and_persistence"],
-            ["S_fall", "T*|min(dv/dt)|/v_mean", "", "kinetics_and_persistence"],
-            ["t_rise_over_T", "t_rise/T", "", "kinetics_and_persistence"],
-            ["t_fall_over_T", "t_fall/T", "", "kinetics_and_persistence"],
-            ["v_end_over_vbar", "v_end/v_mean", "", "kinetics_and_persistence"],
-            ["CF", "v_max/v_RMS", "", "kinetics_and_persistence"],
-            ["E_LF_over_E_HF", "E_LF/E_HF", "", "spectral_and_reconstruction"],
-            ["eta_h", "explained pulsatile fraction", "", "spectral_and_reconstruction"],
-            ["N_eff_over_T", "N_eff/T", "", "temporal_support"],
-            ["N_t_over_T", "N_t/T", "", "temporal_support"],
-            ["E_slope", "T^3/M0^2 * integral_0^T (dv/dt)^2 dt", "", "slope_energy"],
-        ]
+        return (
+            ("mu_t", "VTI-weighted centroid time", "seconds", "timing_and_distribution"),
+            ("mu_t_over_T", "mu_t/T", "", "timing_and_distribution"),
+            ("sigma_t", "VTI-weighted time spread", "seconds", "timing_and_distribution"),
+            ("sigma_t_over_T", "sigma_t/T", "", "timing_and_distribution"),
+            ("gamma_t", "VTI-weighted temporal skewness", "", "timing_and_distribution"),
+            ("t10_over_T", "t_10/T", "", "timing_quantiles"),
+            ("t25_over_T", "t_25/T", "", "timing_quantiles"),
+            ("t50_over_T", "t_50/T", "", "timing_quantiles"),
+            ("t75_over_T", "t_75/T", "", "timing_quantiles"),
+            ("t90_over_T", "t_90/T", "", "timing_quantiles"),
+            ("Q_t_width", "(t_75-t_25)/T", "", "timing_quantiles"),
+            ("Q_t_skew", "((t_90-t_50)-(t_50-t_10))/(t_90-t_10)", "", "timing_quantiles"),
+            ("W50_over_T", "W_50/T", "", "crest_width"),
+            ("W80_over_T", "W_80/T", "", "crest_width"),
+            ("RI", "1-v_min/v_max", "", "pulsatility"),
+            ("PI", "(v_max-v_min)/v_mean", "", "pulsatility"),
+            ("R_VTI", "d(alpha*T)/(D-d(alpha*T))", "", "cumulative_distance_geometry"),
+            ("SF_VTI", "d(alpha*T)/D", "", "cumulative_distance_geometry"),
+            ("Delta_DTI", "integral_0^1(d(tau*T)/D - tau) d tau", "", "cumulative_distance_geometry"),
+            ("d10_over_D", "d(0.10*T)/D", "", "cumulative_distance_geometry"),
+            ("d25_over_D", "d(0.25*T)/D", "", "cumulative_distance_geometry"),
+            ("d50_over_D", "d(0.50*T)/D", "", "cumulative_distance_geometry"),
+            ("d75_over_D", "d(0.75*T)/D", "", "cumulative_distance_geometry"),
+            ("d90_over_D", "d(0.90*T)/D", "", "cumulative_distance_geometry"),
+            ("Q_d_width", "(d_75-d_25)/D", "", "cumulative_distance_geometry"),
+            ("Q_d_skew", "((d_90-d_50)-(d_50-d_10))/(d_90-d_10)", "", "cumulative_distance_geometry"),
+            ("t_max_over_T", "t_max/T", "", "kinetics_and_persistence"),
+            ("t_min_over_T", "t_min/T", "", "kinetics_and_persistence"),
+            ("S_rise", "T*max(dv/dt)/v_mean", "", "kinetics_and_persistence"),
+            ("S_fall", "T*|min(dv/dt)|/v_mean", "", "kinetics_and_persistence"),
+            ("t_rise_over_T", "t_rise/T", "", "kinetics_and_persistence"),
+            ("t_fall_over_T", "t_fall/T", "", "kinetics_and_persistence"),
+            ("v_end_over_vbar", "v_end/v_mean", "", "kinetics_and_persistence"),
+            ("CF", "v_max/v_RMS", "", "kinetics_and_persistence"),
+            ("E_LF_over_E_HF", "E_LF/E_HF", "", "spectral_and_reconstruction"),
+            ("eta_h", "explained pulsatile fraction", "", "spectral_and_reconstruction"),
+            ("N_eff_over_T", "N_eff/T", "", "temporal_support"),
+            ("N_t_over_T", "N_t/T", "", "temporal_support"),
+            ("E_slope", "T^3/M0^2 * integral_0^T (dv/dt)^2 dt", "", "slope_energy"),
+        )
+
+    @staticmethod
+    @cache
+    def _metric_names() -> tuple[str, ...]:
+        return tuple(k[0] for k in ArterialSegExample._metric_keys())
 
     def _compute_block_segment(self, v_block: np.ndarray, T: np.ndarray):
         """
@@ -1208,47 +1289,39 @@ class ArterialSegExample(ProcessPipeline):
             )
 
         _, n_beats, n_branches, n_radii = v_block.shape
+        metric_names = self._metric_names()
 
         seg = {
-            k[0]: np.full((n_beats, n_branches, n_radii), np.nan, dtype=float)
-            for k in self._metric_keys()
+            key: np.full((n_beats, n_branches, n_radii), np.nan, dtype=float)
+            for key in metric_names
         }
         br = {
-            k[0]: np.full((n_beats, n_branches), np.nan, dtype=float)
-            for k in self._metric_keys()
+            key: np.full((n_beats, n_branches), np.nan, dtype=float)
+            for key in metric_names
         }
         gl = {
-            k[0]: np.full((n_beats,), np.nan, dtype=float) for k in self._metric_keys()
+            key: np.full((n_beats,), np.nan, dtype=float) for key in metric_names
         }
 
         for beat_idx in range(n_beats):
             Tbeat = float(T[0][beat_idx])
 
-            gl_vals = {k[0]: [] for k in self._metric_keys()}
-
             for branch_idx in range(n_branches):
-                br_vals = {k[0]: [] for k in self._metric_keys()}
-
                 for radius_idx in range(n_radii):
                     v = v_block[:, beat_idx, branch_idx, radius_idx]
                     m = self._compute_metrics_1d(v, Tbeat)
 
-                    for k in self._metric_keys():
-                        key = k[0]
+                    for key in metric_names:
                         seg[key][beat_idx, branch_idx, radius_idx] = m[key]
-                        br_vals[key].append(m[key])
-                        gl_vals[key].append(m[key])
 
-                for k in self._metric_keys():
-                    key = k[0]
-                    br[key][beat_idx, branch_idx] = self._safe_nanmedian(
-                        np.asarray(br_vals[key], dtype=float)
-                    )
-
-            for k in self._metric_keys():
-                key = k[0]
-                gl[key][beat_idx] = self._safe_nanmedian(
-                    np.asarray(gl_vals[key], dtype=float)
+        if n_radii:
+            for key in metric_names:
+                br[key][:] = self._nanmedian_no_warning(seg[key], axis=2)
+        if n_branches and n_radii:
+            for key in metric_names:
+                gl[key][:] = self._nanmedian_no_warning(
+                    seg[key].reshape(n_beats, n_branches * n_radii),
+                    axis=1,
                 )
 
         seg_order_note = "segment arrays are stored as (beat, branch, radius)"
@@ -1262,17 +1335,18 @@ class ArterialSegExample(ProcessPipeline):
         n_beats = int(T.shape[1])
         v_global = self._ensure_time_by_beat(v_global, n_beats)
         v_global = self._rectify_keep_nan(v_global)
+        metric_names = self._metric_names()
 
         out = {
-            k[0]: np.full((n_beats,), np.nan, dtype=float) for k in self._metric_keys()
+            key: np.full((n_beats,), np.nan, dtype=float) for key in metric_names
         }
 
         for beat_idx in range(n_beats):
             Tbeat = float(T[0][beat_idx])
             v = v_global[:, beat_idx]
             m = self._compute_metrics_1d(v, Tbeat)
-            for k in self._metric_keys():
-                out[k[0]][beat_idx] = m[k[0]]
+            for key in metric_names:
+                out[key][beat_idx] = m[key]
 
         return out
 
@@ -1375,10 +1449,11 @@ class ArterialSegExample(ProcessPipeline):
         T: np.ndarray,
         latex_formulas: dict,
     ) -> None:
+        metric_keys = self._metric_keys()
         out_raw = self._compute_block_global(v_raw_gl, T)
         out_band = self._compute_block_global(v_band_gl, T)
 
-        for k in self._metric_keys():
+        for k in metric_keys:
             metrics[f"{vessel_prefix}/global/raw/{k[0]}"] = with_attrs(
                 out_raw[k[0]],
                 {
