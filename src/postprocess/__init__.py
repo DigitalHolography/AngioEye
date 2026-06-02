@@ -13,6 +13,8 @@ from .core.base import (
     PostprocessContext,
     PostprocessDescriptor,
     PostprocessResult,
+    format_required_pipeline_options,
+    required_pipeline_options_for,
     registerPostprocess,
 )
 
@@ -68,12 +70,10 @@ def _discover_postprocesses() -> tuple[
             )
 
     for _name, cls in POSTPROCESS_REGISTRY.items():
-        missing_pipelines = sorted(
-            {
-                pipeline_name
-                for pipeline_name in getattr(cls, "required_pipelines", [])
-                if pipeline_name not in available_pipeline_names
-            }
+        pipeline_options = required_pipeline_options_for(cls)
+        missing_pipelines = _missing_pipeline_names_for_options(
+            pipeline_options,
+            available_pipeline_names,
         )
         is_available = getattr(cls, "available", True) and not missing_pipelines
         desc = PostprocessDescriptor(
@@ -83,6 +83,7 @@ def _discover_postprocesses() -> tuple[
             requires=cls.requires,
             missing_deps=cls.missing_deps,
             required_pipelines=getattr(cls, "required_pipelines", []),
+            required_pipeline_options=[list(option) for option in pipeline_options],
             missing_pipelines=missing_pipelines,
             postprocess_cls=cls,
             error_msg=(
@@ -103,6 +104,24 @@ def _discover_postprocesses() -> tuple[
     available.sort(key=lambda postprocess: postprocess.name.lower())
     missing.sort(key=lambda postprocess: postprocess.name.lower())
     return available, missing
+
+
+def _missing_pipeline_names_for_options(
+    pipeline_options: tuple[tuple[str, ...], ...],
+    available_pipeline_names: set[str],
+) -> list[str]:
+    if not pipeline_options:
+        return []
+    if any(set(option).issubset(available_pipeline_names) for option in pipeline_options):
+        return []
+    return sorted(
+        {
+            pipeline_name
+            for option in pipeline_options
+            for pipeline_name in option
+            if pipeline_name not in available_pipeline_names
+        }
+    )
 
 
 def load_postprocess_catalog() -> tuple[
@@ -131,6 +150,8 @@ __all__ = [
     "PostprocessContext",
     "PostprocessDescriptor",
     "PostprocessResult",
+    "format_required_pipeline_options",
+    "required_pipeline_options_for",
     "registerPostprocess",
     "load_postprocess_catalog",
     *_EXPORTED_POSTPROCESS_CLASSES.keys(),
