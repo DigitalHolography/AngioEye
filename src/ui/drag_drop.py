@@ -1,11 +1,11 @@
 import tkinter as tk
 from collections.abc import Sequence
 from pathlib import Path
-from tkinter import messagebox
 
 from input_output import is_hdf5_path
 
 from .compat import DND_FILES
+from .services import services_for
 
 class DragDropMixin:
     def _install_drop_targets(self) -> None:
@@ -58,7 +58,7 @@ class DragDropMixin:
         if self._handle_dropped_paths(dropped_paths):
             return
 
-        messagebox.showwarning(
+        services_for(self).dialogs.showwarning(
             "Unsupported drop",
             "Drop .holo file(s), or a single .h5, .hdf5, or .zip file.",
         )

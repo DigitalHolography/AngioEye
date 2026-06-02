@@ -1,7 +1,7 @@
 from pathlib import Path
-from tkinter import messagebox
 
 from app_settings import LAST_BATCH_LOG_FILENAME
+from .services import services_for
 
 class ProgressMixin:
     def _set_minimal_status(self, text: str) -> None:
@@ -92,7 +92,7 @@ class ProgressMixin:
             message = (
                 f"{message}\n\nLatest log saved to:\n{self._last_saved_batch_log_path}"
             )
-        messagebox.showwarning(
+        services_for(self).dialogs.showwarning(
             "Batch completed with errors",
             message,
         )

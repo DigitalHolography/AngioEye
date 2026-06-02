@@ -15,6 +15,7 @@ from .postprocess_library import PostprocessLibraryMixin
 from .progress import ProgressMixin
 from .resources import ResourceMixin
 from .run import RunMixin
+from .services import UiServices
 from .settings import SettingsMixin
 from .views import ViewBuilderMixin
 
@@ -35,6 +36,7 @@ class ProcessApp(
     def __init__(self) -> None:
         super().__init__()
         self.title("AngioEye")
+        self.ui_services = UiServices()
         self.settings_store = AppSettingsStore()
         self._settings_warning_shown = False
         self._ensure_default_settings()
