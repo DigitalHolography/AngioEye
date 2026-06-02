@@ -1,4 +1,4 @@
-import os
+﻿import os
 from collections import defaultdict
 import shutil
 from pathlib import Path
@@ -8,14 +8,15 @@ import numpy as np
 import pandas as pd
 from matplotlib.ticker import FormatStrFormatter
 from tkinter import Tk, filedialog
-from angioeye_io.hdf5_io import find_first_existing_path
-from angioeye_io.hdf5_schema import pipeline_path_candidates
-from angioeye_io.archive_io import (
+from input_output.hdf5_io import find_first_existing_path
+from input_output.hdf5_schema import pipeline_path_candidates
+from input_output.archive_io import (
     replace_folder_in_zip,
     reset_output_dir,
 )
 from ..core.grouped_batch import (
     find_control_group_name,
+    iter_grouped_h5_files,
     iter_grouped_h5_files_in_zip,
 )
 
@@ -32,34 +33,34 @@ SELECTED_METRICS_PNG = {
     "sigma_t_over_T",
     "W50_over_T",
     "W80_over_T",
-    "E_low_over_E_total",
+    "E_LF_over_E_HF",
     "t_max_over_T",
     "t_min_over_T",
-    "Delta_t_over_T",
-    "slope_rise_normalized",
-    "slope_fall_normalized",
-    "t_up_over_T",
-    "t_down_over_T",
-    "crest_factor",
+    #"Delta_t_over_T",
+    "S_rise",
+    "S_fall",
+    "t_rise_over_T",
+    "t_fall_over_T",
+    "CF",
     "Delta_DTI",
     "gamma_t",
     "N_eff_over_T",
     "N_t_over_T",
-    "s_t",
-    "w_t",
-    "s_d",
-    "w_d",
-    "v_end_over_v_mean",
+    "Q_t_skew",
+    "Q_t_width",
+    "Q_d_skew",
+    "Q_d_width",
+    "v_end_over_vbar",
     "E_slope",
-    "E_curv",
+    #"E_curv",
     "t50_over_T",
-    "t_phi_over_T",
-    "t_phi_n_over_T",
-    "rho_h",
-    "w_h",
-    "N_h_over_H_minus_1",
-    "D_phi",
-    "s_phi_over_T",
+    #"t_phi_over_T",
+    #"t_phi_n_over_T",
+    #"rho_h",
+    #"w_h",
+    #"N_h_over_H_minus_1",
+    #"D_phi",
+    #"s_phi_over_T",
     "eta_h",
 }
 METRIC_ALIASES = {
@@ -70,7 +71,7 @@ LATEX_FORMULAS = {
     "RI": r"$\rm RI$",
     "rho_h_90": r"$\rho_{h,90}$",
     "rho_h_95": r"$\rho_{h,95}$",
-    "crest_factor": r"$\rm CF$",
+    "CF": r"$\rm CF$",
     "t50_over_T": r"$t_{50}/T$",
     "R_VTI": r"$R_{VTI}$",
     "spectral_entropy": r"$H_{spec}$",
@@ -82,51 +83,88 @@ LATEX_FORMULAS = {
     "t_max_over_T": r"$t_{\mathrm{max}}/T$",
     "t_min_over_T": r"$t_{\mathrm{min}}/T$",
     "Delta_t_over_T": r"$\Delta_{\mathrm{t}}/T$",
-    "t_up_over_T": r"$t_{\mathrm{up}}/T$",
-    "t_down_over_T": r"$t_{\mathrm{down}}/T$",
+    "t_rise_over_T": r"$t_{\mathrm{rise}}/T$",
+    "t_fall_over_T": r"$t_{\mathrm{fall}}/T$",
     "S_decay": r"$S_{\mathrm{decay}}$",
     "Delta_DTI": r"$\Delta_{\mathrm{DTI}}$",
     "E_high_over_E_total": r"$E_{\mathrm{high}}/E_{\mathrm{total}}$",
     "E_low_over_E_total": r"$E_{\mathrm{low}}/E_{\mathrm{total}}$",
+    "E_LF_over_E_HF": r"$E_{\mathrm{LF}}/E_{\mathrm{HF}}$",
     "R_SD": r"$R_{SD}$",
-    "slope_fall_normalized": r"$S_{\mathrm{fall}}$",
-    "slope_rise_normalized": r"$S_{\mathrm{rise}}$",
+    "S_fall": r"$S_{\mathrm{fall}}$",
+    "S_rise": r"$S_{\mathrm{rise}}$",
     "gamma_t": r"$\gamma_t$",
     "mu_h": r"$\mu_h$",
     "sigma_h": r"$\sigma_h$",
     "N_eff_over_T": r"$N_{\mathrm{eff}}/T$",
     "E_recon_H_MAX": r"$E_{\mathrm{recon},H_{\max}}$",
-    "s_t": r"$s_{\mathrm{t}}$",
-    "w_t": r"$w_{\mathrm{t}}$",
-    "s_d": r"$s_{\mathrm{d}}$",
-    "w_d": r"$w_{\mathrm{d}}$",
-    "v_end_over_v_mean": r"$R_{EM}$",
+    "Q_t_skew": r"$Q_{\mathrm{t,skew}}$",
+    "Q_t_width": r"$Q_{\mathrm{t,width}}$",
+    "Q_d_skew": r"$Q_{\mathrm{d,skew}}$",
+    "Q_d_width": r"$Q_{\mathrm{d,width}}$",
+    "v_end_over_vbar": r"$v_{\mathrm{end}}/\bar{\mathrm{v}}$",
     "E_slope": r"$E_{\mathrm{slope}}$",
     "phase_locking_residual": r"$E_{\phi}$",
     "W50_over_T": r"$W_{50}/T$",
     "W80_over_T": r"$W_{80}/T$",
     "N_t_over_T": r"$N_t/T$",
-    "t_phi_n_over_T": r"$t_{\Delta\phi_n}/T$",
-    "t_phi_over_T": r"$t_{\phi}/T$",
-    "D_phi": r"$D_{\phi}$",
-    "s_phi_over_T": r"$s_{\Delta\phi}/T$",
+    #"t_phi_n_over_T": r"$t_{\Delta\phi_n}/T$",
+    #"t_phi_over_T": r"$t_{\phi}/T$",
+    #"D_phi": r"$D_{\phi}$",
+    #"s_phi_over_T": r"$s_{\Delta\phi}/T$",
     "eta_h": r"$\eta_h$",
-    "rho_h": r"$\rho_{h}$",
-    "w_h": r"$w_{h}$",
-    "N_h_over_H_minus_1": r"$N_{H}/(H-1)$",
+    #"rho_h": r"$\rho_{h}$",
+    #"w_h": r"$w_{h}$",
+    #"N_h_over_H_minus_1": r"$N_{H}/(H-1)$",
 }
 
 def get_metrics_base_candidates(vessel: str) -> list[str]:
     return pipeline_path_candidates(WAVEFORM_SHAPE_METRICS_PIPELINE, vessel, "global")
 
 
+def extract_group_metrics(group, results_dict, prefix=""):
+
+    for metric_name in group.keys():
+
+        item = group[metric_name]
+
+        full_name = f"{prefix}/{metric_name}" if prefix else metric_name
+
+        # Si sous-dossier -> recurse
+        if isinstance(item, h5py.Group):
+
+            extract_group_metrics(
+                item,
+                results_dict,
+                prefix=full_name
+            )
+
+        # Si dataset -> stats
+        elif isinstance(item, h5py.Dataset):
+
+            try:
+                data = np.array(item, dtype=float)
+
+                results_dict[full_name] = {
+                    "median": np.nanmedian(data),
+                    "std": np.nanstd(data),
+                }
+
+            except (ValueError, TypeError):
+                print(f"Skipping non numeric dataset: {full_name}")
+
+
 def extract_metrics(h5_path):
+
     results = defaultdict(lambda: defaultdict(dict))
 
     with h5py.File(h5_path, "r") as f:
+
         for vessel in VALID_VESSELS:
+
             metrics_root_path = find_first_existing_path(
-                f, get_metrics_base_candidates(vessel)
+                f,
+                get_metrics_base_candidates(vessel)
             )
 
             if metrics_root_path is None or metrics_root_path not in f:
@@ -135,27 +173,24 @@ def extract_metrics(h5_path):
             metrics_root = f[metrics_root_path]
 
             for mode in metrics_root.keys():
+
                 if mode not in VALID_METRIC_FOLDERS:
                     continue
 
                 group = metrics_root[mode]
 
-                for metric_name in group.keys():
-                    dataset = group[metric_name]
-                    data = np.array(dataset, dtype=float)
-
-                    results[mode][vessel][metric_name] = {
-                        "mean": np.nanmedian(data),
-                        "std": np.nanstd(data),
-                    }
+                extract_group_metrics(
+                    group,
+                    results[mode][vessel]
+                )
 
     return results
 
 
-def analyze_zip(zip_path):
+def analyze_grouped_h5_files(grouped_files):
     all_results = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
 
-    for grouped_file in iter_grouped_h5_files_in_zip(zip_path):
+    for grouped_file in grouped_files:
         metrics = extract_metrics(grouped_file.file_path)
 
         for mode, vessel_dict in metrics.items():
@@ -165,13 +200,21 @@ def analyze_zip(zip_path):
                         {
                             "file": grouped_file.file_name,
                             "group": grouped_file.group_name,
-                            "mean": values["mean"],
+                            "median": values["median"],
                             "std": values["std"],
                             "vessel": vessel,
                         }
                     )
 
     return dict(all_results)
+
+
+def analyze_batch_root(batch_root):
+    return analyze_grouped_h5_files(iter_grouped_h5_files(batch_root))
+
+
+def analyze_zip(zip_path):
+    return analyze_grouped_h5_files(iter_grouped_h5_files_in_zip(zip_path))
 
 
 def plot_group_statistics(df, metric, vessel, out_path):
@@ -185,8 +228,8 @@ def plot_group_statistics(df, metric, vessel, out_path):
 
     x_pos = {g: i for i, g in enumerate(groups)}
 
-    grp_mean = df.groupby("group")["mean"].mean()
-    grp_std = df.groupby("group")["mean"].std()
+    grp_mean = df.groupby("group")["median"].mean()
+    grp_std = df.groupby("group")["median"].std()
 
     fig, ax = plt.subplots(figsize=(8, 6), dpi=200)
     ax.set_facecolor("#f2f2f2")
@@ -209,7 +252,7 @@ def plot_group_statistics(df, metric, vessel, out_path):
 
         ax.scatter(
             x,
-            gdf["mean"].values,
+            gdf["median"].values,
             color="black",
             s=20,
             edgecolors="none",
@@ -252,7 +295,7 @@ def export_group_statistics_figures(all_results, out_dir, formats=("png", "eps")
     os.makedirs(out_dir, exist_ok=True)
 
     if "bandlimited" not in all_results:
-        print("Aucune donnée bandlimited trouvée.")
+        print("Aucune donnÃ©e bandlimited trouvÃ©e.")
         return
 
     for vessel in VALID_VESSELS:
@@ -281,8 +324,11 @@ def choose_zip():
     root.withdraw()
     return filedialog.askopenfilename(filetypes=[("ZIP", "*.zip")])
 
-def save_dashboard(zip_path, export_png_dir="export_png", export_eps_dir="export_eps"):
-    all_results = analyze_zip(zip_path)
+def save_dashboard_outputs(
+    all_results,
+    export_png_dir="export_png",
+    export_eps_dir="export_eps",
+):
     reset_output_dir(export_png_dir)
     reset_output_dir(export_eps_dir)
     export_group_statistics_figures(
@@ -295,6 +341,22 @@ def save_dashboard(zip_path, export_png_dir="export_png", export_eps_dir="export
         all_results,
         out_dir=export_eps_dir,
         formats=("eps",),
+    )
+    generated = [
+        path
+        for export_dir in (Path(export_png_dir), Path(export_eps_dir))
+        for path in sorted(export_dir.rglob("*"))
+        if path.is_file()
+    ]
+    return generated
+
+
+def save_dashboard(zip_path, export_png_dir="export_png", export_eps_dir="export_eps"):
+    all_results = analyze_zip(zip_path)
+    save_dashboard_outputs(
+        all_results,
+        export_png_dir=export_png_dir,
+        export_eps_dir=export_eps_dir,
     )
 
     replace_folder_in_zip(zip_path, Path(export_png_dir), arc_folder="export_png")
@@ -312,3 +374,4 @@ if __name__ == "__main__":
     zip_path = choose_zip()
     
     save_dashboard(zip_path)
+

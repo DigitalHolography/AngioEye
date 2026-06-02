@@ -2,9 +2,17 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import platform
 import sys
 from pathlib import Path
 from typing import Any
+
+
+def _disable_windows_platform_wmi() -> None:
+    if sys.platform != "win32":
+        return
+    if hasattr(platform, "_wmi"):
+        platform._wmi = None
 
 
 def _find_checkout_src(
@@ -54,8 +62,10 @@ def _call_entry(
 
 
 def main() -> Any:
+    _disable_windows_platform_wmi()
     return _call_entry("angio_eye", "angio_eye.py", "main")
 
 
 def cli_main(argv: list[str] | None = None) -> Any:
+    _disable_windows_platform_wmi()
     return _call_entry("cli", "cli.py", "main", argv)

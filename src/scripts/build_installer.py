@@ -136,11 +136,19 @@ def _copy_tree_contents(source_dir: Path, destination_dir: Path) -> None:
 def _copy_editable_package_modules(package_name: str) -> None:
     source_dir = PROJECT_ROOT / "src" / package_name
     destination_dir = PAYLOAD_DIR / package_name
+    if destination_dir.exists():
+        shutil.rmtree(destination_dir)
     destination_dir.mkdir(parents=True, exist_ok=True)
-    for source_file in source_dir.glob("*.py"):
-        if source_file.name == "__init__.py":
+    for source_path in source_dir.iterdir():
+        if source_path.name in {"__init__.py", "__pycache__"}:
             continue
-        shutil.copy2(source_file, destination_dir / source_file.name)
+        if source_path.suffix == ".pyc":
+            continue
+        target_path = destination_dir / source_path.name
+        if source_path.is_dir():
+            shutil.copytree(source_path, target_path, dirs_exist_ok=True)
+        else:
+            shutil.copy2(source_path, target_path)
 
 
 def _select_release_mode() -> str:

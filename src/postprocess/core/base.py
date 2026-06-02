@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from dependency_utils import find_missing_dependencies
 
@@ -13,19 +13,59 @@ def registerPostprocess(
     required_deps: list[str] | None = None,
     required_pipelines: list[str] | None = None,
 ):
-    def decorator(cls):
-        cls.name = name
-        cls.description = description or getattr(cls, "description", "")
-        cls.requires = required_deps or []
-        cls.required_pipelines = required_pipelines or []
+    def decorator(target):
+        requires = required_deps or []
+        pipelines = required_pipelines or []
+        missing = find_missing_dependencies(requires)
 
-        missing = find_missing_dependencies(cls.requires)
-        cls.missing_deps = missing
-        cls.available = len(missing) == 0
-        POSTPROCESS_REGISTRY[name] = cls
-        return cls
+        if isinstance(target, type):
+            target.name = name
+            target.description = description or getattr(target, "description", "")
+            target.requires = requires
+            target.required_pipelines = pipelines
+            target.missing_deps = missing
+            target.available = len(missing) == 0
+            POSTPROCESS_REGISTRY[name] = target
+            return target
+
+        postprocess_cls = _build_function_postprocess(
+            name=name,
+            description=description or getattr(target, "__doc__", "") or "",
+            func=target,
+            requires=requires,
+            missing_deps=missing,
+            required_pipelines=pipelines,
+        )
+        POSTPROCESS_REGISTRY[name] = postprocess_cls
+        return target
 
     return decorator
+
+
+def _build_function_postprocess(
+    *,
+    name: str,
+    description: str,
+    func: Callable[["PostprocessContext"], "PostprocessResult"],
+    requires: list[str],
+    missing_deps: list[str],
+    required_pipelines: list[str],
+) -> type["FunctionPostprocess"]:
+    class RegisteredFunctionPostprocess(FunctionPostprocess):
+        pass
+
+    RegisteredFunctionPostprocess.__name__ = "".join(
+        part.capitalize() for part in name.replace("_", " ").split()
+    ) or "FunctionPostprocess"
+    RegisteredFunctionPostprocess.name = name
+    RegisteredFunctionPostprocess.description = description
+    RegisteredFunctionPostprocess.func = staticmethod(func)
+    RegisteredFunctionPostprocess.requires = requires
+    RegisteredFunctionPostprocess.missing_deps = missing_deps
+    RegisteredFunctionPostprocess.available = len(missing_deps) == 0
+    RegisteredFunctionPostprocess.required_pipelines = required_pipelines
+    RegisteredFunctionPostprocess.missing_pipelines = []
+    return RegisteredFunctionPostprocess
 
 
 @dataclass
@@ -36,6 +76,7 @@ class PostprocessContext:
     input_path: Path
     zip_outputs: bool
     input_h5_paths: tuple[Path, ...] = ()
+    idle_callback: Callable[[], None] | None = None
 
 
 @dataclass
@@ -85,6 +126,13 @@ class BatchPostprocess:
 
     def run(self, context: PostprocessContext) -> PostprocessResult:
         raise NotImplementedError
+
+
+class FunctionPostprocess(BatchPostprocess):
+    func: Callable[[PostprocessContext], PostprocessResult]
+
+    def run(self, context: PostprocessContext) -> PostprocessResult:
+        return self.func(context)
 
 
 class MissingPostprocess(BatchPostprocess):
