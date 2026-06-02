@@ -8,13 +8,15 @@ from pipelines import PipelineDescriptor
 from postprocess import PostprocessDescriptor
 
 from .compat import BaseAppTk, sv_ttk
+from .controllers import (
+    PipelineLibraryController,
+    PostprocessLibraryController,
+    RunTabController,
+    WorkflowSelectionController,
+)
 from .drag_drop import DragDropMixin
-from .input_state import InputStateMixin
-from .pipeline_library import PipelineLibraryMixin
-from .postprocess_library import PostprocessLibraryMixin
 from .progress import ProgressMixin
 from .resources import ResourceMixin
-from .run import RunMixin
 from .services import UiServices
 from .settings import SettingsMixin
 from .views import ViewBuilderMixin
@@ -24,11 +26,7 @@ class ProcessApp(
     DragDropMixin,
     ResourceMixin,
     SettingsMixin,
-    InputStateMixin,
     ProgressMixin,
-    PipelineLibraryMixin,
-    PostprocessLibraryMixin,
-    RunMixin,
     BaseAppTk,
 ):
     _ADVANCED_FORM_LABEL_WIDTH = 74
@@ -79,19 +77,23 @@ class ProcessApp(
         self._persist_eyeflow_data = tk.BooleanVar(
             value=not self.settings_store.load_trim_h5source()
         )
+        self.run_controller = RunTabController(self)
+        self.workflow_selection_controller = WorkflowSelectionController(self)
+        self.pipeline_library_controller = PipelineLibraryController(self)
+        self.postprocess_library_controller = PostprocessLibraryController(self)
 
         self._set_initial_window_size()
         self._apply_theme()
         self._set_window_icon()
         self._build_ui()
         self._install_drop_targets()
-        self.batch_input_var.trace_add("write", self._on_batch_paths_changed)
-        self.batch_output_var.trace_add("write", self._on_batch_paths_changed)
+        self.batch_input_var.trace_add("write", self.run_controller.on_batch_paths_changed)
+        self.batch_output_var.trace_add("write", self.run_controller.on_batch_paths_changed)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
-        self._register_pipelines()
-        self._register_postprocesses()
+        self.pipeline_library_controller.register()
+        self.postprocess_library_controller.register()
         self._reset_batch_output()
-        self._update_minimal_path_labels()
+        self.run_controller.update_minimal_path_labels()
         self._apply_ui_mode(self.ui_mode, persist=False)
 
     def _set_initial_window_size(self) -> None:
