@@ -149,6 +149,45 @@ class PipelineEngineTests(unittest.TestCase):
 
             self.assertTrue(output_path.exists())
 
+    def test_run_pipeline_file_records_detailed_timing_labels(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            input_path = tmp_path / "sample.h5"
+            with h5py.File(input_path, "w"):
+                pass
+            timings: list[tuple[str, float]] = []
+
+            run_pipeline_file(
+                input_path,
+                [_PipelineDescriptor()],
+                tmp_path / "outputs",
+                record_timing=lambda label, seconds: timings.append(
+                    (label, seconds)
+                ),
+            )
+
+        labels = {label for label, _seconds in timings}
+        self.assertIn("per-file output path allocation", labels)
+        self.assertIn("per-file input HDF5 open for pipeline compute", labels)
+        self.assertIn("per-file input HDF5 close after pipeline compute", labels)
+        self.assertIn("per-pipeline instantiate [Demo]", labels)
+        self.assertIn("per-pipeline compute [Demo]", labels)
+        self.assertIn("per-pipeline callback/log/progress [Demo]", labels)
+        self.assertIn("per-file pipeline compute", labels)
+        self.assertIn("per-file output write", labels)
+        self.assertIn(
+            "per-file output write: create output HDF5 (source copy disabled)",
+            labels,
+        )
+        self.assertIn(
+            "per-file output write: convert process results to metric trees",
+            labels,
+        )
+        self.assertIn(
+            "per-file output write: write metric trees into HDF5",
+            labels,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

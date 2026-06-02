@@ -1,8 +1,17 @@
 from __future__ import annotations
 
+import functools
 import threading
-from collections.abc import Mapping
+import time
+from collections.abc import Callable, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field
+from typing import ParamSpec, TypeVar
+
+
+TimingCallback = Callable[[str, float], None]
+P = ParamSpec("P")
+R = TypeVar("R")
 
 
 @dataclass
@@ -24,3 +33,28 @@ class TimingRecorder:
 
 
 TimingSamples = TimingRecorder | Mapping[str, list[float]]
+
+
+@contextmanager
+def timed_section(record_timing: TimingCallback | None, label: str):
+    started_at = time.monotonic()
+    try:
+        yield
+    finally:
+        if record_timing is not None:
+            record_timing(label, time.monotonic() - started_at)
+
+
+def timed_call(
+    label: str,
+    record_timing: TimingCallback | None,
+) -> Callable[[Callable[P, R]], Callable[P, R]]:
+    def _decorator(func: Callable[P, R]) -> Callable[P, R]:
+        @functools.wraps(func)
+        def _wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+            with timed_section(record_timing, label):
+                return func(*args, **kwargs)
+
+        return _wrapper
+
+    return _decorator

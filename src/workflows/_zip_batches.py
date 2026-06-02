@@ -115,19 +115,43 @@ def iter_extracted_zip_batches(
             },
             daemon=True,
         )
+        producer_start_started_at = time.monotonic()
         producer.start()
+        if timings is not None:
+            timings.add(
+                "source ZIP extraction consumer: start producer thread",
+                time.monotonic() - producer_start_started_at,
+            )
         try:
             while True:
+                queue_wait_started_at = time.monotonic()
                 extracted_batch = batch_queue.get()
+                if timings is not None:
+                    timings.add(
+                        "source ZIP extraction consumer: wait for next extracted batch",
+                        time.monotonic() - queue_wait_started_at,
+                    )
                 if extracted_batch is None:
                     break
                 try:
                     yield extracted_batch
                 finally:
+                    cleanup_started_at = time.monotonic()
                     shutil.rmtree(extracted_batch.root, ignore_errors=True)
+                    if timings is not None:
+                        timings.add(
+                            "source ZIP extraction consumer: delete temp extracted batch",
+                            time.monotonic() - cleanup_started_at,
+                        )
         finally:
             stop_event.set()
+            join_started_at = time.monotonic()
             producer.join()
+            if timings is not None:
+                timings.add(
+                    "source ZIP extraction consumer: join producer thread",
+                    time.monotonic() - join_started_at,
+                )
 
 
 def _produce_extracted_zip_batches(
@@ -142,7 +166,13 @@ def _produce_extracted_zip_batches(
     timings: TimingRecorder | None,
 ) -> None:
     try:
+        archive_open_started_at = time.monotonic()
         with zipfile.ZipFile(zip_path, "r") as archive:
+            if timings is not None:
+                timings.add(
+                    "source ZIP extraction producer: open source ZIP archive",
+                    time.monotonic() - archive_open_started_at,
+                )
             for batch_idx, member_batch in iter_h5_member_batches(members, batch_size):
                 if stop_event.is_set():
                     break
@@ -153,12 +183,14 @@ def _produce_extracted_zip_batches(
                     archive=archive,
                     members=member_batch,
                     output_root=batch_root,
+                    timings=timings,
                 )
                 if timings is not None:
                     timings.add(
                         "source ZIP extraction batch",
                         time.monotonic() - extraction_started_at,
                     )
+                queue_handoff_started_at = time.monotonic()
                 if not _put_batch(
                     batch_queue,
                     ExtractedZipBatch(
@@ -172,7 +204,13 @@ def _produce_extracted_zip_batches(
                     stop_event,
                 ):
                     break
+                if timings is not None:
+                    timings.add(
+                        "source ZIP extraction producer: queue extracted batch handoff",
+                        time.monotonic() - queue_handoff_started_at,
+                    )
     except Exception as exc:  # noqa: BLE001
+        failure_handoff_started_at = time.monotonic()
         _put_batch(
             batch_queue,
             ExtractedZipBatch(
@@ -185,8 +223,19 @@ def _produce_extracted_zip_batches(
             ),
             stop_event,
         )
+        if timings is not None:
+            timings.add(
+                "source ZIP extraction producer: queue extraction failure handoff",
+                time.monotonic() - failure_handoff_started_at,
+            )
     finally:
+        sentinel_started_at = time.monotonic()
         _put_batch(batch_queue, None, stop_event)
+        if timings is not None:
+            timings.add(
+                "source ZIP extraction producer: queue completion sentinel",
+                time.monotonic() - sentinel_started_at,
+            )
 
 
 def _put_batch(
@@ -208,12 +257,20 @@ def _extract_zip_batch(
     archive: zipfile.ZipFile,
     members: list[ZipH5Member],
     output_root: Path,
+    timings: TimingRecorder | None,
 ) -> tuple[list[Path], Exception | None]:
     try:
-        h5_paths = [
-            _extract_h5_member_from_open_archive(archive, member, output_root)
-            for member in members
-        ]
+        h5_paths = []
+        for member in members:
+            member_started_at = time.monotonic()
+            h5_paths.append(
+                _extract_h5_member_from_open_archive(archive, member, output_root)
+            )
+            if timings is not None:
+                timings.add(
+                    "source ZIP extraction: copy one HDF5 member to temp file",
+                    time.monotonic() - member_started_at,
+                )
     except Exception as exc:  # noqa: BLE001
         return [], exc
     return h5_paths, None
