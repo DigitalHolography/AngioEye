@@ -4,6 +4,8 @@ import sys
 import tkinter as tk
 from pathlib import Path
 
+from postprocess import format_required_pipeline_options
+
 from ..services import services_for
 from .base import ViewController
 
@@ -45,9 +47,9 @@ class LibraryController(ViewController):
         description = getattr(descriptor, "description", "")
         if description:
             parts.append(description)
-        required_pipelines = getattr(descriptor, "required_pipelines", [])
+        required_pipelines = format_required_pipeline_options(descriptor)
         if required_pipelines:
-            parts.append(f"Requires pipelines: {', '.join(required_pipelines)}")
+            parts.append(f"Requires pipelines: {required_pipelines}")
         missing_pipelines = getattr(descriptor, "missing_pipelines", [])
         if missing_pipelines:
             parts.append(

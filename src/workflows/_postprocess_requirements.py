@@ -27,25 +27,44 @@ def has_pipeline_outputs(h5_path: Path, pipeline_names: Sequence[str]) -> bool:
     return all(has_pipeline_output(h5_path, name) for name in pipeline_names)
 
 
+def has_pipeline_output_option(
+    h5_path: Path,
+    pipeline_options: Sequence[Sequence[str]],
+) -> bool:
+    return any(has_pipeline_outputs(h5_path, option) for option in pipeline_options)
+
+
 def compatible_postprocess_files(
     *,
     processed_outputs: Sequence[Path],
     input_h5_paths: Sequence[Path],
     required_pipelines: Sequence[str],
+    required_pipeline_options: Sequence[Sequence[str]] = (),
+    selected_pipeline_names: Sequence[str] = (),
 ) -> CompatiblePostprocessFiles:
-    if not required_pipelines:
+    pipeline_options = _pipeline_options(
+        required_pipelines=required_pipelines,
+        required_pipeline_options=required_pipeline_options,
+    )
+    if not pipeline_options:
         return CompatiblePostprocessFiles(tuple(processed_outputs or input_h5_paths))
+
+    selected = set(selected_pipeline_names)
+    if processed_outputs and any(
+        set(option).issubset(selected) for option in pipeline_options
+    ):
+        return CompatiblePostprocessFiles(tuple(processed_outputs))
 
     compatible: list[Path] = []
     skipped: list[Path] = []
     for output_path, input_path in _paired_paths(processed_outputs, input_h5_paths):
-        if output_path is not None and has_pipeline_outputs(
-            output_path, required_pipelines
+        if output_path is not None and has_pipeline_output_option(
+            output_path, pipeline_options
         ):
             compatible.append(output_path)
             continue
-        if input_path is not None and has_pipeline_outputs(
-            input_path, required_pipelines
+        if input_path is not None and has_pipeline_output_option(
+            input_path, pipeline_options
         ):
             compatible.append(input_path)
             continue
@@ -68,20 +87,49 @@ def missing_required_pipeline_errors(
     errors: list[str] = []
 
     for postprocess in postprocesses:
-        required = tuple(getattr(postprocess, "required_pipelines", ()))
-        if not required or set(required).issubset(selected):
+        pipeline_options = _pipeline_options_for(postprocess)
+        if not pipeline_options or any(
+            set(option).issubset(selected) for option in pipeline_options
+        ):
             continue
         if not reusable_h5_paths and defer_when_no_reusable_paths:
             continue
         if reusable_h5_paths and any(
-            has_pipeline_outputs(path, required) for path in reusable_h5_paths
+            has_pipeline_output_option(path, pipeline_options)
+            for path in reusable_h5_paths
         ):
             continue
         errors.append(
-            f"{postprocess.name} requires pipeline data: {', '.join(required)}"
+            f"{postprocess.name} requires pipeline data: "
+            f"{_format_pipeline_options(pipeline_options)}"
         )
 
     return errors
+
+
+def _pipeline_options(
+    *,
+    required_pipelines: Sequence[str],
+    required_pipeline_options: Sequence[Sequence[str]],
+) -> tuple[tuple[str, ...], ...]:
+    if required_pipeline_options:
+        return tuple(tuple(option) for option in required_pipeline_options if option)
+    required = tuple(required_pipelines)
+    return (required,) if required else ()
+
+
+def _pipeline_options_for(obj: object) -> tuple[tuple[str, ...], ...]:
+    options = getattr(obj, "required_pipeline_options", None)
+    if options:
+        return tuple(tuple(option) for option in options if option)
+    required = tuple(getattr(obj, "required_pipelines", ()))
+    return (required,) if required else ()
+
+
+def _format_pipeline_options(
+    pipeline_options: Sequence[Sequence[str]],
+) -> str:
+    return " or ".join(" + ".join(option) for option in pipeline_options)
 
 
 def _paired_paths(

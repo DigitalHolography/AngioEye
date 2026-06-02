@@ -27,6 +27,81 @@ from workflows._pipeline_runs import (  # noqa: E402
     run_filesystem_pipeline_run,
     run_zip_pipeline_run,
 )
+from workflows._postprocess_requirements import (  # noqa: E402
+    compatible_postprocess_files,
+    missing_required_pipeline_errors,
+)
+
+
+class PostprocessRequirementTests(unittest.TestCase):
+    def test_selected_required_pipeline_keeps_processed_outputs(self):
+        processed_output = Path("new_result.h5")
+        input_h5 = Path("input.h5")
+
+        result = compatible_postprocess_files(
+            processed_outputs=(processed_output,),
+            input_h5_paths=(input_h5,),
+            required_pipelines=("waveform_shape_metrics",),
+            selected_pipeline_names=("waveform_shape_metrics",),
+        )
+
+        self.assertEqual((processed_output,), result.files)
+        self.assertEqual((), result.skipped)
+
+    def test_unselected_required_pipeline_still_skips_incompatible_files(self):
+        processed_output = Path("new_result.h5")
+        input_h5 = Path("input.h5")
+
+        result = compatible_postprocess_files(
+            processed_outputs=(processed_output,),
+            input_h5_paths=(input_h5,),
+            required_pipelines=("waveform_shape_metrics",),
+            selected_pipeline_names=(),
+        )
+
+        self.assertEqual((), result.files)
+        self.assertEqual((input_h5,), result.skipped)
+
+    def test_selected_alternative_required_pipeline_keeps_processed_outputs(self):
+        processed_output = Path("new_result.h5")
+        input_h5 = Path("input.h5")
+
+        result = compatible_postprocess_files(
+            processed_outputs=(processed_output,),
+            input_h5_paths=(input_h5,),
+            required_pipelines=(
+                "waveform_shape_metrics",
+                "waveform_shape_metrics_denoised",
+            ),
+            required_pipeline_options=(
+                ("waveform_shape_metrics",),
+                ("waveform_shape_metrics_denoised",),
+            ),
+            selected_pipeline_names=("waveform_shape_metrics",),
+        )
+
+        self.assertEqual((processed_output,), result.files)
+        self.assertEqual((), result.skipped)
+
+    def test_alternative_required_pipeline_errors_accept_either_selection(self):
+        postprocess = type(
+            "Postprocess",
+            (),
+            {
+                "name": "Variability",
+                "required_pipeline_options": (
+                    ("waveform_shape_metrics",),
+                    ("waveform_shape_metrics_denoised",),
+                ),
+            },
+        )()
+
+        errors = missing_required_pipeline_errors(
+            postprocesses=(postprocess,),
+            selected_pipeline_names=("waveform_shape_metrics",),
+        )
+
+        self.assertEqual([], errors)
 
 
 class FilesystemWorkflowTests(unittest.TestCase):

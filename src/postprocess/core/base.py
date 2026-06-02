@@ -12,10 +12,15 @@ def registerPostprocess(
     description: str = "",
     required_deps: list[str] | None = None,
     required_pipelines: list[str] | None = None,
+    required_pipeline_options: list[list[str]] | None = None,
 ):
     def decorator(target):
         requires = required_deps or []
-        pipelines = required_pipelines or []
+        pipeline_options = normalize_required_pipeline_options(
+            required_pipelines=required_pipelines,
+            required_pipeline_options=required_pipeline_options,
+        )
+        pipelines = flatten_required_pipeline_options(pipeline_options)
         missing = find_missing_dependencies(requires)
 
         if isinstance(target, type):
@@ -23,6 +28,7 @@ def registerPostprocess(
             target.description = description or getattr(target, "description", "")
             target.requires = requires
             target.required_pipelines = pipelines
+            target.required_pipeline_options = pipeline_options
             target.missing_deps = missing
             target.available = len(missing) == 0
             POSTPROCESS_REGISTRY[name] = target
@@ -35,11 +41,54 @@ def registerPostprocess(
             requires=requires,
             missing_deps=missing,
             required_pipelines=pipelines,
+            required_pipeline_options=pipeline_options,
         )
         POSTPROCESS_REGISTRY[name] = postprocess_cls
         return target
 
     return decorator
+
+
+def normalize_required_pipeline_options(
+    *,
+    required_pipelines: list[str] | None = None,
+    required_pipeline_options: list[list[str]] | None = None,
+) -> list[list[str]]:
+    if required_pipeline_options is not None:
+        return [
+            list(dict.fromkeys(option))
+            for option in required_pipeline_options
+            if option
+        ]
+    if required_pipelines:
+        return [list(dict.fromkeys(required_pipelines))]
+    return []
+
+
+def flatten_required_pipeline_options(
+    required_pipeline_options: list[list[str]],
+) -> list[str]:
+    flattened: list[str] = []
+    for option in required_pipeline_options:
+        for pipeline_name in option:
+            if pipeline_name not in flattened:
+                flattened.append(pipeline_name)
+    return flattened
+
+
+def required_pipeline_options_for(obj: object) -> tuple[tuple[str, ...], ...]:
+    options = getattr(obj, "required_pipeline_options", None)
+    if options:
+        return tuple(tuple(option) for option in options if option)
+    required = tuple(getattr(obj, "required_pipelines", ()))
+    return (required,) if required else ()
+
+
+def format_required_pipeline_options(obj: object) -> str:
+    groups = []
+    for option in required_pipeline_options_for(obj):
+        groups.append(" + ".join(option))
+    return " or ".join(groups)
 
 
 def _build_function_postprocess(
@@ -50,6 +99,7 @@ def _build_function_postprocess(
     requires: list[str],
     missing_deps: list[str],
     required_pipelines: list[str],
+    required_pipeline_options: list[list[str]],
 ) -> type["FunctionPostprocess"]:
     class RegisteredFunctionPostprocess(FunctionPostprocess):
         pass
@@ -64,6 +114,7 @@ def _build_function_postprocess(
     RegisteredFunctionPostprocess.missing_deps = missing_deps
     RegisteredFunctionPostprocess.available = len(missing_deps) == 0
     RegisteredFunctionPostprocess.required_pipelines = required_pipelines
+    RegisteredFunctionPostprocess.required_pipeline_options = required_pipeline_options
     RegisteredFunctionPostprocess.missing_pipelines = []
     return RegisteredFunctionPostprocess
 
@@ -94,6 +145,7 @@ class PostprocessDescriptor:
     requires: list[str] = field(default_factory=list)
     missing_deps: list[str] = field(default_factory=list)
     required_pipelines: list[str] = field(default_factory=list)
+    required_pipeline_options: list[list[str]] = field(default_factory=list)
     missing_pipelines: list[str] = field(default_factory=list)
     postprocess_cls: type["BatchPostprocess"] | None = None
     error_msg: str = ""
@@ -105,6 +157,7 @@ class PostprocessDescriptor:
                 description=self.error_msg or self.description,
                 missing_deps=self.missing_deps,
                 required_pipelines=self.required_pipelines,
+                required_pipeline_options=self.required_pipeline_options,
                 missing_pipelines=self.missing_pipelines,
             )
         return self.postprocess_cls()
@@ -117,6 +170,7 @@ class BatchPostprocess:
     missing_deps: list[str]
     requires: list[str]
     required_pipelines: list[str]
+    required_pipeline_options: list[list[str]]
     missing_pipelines: list[str]
 
     def __init__(self) -> None:
@@ -144,6 +198,7 @@ class MissingPostprocess(BatchPostprocess):
         description: str,
         missing_deps: list[str],
         required_pipelines: list[str],
+        required_pipeline_options: list[list[str]],
         missing_pipelines: list[str],
     ) -> None:
         self.name = name
@@ -151,6 +206,7 @@ class MissingPostprocess(BatchPostprocess):
         self.missing_deps = missing_deps
         self.requires = missing_deps
         self.required_pipelines = required_pipelines
+        self.required_pipeline_options = required_pipeline_options
         self.missing_pipelines = missing_pipelines
 
     def run(self, context: PostprocessContext) -> PostprocessResult:
@@ -163,7 +219,8 @@ class MissingPostprocess(BatchPostprocess):
             )
         if not parts and self.required_pipelines:
             parts.append(
-                f"required pipelines not selected: {', '.join(self.required_pipelines)}"
+                "required pipelines not selected: "
+                f"{format_required_pipeline_options(self)}"
             )
         reason = "; ".join(parts) if parts else "unknown reason"
         raise RuntimeError(f"Postprocess '{self.name}' unavailable ({reason}).")

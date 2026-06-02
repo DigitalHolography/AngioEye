@@ -179,7 +179,9 @@ def _dispatch_holo_postprocess_workflow(
             log=callbacks.log,
             advance_progress=callbacks.advance_progress,
             idle_callback=callbacks.idle_callback,
-            resolve_postprocess_files=_resolve_postprocess_files,
+            resolve_postprocess_files=_postprocess_file_resolver(
+                request.selected_pipeline_names
+            ),
         )
 
     summary = (
@@ -404,17 +406,42 @@ def _postprocess_runner(
             log=callbacks.log,
             advance_progress=callbacks.advance_progress,
             idle_callback=callbacks.idle_callback,
-            resolve_postprocess_files=_resolve_postprocess_files,
+            resolve_postprocess_files=_postprocess_file_resolver(
+                selected_pipeline_names
+            ),
         )
 
     return _run_postprocesses
 
 
-def _resolve_postprocess_files(descriptor, processed_outputs, input_h5_paths):
+def _postprocess_file_resolver(selected_pipeline_names):
+    return lambda descriptor, processed_outputs, input_h5_paths: (
+        _resolve_postprocess_files(
+            descriptor,
+            processed_outputs,
+            input_h5_paths,
+            selected_pipeline_names=selected_pipeline_names,
+        )
+    )
+
+
+def _resolve_postprocess_files(
+    descriptor,
+    processed_outputs,
+    input_h5_paths,
+    *,
+    selected_pipeline_names=(),
+):
     result = compatible_postprocess_files(
         processed_outputs=processed_outputs,
         input_h5_paths=input_h5_paths,
         required_pipelines=getattr(descriptor, "required_pipelines", ()),
+        required_pipeline_options=getattr(
+            descriptor,
+            "required_pipeline_options",
+            (),
+        ),
+        selected_pipeline_names=selected_pipeline_names,
     )
     return result.files, result.skipped
 

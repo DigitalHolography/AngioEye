@@ -4,7 +4,11 @@ import tkinter as tk
 from tkinter import ttk
 
 from app_settings import normalize_postprocess_visibility
-from postprocess import PostprocessDescriptor, load_postprocess_catalog
+from postprocess import (
+    PostprocessDescriptor,
+    format_required_pipeline_options,
+    load_postprocess_catalog,
+)
 
 from ..widgets import _Tooltip
 from .library import LibraryController
@@ -109,8 +113,9 @@ class PostprocessLibraryController(LibraryController):
             if postprocess.missing_deps:
                 return f"Missing deps: {', '.join(postprocess.missing_deps)}"
             return "Unavailable"
-        if postprocess.required_pipelines:
-            return f"Requires: {', '.join(postprocess.required_pipelines)}"
+        required_pipelines = format_required_pipeline_options(postprocess)
+        if required_pipelines:
+            return f"Requires: {required_pipelines}"
         return "Available"
 
     def populate(self, rows: list[PostprocessDescriptor]) -> None:
