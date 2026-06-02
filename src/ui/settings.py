@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import messagebox
+from .services import services_for
 
 class SettingsMixin:
     def _ensure_default_settings(self) -> None:
@@ -15,7 +15,7 @@ class SettingsMixin:
         if self._settings_warning_shown:
             return
         self._settings_warning_shown = True
-        messagebox.showwarning(title, details)
+        services_for(self).dialogs.showwarning(title, details)
 
     def _persist_ui_mode(self) -> None:
         try:

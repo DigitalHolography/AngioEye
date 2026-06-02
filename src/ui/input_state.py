@@ -1,7 +1,6 @@
 import os
 from collections.abc import Sequence
 from pathlib import Path
-from tkinter import filedialog, messagebox
 
 from input_output import is_hdf5_path
 from workflows import HoloInputContext
@@ -12,6 +11,7 @@ from workflows import output_dir as holo_output_dir
 from workflows import output_filename as holo_output_filename
 from workflows import reset_output_dir as reset_holo_output_dir
 from workflows import resolve_context as resolve_holo_context
+from .services import services_for
 
 class InputStateMixin:
     def _on_batch_paths_changed(self, *_args) -> None:
@@ -156,7 +156,7 @@ class InputStateMixin:
         self._set_minimal_status("Ready.")
 
     def choose_batch_folder(self) -> None:
-        path = filedialog.askdirectory(
+        path = services_for(self).file_dialogs.askdirectory(
             initialdir=self.batch_input_var.get() or None,
             title="Select folder containing HDF5 files",
         )
@@ -165,7 +165,7 @@ class InputStateMixin:
             self._apply_input_defaults(Path(path))
 
     def choose_batch_file(self) -> None:
-        selected_paths = filedialog.askopenfilenames(
+        selected_paths = services_for(self).file_dialogs.askopenfilenames(
             filetypes=[
                 ("AngioEye inputs", "*.h5 *.hdf5 *.holo *.zip"),
                 ("HDF5 files", "*.h5 *.hdf5"),
@@ -185,7 +185,7 @@ class InputStateMixin:
                 self._apply_batch_input_files(input_paths)
                 return
             if len(input_paths) != 1:
-                messagebox.showwarning(
+                services_for(self).dialogs.showwarning(
                     "Unsupported selection",
                     "Select multiple .holo files, multiple HDF5 files, "
                     "or one .h5, .hdf5, or .zip file.",
@@ -253,7 +253,7 @@ class InputStateMixin:
         return list(getattr(self, "batch_input_paths", []))
 
     def choose_batch_output(self) -> None:
-        path = filedialog.askdirectory(
+        path = services_for(self).file_dialogs.askdirectory(
             initialdir=self.batch_output_var.get() or None,
             title="Select base output folder",
         )

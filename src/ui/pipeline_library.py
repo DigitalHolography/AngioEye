@@ -1,13 +1,12 @@
-import os
-import subprocess
 import sys
 import tkinter as tk
 from pathlib import Path
-from tkinter import messagebox, ttk
+from tkinter import ttk
 
 from app_settings import normalize_pipeline_visibility
 from pipelines import PipelineDescriptor, load_pipeline_catalog
 
+from .services import services_for
 from .widgets import _Tooltip
 
 class PipelineLibraryMixin:
@@ -289,17 +288,18 @@ class PipelineLibraryMixin:
 
     def _open_folder(self, folder: Path | None, label: str) -> None:
         if folder is None or not folder.is_dir():
-            messagebox.showerror(label, f"Could not find the {label.lower()}.")
+            services_for(self).dialogs.showerror(
+                label,
+                f"Could not find the {label.lower()}.",
+            )
             return
         try:
-            if sys.platform.startswith("win"):
-                os.startfile(str(folder))  # type: ignore[attr-defined]
-            elif sys.platform == "darwin":
-                subprocess.run(["open", str(folder)], check=False)
-            else:
-                subprocess.run(["xdg-open", str(folder)], check=False)
+            services_for(self).folder_opener.open_folder(folder)
         except Exception as exc:  # noqa: BLE001
-            messagebox.showerror(label, f"Could not open folder:\n{folder}\n\n{exc}")
+            services_for(self).dialogs.showerror(
+                label,
+                f"Could not open folder:\n{folder}\n\n{exc}",
+            )
 
     def open_pipeline_folder(self) -> None:
         self._open_folder(self._package_folder("pipelines"), "Pipeline folder")
