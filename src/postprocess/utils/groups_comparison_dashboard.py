@@ -23,7 +23,7 @@ from ..core.grouped_batch import (
 )
 
 WAVEFORM_SHAPE_METRICS_PIPELINE = "waveform_shape_metrics"
-VALID_METRIC_FOLDERS = ["raw", "bandlimited"]
+VALID_MODE = ["raw", "bandlimited"]
 VALID_VESSELS = ["artery", "vein"]
 PIPELINE_BASE_CANDIDATES_WINDKESSEL = pipeline_path_candidates(
     "Windkessel_RC", "bandlimited"
@@ -97,7 +97,7 @@ def extract_windkessel_rows_from_h5(h5_path, group_name):
     return rows
 
 
-SELECTED_METRICS_PNG = {
+SELECTED_METRICS = {
     "mu_t_over_T",
     "RI",
     "PI",
@@ -127,18 +127,16 @@ SELECTED_METRICS_PNG = {
     "t50_over_T",
     "eta_h",
 }
-METRIC_ALIASES = {
-    "Hspec": "spectral_entropy",
-}
+
 EPS = 1e-12
 LATEX_FORMULAS = {
     "RI": r"$\rm RI$",
     "CF": r"$\rm CF$",
     "t50_over_T": r"$t_{50}/T$",
-    "R_VTI": r"$R_{VTI}$",    
+    "R_VTI": r"$R_{\mathrm{VTI}}$",    
     "mu_t_over_T": r"$\mu_t/T$",
     "PI": r"$\rm PI$",
-    "SF_VTI": r"$SF_{VTI}$",
+    "SF_VTI": r"$SF_{\mathrm{VTI}}$",
     "sigma_t_over_T": r"$\sigma_t/T$",    
     "t_max_over_T": r"$t_{\mathrm{max}}/T$",
     "t_min_over_T": r"$t_{\mathrm{min}}/T$",   
@@ -154,7 +152,7 @@ LATEX_FORMULAS = {
     "Q_t_width": r"$Q_{\mathrm{t,width}}$",
     "Q_d_skew": r"$Q_{\mathrm{d,skew}}$",
     "Q_d_width": r"$Q_{\mathrm{d,width}}$",
-    "v_end_over_vbar": r"$v_{\mathrm{end}}/\bar{\mathrm{v}}$",
+    "v_end_over_vbar": r"$\bar{\mathrm{v}}_{\mathrm{end}}/\bar{\mathrm{v}}$",
     "E_slope": r"$E_{\mathrm{slope}}$",   
     "W50_over_T": r"$W_{50}/T$",
     "W80_over_T": r"$W_{80}/T$",
@@ -164,23 +162,35 @@ LATEX_FORMULAS = {
 
 
 def extract_graphics_support(h5_path, vessel="artery", mode="bandlimited"):
-    base_candidates = get_mode_path_candidates(vessel, mode)
+
+    if mode == "all":
+        modes_to_load = VALID_MODE
+    else:
+        modes_to_load = [mode]
+
     out = {}
 
     with h5py.File(h5_path, "r") as f:
-        base = find_first_existing_path(f, base_candidates)
-        if base is None:
-            return None
-        if base not in f:
-            return None
 
-        grp = f[base]
-        for key in grp.keys():
-            arr = np.array(grp[key])
+        for current_mode in modes_to_load:
 
-            out[key] = arr.item() if arr.shape == () else arr
+            base_candidates = get_mode_path_candidates(vessel, current_mode)
+            base = find_first_existing_path(f, base_candidates)
+
+            if base is None or base not in f:
+                continue
+
+            grp = f[base]
+
+            mode_dict = {}
+
+            for key in grp.keys():
+                arr = np.array(grp[key])
+                mode_dict[key] = arr.item() if arr.shape == () else arr
+
+            out[current_mode] = mode_dict
+
     return out
-
 
 def analyze_zip_windkessel(zip_path):
     rows = []
@@ -236,16 +246,16 @@ def plot_windkessel_metric_for_method(df, metric, method, out_path):
             zorder=2,
         )
 
-    stats = sub.groupby("group")["value"].agg(["mean", "std"]).reset_index()
+    stats = sub.groupby("group")["value"].agg(["median", "std"]).reset_index()
 
     for _, row in stats.iterrows():
         group = row["group"]
-        mean_val = row["mean"]
+        median_val = row["median"]
         std_val = row["std"] if np.isfinite(row["std"]) else 0.0
 
         ax.errorbar(
             x_pos[group],
-            mean_val,
+            median_val,
             yerr=std_val,
             fmt=METHOD_MARKERS_WINDKESSEL[method],
             color="black",
@@ -295,7 +305,6 @@ def export_windkessel_figures(zip_path, out_dir, format="png"):
                 out_path,
             )
 
-    # CSV uniquement une fois (png par exemple)
     if format == "png":
         csv_path = os.path.join(out_dir, "windkessel_values.csv")
         df.to_csv(csv_path, index=False)
@@ -528,13 +537,16 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
         t50 = float(support["t50_over_T"])
         t90 = float(support["t90_over_T"])
 
+        ax.plot([0, 1], [0, 1], "--", color="grey", linewidth=2)
+
         ax.plot(tau, C, linewidth=3, color=main_color)
         for tq in [t10, t50, t90]:
             yq = _y_at(tq, tau, C)
             if np.isfinite(yq):
                 ax.vlines(tq, 0.0, yq, linestyles="--", linewidth=1, color="#000000")
                 ax.hlines(yq, 0.0, tq, linestyles="--", linewidth=1, color="#000000")
-
+        
+    
         info_box(
             [
                 rf"$t_{{10}}/T = {t10:.3f}, t_{{50}}/T = {t50:.3f}$",
@@ -856,14 +868,14 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
         ax.text(
             0,
             vend,
-            rf" $\overline{{Vend}}={vend:.3g}$",
+            rf" $\overline{{v}}_{{end}}={vend:.3g}$",
             transform=ax.get_yaxis_transform(),
             ha="left",
             va="bottom",
             fontsize=12,
             bbox=dict(facecolor="white", edgecolor="none"),
         )
-        info_box([rf"$v_{{end}}/\bar{{v}}={ratio:.3f}$"])
+        info_box([rf"$\bar{{v}}_{{end}}/\bar{{v}}={ratio:.3f}$"])
         ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v(t) \: (mm/s)$", fontsize=14, labelpad=12)
 
@@ -966,150 +978,168 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
         info_box(f"No illustration for {metric}")
 
 
-def export_selected_metric_pngs_bandlimited(
-    all_results, zip_path, out_dir, format="png", show_group_illustrations=True
+def export_selected_metric(
+    all_results, zip_path, out_dir, format="png", show_group_illustrations=True, vessel="artery", mode="bandlimited"
 ):
     os.makedirs(out_dir, exist_ok=True)
+
+    if mode == "all":
+        modes_to_process = VALID_MODE
+    else:
+        modes_to_process = [mode]
 
     with extracted_zip_tree(zip_path) as extracted_root:
         h5_index = build_grouped_h5_index(extracted_root)
 
-        for vessel in VALID_VESSELS:
-            if "bandlimited" not in all_results:
-                continue
-            if vessel not in all_results["bandlimited"]:
+        for current_mode in modes_to_process:
+
+            if current_mode not in all_results:
                 continue
 
-            for metric in sorted(SELECTED_METRICS_PNG):
-                metric_key = METRIC_ALIASES.get(metric, metric)
+            for vessel in VALID_VESSELS:
 
-                if metric_key not in all_results["bandlimited"][vessel]:
+                main_color = "#EC5241" if vessel == "artery" else "#414CEC"
+
+                if vessel not in all_results[current_mode]:
                     continue
 
-                df = pd.DataFrame(all_results["bandlimited"][vessel][metric_key]).copy()
-                if df.empty:
-                    continue
+                for metric in sorted(SELECTED_METRICS):
+                    metric_key = metric
 
-                groups = sorted(df["group"].dropna().unique().tolist())
-                control_name = find_control_group_name(groups)
-                if control_name in groups:
-                    groups = [g for g in groups if g != control_name] + [control_name]
+                    if metric_key not in all_results[current_mode][vessel]:
+                        continue
 
-                x_pos = {g: i for i, g in enumerate(groups)}
+                    df = pd.DataFrame(all_results[current_mode][vessel][metric_key]).copy()
+                    if df.empty:
+                        continue
 
-                grp = df.groupby("group")["mean"]
-                grp_mean = grp.mean()
-                grp_std = grp.std()
-                rep_file = select_representative_file_per_group(df, value_col="mean")
+                    groups = sorted(df["group"].dropna().unique().tolist())
+                    control_name = find_control_group_name(groups)
+                    if control_name in groups:
+                        groups = [g for g in groups if g != control_name] + [control_name]
 
-                if show_group_illustrations:
-                    fig = plt.figure(figsize=(15, 6.2), dpi=200)
-                else:
-                    fig = plt.figure(figsize=(8, 6.2), dpi=200)
+                    x_pos = {g: i for i, g in enumerate(groups)}
 
-                if show_group_illustrations:
-                    outer = gridspec.GridSpec(
-                        1,
-                        2,
-                        width_ratios=[0.7, 1.0],
-                        wspace=0.15,
-                    )
-                else:
-                    outer = gridspec.GridSpec(
-                        1,
-                        1,
-                    )
+                    grp = df.groupby("group")["median"]
+                    grp_mean = grp.mean()
+                    grp_std = grp.std()
+                    rep_file = select_representative_file_per_group(df, value_col="median")
 
-                fig.subplots_adjust(left=0.04, right=0.995, bottom=0.08, top=0.86)
+                    if show_group_illustrations:
+                        fig = plt.figure(figsize=(15, 6.2), dpi=200)
+                    else:
+                        fig = plt.figure(figsize=(8, 6.2), dpi=200)
 
-                ax_header = fig.add_axes([0.04, 0.88, 0.955, 0.11])
-                ax_header.axis("off")
+                    if show_group_illustrations:
+                        outer = gridspec.GridSpec(
+                            1,
+                            2,
+                            width_ratios=[0.7, 1.0],
+                            wspace=0.15,
+                        )
+                    else:
+                        outer = gridspec.GridSpec(
+                            1,
+                            1,
+                        )
 
-                # ===== Gauche: scatter =====
-                if show_group_illustrations:
-                    ax_top = fig.add_subplot(outer[0, 0])
-                else:
-                    ax_top = fig.add_subplot(outer[0])
+                    fig.subplots_adjust(left=0.04, right=0.995, bottom=0.08, top=0.86)
 
-                if control_name in x_pos:
-                    cx = x_pos[control_name]
-                    ax_top.axvspan(cx - 0.5, cx + 0.5, color="#E0E0E0")
+                    ax_header = fig.add_axes([0.04, 0.88, 0.955, 0.11])
+                    ax_header.axis("off")
 
-                rng = np.random.default_rng(0)
-                shapes = ["D", "o", "s", "^", "v", "P", "X"]
+                    # ===== Gauche: scatter =====
+                    if show_group_illustrations:
+                        ax_top = fig.add_subplot(outer[0, 0])
+                    else:
+                        ax_top = fig.add_subplot(outer[0])
 
-                for i, g in enumerate(groups):
-                    gdf = df[df["group"] == g]
-                    x = np.full(len(gdf), x_pos[g], dtype=float) + rng.normal(
-                        0, 0.06, size=len(gdf)
-                    )
+                    if control_name in x_pos:
+                        cx = x_pos[control_name]
+                        ax_top.axvspan(cx - 0.5, cx + 0.5, color="#E0E0E0")
 
-                    ax_top.scatter(
-                        x,
-                        gdf["mean"].values,
-                        color="black",
-                        s=20,
-                        edgecolors="none",
-                    )
+                    rng = np.random.default_rng(0)
+                    shapes = ["D", "o", "s", "^", "v", "P", "X"]
 
-                    if g in grp_mean.index:
-                        
-                        ax_top.errorbar(
-                            [x_pos[g]],
-                            [grp_mean.loc[g]],
+                    for i, g in enumerate(groups):
+                        gdf = df[df["group"] == g]
+                        x = np.full(len(gdf), x_pos[g], dtype=float) + rng.normal(
+                            0, 0.06, size=len(gdf)
+                        )
+
+                        ax_top.scatter(
+                            x,
+                            gdf["median"].values,
                             color="black",
-                            yerr=[grp_std.loc[g] if pd.notna(grp_std.loc[g]) else 0],
-                            fmt=shapes[i % len(shapes)],
-                            capsize=5,
-                            markersize=12,
-                            linewidth=1.2,
-                            markerfacecolor="none",
-                            markeredgecolor="red",
-                            markeredgewidth=3,
-                            )
-                        
+                            s=20,
+                            edgecolors="none",
+                        )
 
-                ax_top.set_title(
-                    f"{LATEX_FORMULAS.get(metric, metric)} (bandlimited waveform, {vessel})",
-                    fontsize=20,
-                    pad=20,
-                )
-                ax_top.set_xticks([x_pos[g] for g in groups])
-                ax_top.set_xticklabels(groups, rotation=0)
-                ax_top.tick_params(axis="both", labelsize=16)
-                ax_top.set_xlim(-0.5, len(groups) - 0.5)
-                ax_top.yaxis.set_major_formatter(FormatStrFormatter("%.3g"))
-                ax_top.grid(True, axis="y")
+                        if g in grp_mean.index:
+                            
+                            ax_top.errorbar(
+                                [x_pos[g]],
+                                [grp_mean.loc[g]],
+                                color="black",
+                                yerr=[grp_std.loc[g] if pd.notna(grp_std.loc[g]) else 0],
+                                fmt=shapes[i % len(shapes)],
+                                capsize=5,
+                                markersize=15,
+                                linewidth=1.2,
+                                markerfacecolor="none",
+                                markeredgecolor=main_color,
+                                markeredgewidth=3,
+                                )
+                            
 
-                # ===== Droite: illustrations =====
-                if show_group_illustrations:
-                    right = gridspec.GridSpecFromSubplotSpec(
-                        2,
-                        2,
-                        subplot_spec=outer[0, 1],
-                        hspace=0.5,
-                        wspace=0.28,
+                    ax_top.set_title(
+                        f"{LATEX_FORMULAS.get(metric, metric)} ({current_mode} waveform, {vessel})",
+                        fontsize=20,
+                        pad=20,
                     )
+                    ax_top.set_xticks([x_pos[g] for g in groups])
+                    ax_top.set_xticklabels(groups, rotation=0)
+                    ax_top.tick_params(axis="both", labelsize=16)
+                    ax_top.set_xlim(-0.5, len(groups) - 0.5)
+                    ax_top.yaxis.set_major_formatter(FormatStrFormatter("%.3g"))
+                    ax_top.grid(True, axis="y")
 
-                    for i, g in enumerate(groups[:4]):
-                        r = i // 2
-                        c = i % 2
-                        ax = fig.add_subplot(right[r, c])
+                    # ===== Droite: illustrations =====
+                    if show_group_illustrations:
+                        right = gridspec.GridSpecFromSubplotSpec(
+                            2,
+                            2,
+                            subplot_spec=outer[0, 1],
+                            hspace=0.5,
+                            wspace=0.28,
+                        )
 
-                        chosen = rep_file.get(g, None)
-                        path = h5_index.get(g, {}).get(chosen, None) if chosen else None
+                        for i, g in enumerate(groups[:4]):
+                            r = i // 2
+                            c = i % 2
+                            ax = fig.add_subplot(right[r, c])
 
-                        if metric == "D_phi":
+                            chosen = rep_file.get(g, None)
+                            path = h5_index.get(g, {}).get(chosen, None) if chosen else None
+
                             if path and os.path.exists(path):
                                 support = extract_graphics_support(
-                                    path, vessel=vessel, mode="bandlimited"
+                                    path,
+                                    vessel=vessel,
+                                    mode=current_mode,
                                 )
+
                                 if support:
-                                    support_beat = select_support_beat(support, 0)
+                                    support_mode = support[current_mode]
+                                    support_beat = select_support_beat(support_mode, 0)
+
                                     plot_metric_illustration(
                                         ax, metric, support_beat, path, vessel
                                     )
                                     ax.set_title(f"{g}", fontsize=14)
+
+                                    ymin, ymax = ax.get_ylim()
+                                    ax.set_ylim(np.minimum(0, ymin), ymax * 1.4)
                                 else:
                                     ax.text(
                                         0.5,
@@ -1129,59 +1159,23 @@ def export_selected_metric_pngs_bandlimited(
                                 )
                                 ax.axis("off")
 
-                        elif path and os.path.exists(path):
-                            support = extract_graphics_support(
-                                path,
-                                vessel=vessel,
-                                mode="bandlimited",
-                            )
+                        for j in range(len(groups[:4]), 4):
+                            r = j // 2
+                            c = j % 2
+                            ax_empty = fig.add_subplot(right[r, c])
+                            ax_empty.axis("off")
+                    if format == "png":
+                        png_path = os.path.join(
+                            out_dir, f"{metric}_{current_mode}_{vessel}.png"
+                        )
+                        fig.savefig(png_path, bbox_inches="tight")
+                    if format == "eps":
+                        eps_path = os.path.join(
+                            out_dir, f"{metric}_{current_mode}_{vessel}.eps"
+                        )
+                        fig.savefig(eps_path, bbox_inches="tight")
 
-                            if support:
-                                support_beat = select_support_beat(support, 0)
-
-                                plot_metric_illustration(
-                                    ax, metric, support_beat, path, vessel
-                                )
-                                ax.set_title(f"{g}", fontsize=14)
-
-                                ymin, ymax = ax.get_ylim()
-                                ax.set_ylim(np.minimum(0, ymin), ymax * 1.4)
-                            else:
-                                ax.text(
-                                    0.5,
-                                    0.5,
-                                    f"No support for {g} ({vessel})",
-                                    ha="center",
-                                    va="center",
-                                )
-                                ax.axis("off")
-                        else:
-                            ax.text(
-                                0.5,
-                                0.5,
-                                f"No representative file for {g}",
-                                ha="center",
-                                va="center",
-                            )
-                            ax.axis("off")
-
-                    for j in range(len(groups[:4]), 4):
-                        r = j // 2
-                        c = j % 2
-                        ax_empty = fig.add_subplot(right[r, c])
-                        ax_empty.axis("off")
-                if format == "png":
-                    png_path = os.path.join(
-                        out_dir, f"{metric}_bandlimited_{vessel}.png"
-                    )
-                    fig.savefig(png_path, bbox_inches="tight")
-                if format == "eps":
-                    eps_path = os.path.join(
-                        out_dir, f"{metric}_bandlimited_{vessel}.eps"
-                    )
-                    fig.savefig(eps_path, bbox_inches="tight")
-
-                plt.close(fig)
+                    plt.close(fig)
 
 
 def choose_zip():
@@ -1201,9 +1195,6 @@ def extract_group_metrics(group, results_dict, prefix=""):
 
         full_name = f"{prefix}/{metric_name}" if prefix else metric_name
 
-        # -----------------------------
-        # Cas 1 : sous dossier HDF5
-        # -----------------------------
         if isinstance(item, h5py.Group):
 
             extract_group_metrics(
@@ -1212,9 +1203,6 @@ def extract_group_metrics(group, results_dict, prefix=""):
                 prefix=full_name
             )
 
-        # -----------------------------
-        # Cas 2 : dataset
-        # -----------------------------
         elif isinstance(item, h5py.Dataset):
 
             try:
@@ -1223,7 +1211,7 @@ def extract_group_metrics(group, results_dict, prefix=""):
                 latex_formula = item.attrs.get("latex_formula", "")
 
                 results_dict[full_name] = {
-                    "mean": float(np.nanmedian(data)),
+                    "median": float(np.nanmedian(data)),
                     "std": float(np.nanstd(data)),
                     "latex_formula": latex_formula,
                 }
@@ -1233,15 +1221,6 @@ def extract_group_metrics(group, results_dict, prefix=""):
 
 
 def extract_metrics(h5_path):
-    """
-    Retourne:
-
-    results[mode][vessel][metric_name] = {
-        "mean": ...,
-        "std": ...,
-        "latex_formula": ...
-    }
-    """
 
     results = defaultdict(lambda: defaultdict(dict))
 
@@ -1261,7 +1240,7 @@ def extract_metrics(h5_path):
 
             for mode in metrics_root.keys():
 
-                if mode not in VALID_METRIC_FOLDERS:
+                if mode not in VALID_MODE:
                     continue
 
                 group = metrics_root[mode]
@@ -1274,7 +1253,7 @@ def extract_metrics(h5_path):
     return results
 
 
-def select_representative_file_per_group(df_metric: pd.DataFrame, value_col="mean"):
+def select_representative_file_per_group(df_metric: pd.DataFrame, value_col="median"):
     """
     Renvoie un dict: {group -> filename} du patient le plus proche de la mÃ©diane du groupe.
     df_metric doit contenir au moins: ["group", "file", value_col]
@@ -1307,7 +1286,7 @@ def analyze_zip(zip_path):
                         {
                             "file": grouped_file.file_name,
                             "group": grouped_file.group_name,
-                            "mean": values["mean"],
+                            "median": values["median"],
                             "std": values["std"],
                             "latex_formula": values.get("latex_formula", ""),
                             "vessel": vessel,
@@ -1337,12 +1316,13 @@ def save_dashboard(all_results, zip_path, single_group):
     )
 
     # --- Metrics illustrations ---
-    export_selected_metric_pngs_bandlimited(
+    export_selected_metric(
         all_results,
         zip_path,
         png_dir,
         "png",
         show_group_illustrations=True,
+        mode="bandlimited"
     )
 
     replace_folder_in_zip(zip_path, png_dir, arc_folder="export_png")
@@ -1350,12 +1330,13 @@ def save_dashboard(all_results, zip_path, single_group):
     # --- EPS ---
     if eps_supported:
         eps_supported = _run_optional_eps_export(
-            lambda: export_selected_metric_pngs_bandlimited(
+            lambda: export_selected_metric(
                 all_results,
                 zip_path,
                 eps_dir,
                 "eps",
                 show_group_illustrations=True,
+                mode="bandlimited"
             ),
             eps_dir,
         )

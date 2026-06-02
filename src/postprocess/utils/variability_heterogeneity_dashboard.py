@@ -1,4 +1,4 @@
-﻿import re
+import re
 import shutil
 from collections import defaultdict
 from pathlib import Path
@@ -80,30 +80,31 @@ METRIC_LABELS = {
     "RI": r"$\rm RI$",
     "CF": r"$\rm CF$",
     "t50_over_T": r"$t_{50}/T$",
-    "R_VTI": r"$R_{VTI}$",
+    "R_VTI": r"$R_{\mathrm{VTI}}$",    
     "mu_t_over_T": r"$\mu_t/T$",
     "PI": r"$\rm PI$",
-    "SF_VTI": r"$SF_{VTI}$",
-    "sigma_t_over_T": r"$\sigma_t/T$",
+    "SF_VTI": r"$SF_{\mathrm{VTI}}$",
+    "sigma_t_over_T": r"$\sigma_t/T$",    
     "t_max_over_T": r"$t_{\mathrm{max}}/T$",
-    "t_min_over_T": r"$t_{\mathrm{min}}/T$",
+    "t_min_over_T": r"$t_{\mathrm{min}}/T$",   
     "t_rise_over_T": r"$t_{\mathrm{rise}}/T$",
-    "t_fall_over_T": r"$t_{\mathrm{fall}}/T$",
+    "t_fall_over_T": r"$t_{\mathrm{fall}}/T$",    
     "Delta_DTI": r"$\Delta_{\mathrm{DTI}}$",
     "E_LF_over_E_HF": r"$E_{\mathrm{LF}}/E_{\mathrm{HF}}$",
     "S_fall": r"$S_{\mathrm{fall}}$",
     "S_rise": r"$S_{\mathrm{rise}}$",
-    "gamma_t": r"$\gamma_t$",
-    "N_eff_over_T": r"$N_{\mathrm{eff}}/T$",
+    "gamma_t": r"$\gamma_t$",    
+    "N_eff_over_T": r"$N_{\mathrm{eff}}/T$",    
     "Q_t_skew": r"$Q_{\mathrm{t,skew}}$",
     "Q_t_width": r"$Q_{\mathrm{t,width}}$",
     "Q_d_skew": r"$Q_{\mathrm{d,skew}}$",
     "Q_d_width": r"$Q_{\mathrm{d,width}}$",
-    "v_end_over_vbar": r"$v_{\mathrm{end}}/\bar{\mathrm{v}}$",
-    "E_slope": r"$E_{\mathrm{slope}}$",
+    "v_end_over_vbar": r"$\bar{\mathrm{v}}_{\mathrm{end}}/\bar{\mathrm{v}}$",
+    "E_slope": r"$E_{\mathrm{slope}}$",   
     "W50_over_T": r"$W_{50}/T$",
     "W80_over_T": r"$W_{80}/T$",
-    "N_t_over_T": r"$N_t/T$",
+    "N_t_over_T": r"$N_t/T$",    
+    "eta_h": r"$\eta_h$",
 }
 
 
@@ -1965,7 +1966,7 @@ def export_group_tables_from_results(
         df = build_variability_ranking_table(
             control_results,
             group_results,
-            higher_metrics=SPATIAL_VARIABILITY_COLUMNS,
+            higher_metrics=TEMPORAL_VARIABILITY_COLUMNS,
             control_name=control_group,
             group_name=group_name,
             metrics=metrics,
@@ -1988,7 +1989,7 @@ def export_group_tables_from_results(
         df = build_variability_ranking_table(
             control_results,
             group_results,
-            higher_metrics=SPATIAL_VARIABILITY_COLUMNS,
+            higher_metrics=TEMPORAL_VARIABILITY_COLUMNS,
             control_name=control_group,
             group_name=group_name,
             metrics=metrics,
