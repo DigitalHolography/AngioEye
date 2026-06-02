@@ -58,6 +58,7 @@ def run_filesystem_pipeline_run(
     idle_callback: Callable[[], None] | None = None,
 ) -> PipelineRunResult:
     result = PipelineRunResult()
+    planning_started_at = time.monotonic()
     jobs = [
         PipelineFileJob(
             h5_path=h5_path,
@@ -68,6 +69,10 @@ def run_filesystem_pipeline_run(
         )
         for h5_path in inputs
     ]
+    result.timings.add(
+        "filesystem pipeline run: discover/build file jobs",
+        time.monotonic() - planning_started_at,
+    )
     batch_count_value = batch_count(len(jobs), settings.batch_size)
     for batch_index, job_batch in enumerate(
         iter_batches(jobs, settings.batch_size),
@@ -78,6 +83,7 @@ def run_filesystem_pipeline_run(
             f"({len(job_batch)} file(s)) with "
             f"{min(settings.task_workers, len(job_batch))} worker(s)..."
         )
+        batch_started_at = time.monotonic()
         _run_pipeline_job_batch(
             jobs=job_batch,
             pipelines=pipelines,
@@ -89,6 +95,10 @@ def run_filesystem_pipeline_run(
             max_workers=settings.task_workers,
             idle_callback=idle_callback,
             timings=result.timings,
+        )
+        result.timings.add(
+            "filesystem pipeline run: one job batch wall time",
+            time.monotonic() - batch_started_at,
         )
     return result
 
@@ -131,25 +141,37 @@ def run_zip_pipeline_run(
             )
             continue
 
+        planning_started_at = time.monotonic()
         member_paths: list[ZipMemberPath] = list(
             zip(extracted_batch.members, extracted_batch.h5_paths, strict=True)
+        )
+        result.timings.add(
+            "source ZIP pipeline run: pair extracted members with temp HDF5 paths",
+            time.monotonic() - planning_started_at,
         )
         worker_count = min(settings.task_workers, len(member_paths))
         log(
             f"[ZIP] Running pipelines for batch {extracted_batch.index}/"
             f"{extracted_batch.count} with {worker_count} worker(s)..."
         )
+        job_build_started_at = time.monotonic()
+        jobs = [
+            PipelineFileJob(
+                h5_path=h5_path,
+                output_relative_parent=member.relative_path.parent,
+                output_filename=None,
+                input_label=member.name,
+                log_label=member.name,
+            )
+            for member, h5_path in member_paths
+        ]
+        result.timings.add(
+            "source ZIP pipeline run: build pipeline jobs from extracted members",
+            time.monotonic() - job_build_started_at,
+        )
+        batch_started_at = time.monotonic()
         _run_pipeline_job_batch(
-            jobs=[
-                PipelineFileJob(
-                    h5_path=h5_path,
-                    output_relative_parent=member.relative_path.parent,
-                    output_filename=None,
-                    input_label=member.name,
-                    log_label=member.name,
-                )
-                for member, h5_path in member_paths
-            ],
+            jobs=jobs,
             pipelines=pipelines,
             output_dir=output_dir,
             run_pipeline_file=run_pipeline_file,
@@ -159,6 +181,10 @@ def run_zip_pipeline_run(
             max_workers=worker_count,
             idle_callback=idle_callback,
             timings=result.timings,
+        )
+        result.timings.add(
+            "source ZIP pipeline run: one extracted job batch wall time",
+            time.monotonic() - batch_started_at,
         )
     return result
 
@@ -176,6 +202,7 @@ def _run_pipeline_job_batch(
     idle_callback: Callable[[], None] | None,
     timings: TimingRecorder | None = None,
 ) -> None:
+    batch_started_at = time.monotonic()
     for task_result in run_task_batch(
         jobs,
         run_item=lambda job: _run_pipeline_job(
@@ -188,6 +215,7 @@ def _run_pipeline_job_batch(
         max_workers=max_workers,
         idle_callback=idle_callback,
     ):
+        result_handling_started_at = time.monotonic()
         job = task_result.item
         if task_result.error is not None:
             _record_pipeline_failure(
@@ -198,12 +226,27 @@ def _run_pipeline_job_batch(
                 log=log,
             )
             advance_progress(len(pipelines))
+            if timings is not None:
+                timings.add(
+                    "pipeline job batch: handle failed job result",
+                    time.monotonic() - result_handling_started_at,
+                )
             continue
 
         assert task_result.value is not None
         _record_pipeline_success(result, job.h5_path, task_result.value)
         log(f"[OK] {job.log_label}: combined results -> {task_result.value}")
         advance_progress(len(pipelines))
+        if timings is not None:
+            timings.add(
+                "pipeline job batch: handle successful job result",
+                time.monotonic() - result_handling_started_at,
+            )
+    if timings is not None:
+        timings.add(
+            "pipeline job batch: executor drain plus result handling",
+            time.monotonic() - batch_started_at,
+        )
 
 
 def _run_pipeline_job(
@@ -214,6 +257,15 @@ def _run_pipeline_job(
     run_pipeline_file: RunPipelineFile,
     timings: TimingRecorder | None = None,
 ) -> Path:
+    compatibility_started_at = time.monotonic()
+    accepts_record_timing = (
+        timings is not None and _accepts_record_timing(run_pipeline_file)
+    )
+    if timings is not None:
+        timings.add(
+            "per-file pipeline runner: inspect record_timing support",
+            time.monotonic() - compatibility_started_at,
+        )
     started_at = time.monotonic()
     try:
         args = (
@@ -223,7 +275,7 @@ def _run_pipeline_job(
             job.output_relative_parent,
             job.output_filename,
         )
-        if timings is not None and _accepts_record_timing(run_pipeline_file):
+        if accepts_record_timing:
             return run_pipeline_file(*args, record_timing=timings.add)
         return run_pipeline_file(*args)
     finally:

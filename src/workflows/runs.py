@@ -71,6 +71,7 @@ class RunPostprocesses(Protocol):
         failures: list[str],
         *,
         zip_outputs: bool,
+        record_timing: Callable[[str, float], None] | None = None,
     ) -> None: ...
 
 
@@ -437,6 +438,7 @@ def _run_workflow_postprocesses(
             selected_pipeline_names,
             pipeline_result.failures,
             zip_outputs=zip_outputs,
+            record_timing=pipeline_result.timings.add,
         )
     elif postprocesses:
         log(
@@ -445,6 +447,11 @@ def _run_workflow_postprocesses(
         )
         advance_progress(len(postprocesses))
     if postprocess_started_at is not None:
+        _add_timing(
+            pipeline_result.timings,
+            "postprocess phase total",
+            time.monotonic() - postprocess_started_at,
+        )
         _log_elapsed(log, "Postprocess phase", postprocess_started_at)
 
 
@@ -463,8 +470,8 @@ def _finalize_workflow_outputs(
     on_zip_error: Callable[[str], None] | None,
     timings: TimingSamples | None = None,
 ) -> _FinalizedOutputs:
+    finalize_started_at = time.monotonic()
     if zip_outputs:
-        finalize_started_at = time.monotonic()
         return _zip_workflow_outputs(
             output_dir=output_dir,
             base_output_dir=base_output_dir,
@@ -479,6 +486,12 @@ def _finalize_workflow_outputs(
             timings=timings,
         )
 
+    if timings is not None:
+        _add_timing(
+            timings,
+            "workflow output finalization without ZIP",
+            time.monotonic() - finalize_started_at,
+        )
     if len(processed_outputs) == 1:
         return _FinalizedOutputs(summary_message=f"Output file: {processed_outputs[0]}")
     return _FinalizedOutputs(summary_message=f"Outputs stored under: {output_dir}")
@@ -522,6 +535,12 @@ def _zip_workflow_outputs(
                 time.monotonic() - copy_started_at,
             )
         log(f"[ZIP] Archive created: {zip_path}")
+        if timings is not None:
+            _add_timing(
+                timings,
+                "ZIP finalization total",
+                time.monotonic() - finalize_started_at,
+            )
         _log_elapsed(log, "ZIP finalization", finalize_started_at)
         return _FinalizedOutputs(
             summary_message=_zip_summary(zip_path, companion_paths),
@@ -531,6 +550,12 @@ def _zip_workflow_outputs(
         zip_error = str(exc)
         advance_progress(1.0)
         log(f"[ZIP FAIL] {zip_error}")
+        if timings is not None:
+            _add_timing(
+                timings,
+                "ZIP finalization failed total",
+                time.monotonic() - finalize_started_at,
+            )
         _log_elapsed(log, "ZIP finalization", finalize_started_at)
         if on_zip_error is not None:
             on_zip_error(zip_error)

@@ -393,6 +393,7 @@ def _postprocess_runner(
         failures: list[str],
         *,
         zip_outputs: bool,
+        record_timing=None,
     ) -> None:
         run_postprocesses(
             postprocesses,
@@ -409,6 +410,7 @@ def _postprocess_runner(
             resolve_postprocess_files=_postprocess_file_resolver(
                 selected_pipeline_names
             ),
+            record_timing=record_timing,
         )
 
     return _run_postprocesses
