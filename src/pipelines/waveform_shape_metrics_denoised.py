@@ -92,6 +92,9 @@ class ArterialSegExample(ProcessPipeline):
     denoise_gaussian_sigma_samples = 1.25
     denoise_savgol_window = 9
     denoise_savgol_polyorder = 2
+    denoise_hampel_window = 7
+    denoise_hampel_nsigmas = 3.0
+    denoise_use_robust_hampel = True
 
     @staticmethod
     def _rectify_keep_nan(x: np.ndarray) -> np.ndarray:
@@ -141,9 +144,7 @@ class ArterialSegExample(ProcessPipeline):
                     if finite_count == 0:
                         status_code[index] = 1
                         continue
-                    if not self._denoise_has_enough_valid_samples(
-                        finite_count, n_time
-                    ):
+                    if not self._denoise_has_enough_valid_samples(finite_count, n_time):
                         status_code[index] = 2
                         continue
                     if float(np.nanstd(pulse)) <= self.eps:
@@ -165,29 +166,79 @@ class ArterialSegExample(ProcessPipeline):
         }
         return out, diagnostics
 
-    def _denoise_has_enough_valid_samples(
-        self, finite_count: int, n_time: int
-    ) -> bool:
-        return (
-            finite_count >= int(self.denoise_min_valid_samples)
-            and finite_count / float(n_time) >= float(self.denoise_min_valid_fraction)
-        )
+    def _denoise_has_enough_valid_samples(self, finite_count: int, n_time: int) -> bool:
+        return finite_count >= int(
+            self.denoise_min_valid_samples
+        ) and finite_count / float(n_time) >= float(self.denoise_min_valid_fraction)
+
+    def _hampel_filter_1d(
+        self,
+        x: np.ndarray,
+        window: int = 7,
+        n_sigmas: float = 3.0,
+    ) -> np.ndarray:
+        x = np.asarray(x, dtype=float).copy()
+        n = x.size
+
+        if n < 3:
+            return x
+
+        if window % 2 == 0:
+            window += 1
+
+        half = window // 2
+        out = x.copy()
+
+        for i in range(n):
+            i0 = max(0, i - half)
+            i1 = min(n, i + half + 1)
+
+            local = x[i0:i1]
+            local = local[np.isfinite(local)]
+
+            if local.size < 3:
+                continue
+
+            med = float(np.median(local))
+            mad = float(np.median(np.abs(local - med)))
+
+            if mad <= self.eps:
+                continue
+
+            sigma = 1.4826 * mad
+
+            if abs(x[i] - med) > n_sigmas * sigma:
+                out[i] = med
+
+        return out
 
     def _denoise_pulse_1d(self, pulse: np.ndarray) -> np.ndarray:
         finite_mask = np.isfinite(pulse)
         x = np.arange(pulse.size, dtype=float)
+
         filled = np.interp(x, x[finite_mask], pulse[finite_mask])
 
-        candidates = np.stack(
-            (
-                self._denoise_harmonic_lowpass(filled),
-                self._denoise_gaussian_smooth(filled),
-                self._denoise_savgol_smooth(filled),
-            )
+        # 1. Rejet robuste des outliers locaux
+        robust = self._hampel_filter_1d(
+            filled,
+            window=self.denoise_hampel_window,
+            n_sigmas=self.denoise_hampel_nsigmas,
         )
-        denoised = np.mean(candidates, axis=0)
+
+        # 2. Filtres candidats
+        harmonic = self._denoise_harmonic_lowpass(robust)
+        gaussian = self._denoise_gaussian_smooth(robust)
+        savgol = self._denoise_savgol_smooth(robust)
+
+        # 3. Combinaison orientée morphologie
+        denoised = 0.25 * harmonic + 0.15 * gaussian + 0.60 * savgol
+
+        # 4. Protection contre les overshoots
         denoised = self._clip_to_input_range(denoised, pulse)
+
+        # 5. Restaurer les NaN originaux
         denoised[~finite_mask] = np.nan
+
         return denoised
 
     def _denoise_harmonic_lowpass(self, pulse: np.ndarray) -> np.ndarray:
@@ -451,9 +502,7 @@ class ArterialSegExample(ProcessPipeline):
             "A2_cumsum_interp": np.full(
                 (self.H_CUMSUM_INTERP_POINTS,), np.nan, dtype=float
             ),
-            "A2_m_interp": np.full(
-                (self.H_CUMSUM_INTERP_POINTS,), np.nan, dtype=float
-            ),
+            "A2_m_interp": np.full((self.H_CUMSUM_INTERP_POINTS,), np.nan, dtype=float),
         }
 
         if V is None:
@@ -724,7 +773,6 @@ class ArterialSegExample(ProcessPipeline):
             float(idx_up / v.size),
             float(idx_down / v.size),
         )
-
 
     def _late_cycle_mean_fraction(self, v: np.ndarray) -> float:
         """
@@ -1262,21 +1310,17 @@ class ArterialSegExample(ProcessPipeline):
             "t_min_over_T": float(t_min_over_T)
             if np.isfinite(t_min_over_T)
             else np.nan,
-            "S_rise": float(S_rise)
-            if np.isfinite(S_rise)
+            "S_rise": float(S_rise) if np.isfinite(S_rise) else np.nan,
+            "S_fall": float(S_fall) if np.isfinite(S_fall) else np.nan,
+            "t_rise_over_T": float(t_rise_over_T)
+            if np.isfinite(t_rise_over_T)
             else np.nan,
-            "S_fall": float(S_fall)
-            if np.isfinite(S_fall)
-            else np.nan,
-            "t_rise_over_T": float(t_rise_over_T) if np.isfinite(t_rise_over_T) else np.nan,
             "t_fall_over_T": float(t_fall_over_T)
             if np.isfinite(t_fall_over_T)
             else np.nan,
             "Delta_DTI": float(Delta_DTI) if np.isfinite(Delta_DTI) else np.nan,
             "gamma_t": float(gamma_t) if np.isfinite(gamma_t) else np.nan,
-            "CF": float(CF)
-            if np.isfinite(CF)
-            else np.nan,
+            "CF": float(CF) if np.isfinite(CF) else np.nan,
             "N_eff_over_T": float(N_eff_over_T)
             if np.isfinite(N_eff_over_T)
             else np.nan,
@@ -1302,32 +1346,62 @@ class ArterialSegExample(ProcessPipeline):
         metrics are intentionally excluded from this public endpoint list.
         """
         return [
-            ["mu_t", "VTI-weighted centroid time", "seconds", "timing_and_distribution"],
+            [
+                "mu_t",
+                "VTI-weighted centroid time",
+                "seconds",
+                "timing_and_distribution",
+            ],
             ["mu_t_over_T", "mu_t/T", "", "timing_and_distribution"],
-            ["sigma_t", "VTI-weighted time spread", "seconds", "timing_and_distribution"],
+            [
+                "sigma_t",
+                "VTI-weighted time spread",
+                "seconds",
+                "timing_and_distribution",
+            ],
             ["sigma_t_over_T", "sigma_t/T", "", "timing_and_distribution"],
-            ["gamma_t", "VTI-weighted temporal skewness", "", "timing_and_distribution"],
+            [
+                "gamma_t",
+                "VTI-weighted temporal skewness",
+                "",
+                "timing_and_distribution",
+            ],
             ["t10_over_T", "t_10/T", "", "timing_quantiles"],
             ["t25_over_T", "t_25/T", "", "timing_quantiles"],
             ["t50_over_T", "t_50/T", "", "timing_quantiles"],
             ["t75_over_T", "t_75/T", "", "timing_quantiles"],
             ["t90_over_T", "t_90/T", "", "timing_quantiles"],
             ["Q_t_width", "(t_75-t_25)/T", "", "timing_quantiles"],
-            ["Q_t_skew", "((t_90-t_50)-(t_50-t_10))/(t_90-t_10)", "", "timing_quantiles"],
+            [
+                "Q_t_skew",
+                "((t_90-t_50)-(t_50-t_10))/(t_90-t_10)",
+                "",
+                "timing_quantiles",
+            ],
             ["W50_over_T", "W_50/T", "", "crest_width"],
             ["W80_over_T", "W_80/T", "", "crest_width"],
             ["RI", "1-v_min/v_max", "", "pulsatility"],
             ["PI", "(v_max-v_min)/v_mean", "", "pulsatility"],
             ["R_VTI", "d(alpha*T)/(D-d(alpha*T))", "", "cumulative_distance_geometry"],
             ["SF_VTI", "d(alpha*T)/D", "", "cumulative_distance_geometry"],
-            ["Delta_DTI", "integral_0^1(d(tau*T)/D - tau) d tau", "", "cumulative_distance_geometry"],
+            [
+                "Delta_DTI",
+                "integral_0^1(d(tau*T)/D - tau) d tau",
+                "",
+                "cumulative_distance_geometry",
+            ],
             ["d10_over_D", "d(0.10*T)/D", "", "cumulative_distance_geometry"],
             ["d25_over_D", "d(0.25*T)/D", "", "cumulative_distance_geometry"],
             ["d50_over_D", "d(0.50*T)/D", "", "cumulative_distance_geometry"],
             ["d75_over_D", "d(0.75*T)/D", "", "cumulative_distance_geometry"],
             ["d90_over_D", "d(0.90*T)/D", "", "cumulative_distance_geometry"],
             ["Q_d_width", "(d_75-d_25)/D", "", "cumulative_distance_geometry"],
-            ["Q_d_skew", "((d_90-d_50)-(d_50-d_10))/(d_90-d_10)", "", "cumulative_distance_geometry"],
+            [
+                "Q_d_skew",
+                "((d_90-d_50)-(d_50-d_10))/(d_90-d_10)",
+                "",
+                "cumulative_distance_geometry",
+            ],
             ["t_max_over_T", "t_max/T", "", "kinetics_and_persistence"],
             ["t_min_over_T", "t_min/T", "", "kinetics_and_persistence"],
             ["S_rise", "T*max(dv/dt)/v_mean", "", "kinetics_and_persistence"],
@@ -1337,11 +1411,105 @@ class ArterialSegExample(ProcessPipeline):
             ["v_end_over_vbar", "v_end/v_mean", "", "kinetics_and_persistence"],
             ["CF", "v_max/v_RMS", "", "kinetics_and_persistence"],
             ["E_LF_over_E_HF", "E_LF/E_HF", "", "spectral_and_reconstruction"],
-            ["eta_h", "explained pulsatile fraction", "", "spectral_and_reconstruction"],
+            [
+                "eta_h",
+                "explained pulsatile fraction",
+                "",
+                "spectral_and_reconstruction",
+            ],
             ["N_eff_over_T", "N_eff/T", "", "temporal_support"],
             ["N_t_over_T", "N_t/T", "", "temporal_support"],
             ["E_slope", "T^3/M0^2 * integral_0^T (dv/dt)^2 dt", "", "slope_energy"],
         ]
+
+    def _pack_segment_signal_outputs(
+        self,
+        metrics: dict,
+        vessel_prefix: str,
+        raw_original_seg: np.ndarray,
+        metric_input_seg: np.ndarray,
+        bandlimited_seg: np.ndarray,
+    ) -> None:
+        """
+        Store segment waveforms used for by_segment metrics.
+
+        Signal arrays are stored as:
+        (time, beat, branch, radius)
+
+        Metric arrays are stored as:
+        (beat, branch, radius)
+
+        Therefore:
+        signal[:, beat_idx, branch_idx, radius_idx]
+        is the waveform used for:
+        metric[beat_idx, branch_idx, radius_idx]
+        """
+
+        common_attrs = {
+            "axis_order": ["time, beat, branch, radius"],
+            "metric_alignment": [
+                "signal[:, beat, branch, radius] corresponds to "
+                "by_segment/*_segment metrics[beat, branch, radius]"
+            ],
+        }
+
+        metrics[f"{vessel_prefix}/by_segment/signals/raw_original/value"] = with_attrs(
+            np.asarray(raw_original_seg, dtype=float),
+            {
+                **common_attrs,
+                "definition": [
+                    "Original per-segment velocity waveform before denoising/filtering"
+                ],
+            },
+        )
+
+        metrics[f"{vessel_prefix}/by_segment/signals/metric_input/value"] = with_attrs(
+            np.asarray(metric_input_seg, dtype=float),
+            {
+                **common_attrs,
+                "definition": [
+                    "Per-segment waveform actually passed to _compute_block_segment "
+                    "for raw_segment metrics"
+                ],
+            },
+        )
+
+        metrics[f"{vessel_prefix}/by_segment/signals/metric_input_rectified/value"] = (
+            with_attrs(
+                self._rectify_keep_nan(metric_input_seg),
+                {
+                    **common_attrs,
+                    "definition": [
+                        "Rectified version of metric_input; this is the effective waveform "
+                        "seen by _compute_metrics_1d after _rectify_keep_nan"
+                    ],
+                },
+            )
+        )
+
+        metrics[f"{vessel_prefix}/by_segment/signals/bandlimited/value"] = with_attrs(
+            np.asarray(bandlimited_seg, dtype=float),
+            {
+                **common_attrs,
+                "definition": [
+                    "Bandlimited per-segment waveform passed to _compute_block_segment "
+                    "for bandlimited_segment metrics"
+                ],
+            },
+        )
+
+        metrics[f"{vessel_prefix}/by_segment/signals/bandlimited_rectified/value"] = (
+            with_attrs(
+                self._rectify_keep_nan(bandlimited_seg),
+                {
+                    **common_attrs,
+                    "definition": [
+                        "Rectified version of bandlimited signal; this is the effective "
+                        "waveform seen by _compute_metrics_1d"
+                    ],
+                },
+            )
+        )
 
     def _compute_block_segment(self, v_block: np.ndarray, T: np.ndarray):
         """
@@ -1683,23 +1851,24 @@ class ArterialSegExample(ProcessPipeline):
             if have_seg:
                 v_raw_seg = np.asarray(h5file[cfg["v_raw_segment_input"]])
                 v_band_seg = np.asarray(h5file[cfg["v_band_segment_input"]])
+                v_raw_seg_metric_input = v_raw_seg
                 if vessel_prefix == "artery":
-                    v_raw_seg, denoise_diag = self._denoise_segment_block(v_raw_seg)
-                    metrics[
-                        "artery/by_segment/denoising/original_vs_filtered_corr"
-                    ] = with_attrs(
-                        denoise_diag["original_vs_filtered_corr"],
-                        {
-                            "definition": (
-                                "Pearson correlation between each original "
-                                "arterial segment pulse and the denoised pulse"
-                            ),
-                            "axis_order": "beat, branch, radius",
-                        },
+                    v_raw_seg_metric_input, denoise_diag = self._denoise_segment_block(
+                        v_raw_seg
                     )
-                    metrics[
-                        "artery/by_segment/denoising/finite_fraction"
-                    ] = with_attrs(
+                    metrics["artery/by_segment/denoising/original_vs_filtered_corr"] = (
+                        with_attrs(
+                            denoise_diag["original_vs_filtered_corr"],
+                            {
+                                "definition": (
+                                    "Pearson correlation between each original "
+                                    "arterial segment pulse and the denoised pulse"
+                                ),
+                                "axis_order": "beat, branch, radius",
+                            },
+                        )
+                    )
+                    metrics["artery/by_segment/denoising/finite_fraction"] = with_attrs(
                         denoise_diag["finite_fraction"],
                         {
                             "definition": (
@@ -1713,36 +1882,46 @@ class ArterialSegExample(ProcessPipeline):
                         denoise_diag["status_code"],
                         {
                             "definition": (
-                                "0 denoised, 1 all_nan, 2 too_sparse, "
-                                "3 low_variance"
+                                "0 denoised, 1 all_nan, 2 too_sparse, 3 low_variance"
                             ),
                             "axis_order": "beat, branch, radius",
                         },
                     )
                     metrics["artery/by_segment/denoising/params/method"] = (
-                        "mean consensus of harmonic_lowpass, gaussian, "
-                        "savitzky_golay"
+                        "mean consensus of harmonic_lowpass, gaussian, savitzky_golay"
                     )
-                    metrics[
-                        "artery/by_segment/denoising/params/min_valid_samples"
-                    ] = np.asarray(self.denoise_min_valid_samples, dtype=int)
-                    metrics[
-                        "artery/by_segment/denoising/params/min_valid_fraction"
-                    ] = np.asarray(self.denoise_min_valid_fraction, dtype=float)
-                    metrics[
-                        "artery/by_segment/denoising/params/harmonic_count"
-                    ] = np.asarray(self.denoise_harmonic_count, dtype=int)
+                    metrics["artery/by_segment/denoising/params/min_valid_samples"] = (
+                        np.asarray(self.denoise_min_valid_samples, dtype=int)
+                    )
+                    metrics["artery/by_segment/denoising/params/min_valid_fraction"] = (
+                        np.asarray(self.denoise_min_valid_fraction, dtype=float)
+                    )
+                    metrics["artery/by_segment/denoising/params/harmonic_count"] = (
+                        np.asarray(self.denoise_harmonic_count, dtype=int)
+                    )
                     metrics[
                         "artery/by_segment/denoising/params/gaussian_sigma_samples"
                     ] = np.asarray(self.denoise_gaussian_sigma_samples, dtype=float)
-                    metrics[
-                        "artery/by_segment/denoising/params/savgol_window"
-                    ] = np.asarray(self.denoise_savgol_window, dtype=int)
-                    metrics[
-                        "artery/by_segment/denoising/params/savgol_polyorder"
-                    ] = np.asarray(self.denoise_savgol_polyorder, dtype=int)
+                    metrics["artery/by_segment/denoising/params/savgol_window"] = (
+                        np.asarray(self.denoise_savgol_window, dtype=int)
+                    )
+                    metrics["artery/by_segment/denoising/params/savgol_polyorder"] = (
+                        np.asarray(self.denoise_savgol_polyorder, dtype=int)
+                    )
+                self._pack_segment_signal_outputs(
+                    metrics=metrics,
+                    vessel_prefix=vessel_prefix,
+                    raw_original_seg=v_raw_seg,
+                    metric_input_seg=v_raw_seg_metric_input,
+                    bandlimited_seg=v_band_seg,
+                )
+
                 self._pack_segment_outputs(
-                    metrics, vessel_prefix, v_raw_seg, v_band_seg, T
+                    metrics=metrics,
+                    vessel_prefix=vessel_prefix,
+                    v_raw_seg=v_raw_seg_metric_input,
+                    v_band_seg=v_band_seg,
+                    T=T,
                 )
 
             have_glob = (
