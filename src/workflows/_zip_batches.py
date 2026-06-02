@@ -10,7 +10,13 @@ from pathlib import Path
 from queue import Full, Queue
 from tempfile import TemporaryDirectory
 
-from batch_engine import BatchExecutionSettings, batch_count, env_int
+from batch_engine import (
+    BatchExecutionSettings,
+    batch_count,
+    default_staging_workers,
+    default_task_workers,
+    env_int,
+)
 from input_output import ZipH5Member, iter_h5_member_batches
 
 from .timing import TimingRecorder
@@ -28,30 +34,25 @@ class ZipBatchSettings(BatchExecutionSettings):
 
     @classmethod
     def from_env(cls) -> ZipBatchSettings:
+        task_workers = env_int(
+            "ANGIOEYE_BATCH_TASK_WORKERS",
+            env_int("ANGIOEYE_ZIP_PIPELINE_WORKERS", default_task_workers()),
+        )
         return cls(
             batch_size=env_int(
                 "ANGIOEYE_BATCH_SIZE",
-                env_int("ANGIOEYE_ZIP_BATCH_SIZE", cls.batch_size),
+                env_int("ANGIOEYE_ZIP_BATCH_SIZE", task_workers),
             ),
             staging_workers=env_int(
                 "ANGIOEYE_BATCH_STAGING_WORKERS",
-                env_int(
-                    "ANGIOEYE_ZIP_EXTRACT_WORKERS",
-                    cls.default_staging_workers(),
-                ),
+                env_int("ANGIOEYE_ZIP_EXTRACT_WORKERS", default_staging_workers()),
             ),
-            task_workers=env_int(
-                "ANGIOEYE_BATCH_TASK_WORKERS",
-                env_int(
-                    "ANGIOEYE_ZIP_PIPELINE_WORKERS",
-                    cls.default_task_workers(),
-                ),
-            ),
+            task_workers=task_workers,
         )
 
     def __init__(
         self,
-        batch_size: int = 8,
+        batch_size: int | None = None,
         staging_workers: int | None = None,
         task_workers: int | None = None,
         *,
@@ -62,14 +63,16 @@ class ZipBatchSettings(BatchExecutionSettings):
             staging_workers = (
                 extract_workers
                 if extract_workers is not None
-                else self.default_staging_workers()
+                else default_staging_workers()
             )
         if task_workers is None:
             task_workers = (
                 pipeline_workers
                 if pipeline_workers is not None
-                else self.default_task_workers()
+                else default_task_workers()
             )
+        if batch_size is None:
+            batch_size = task_workers
         super().__init__(
             batch_size=batch_size,
             staging_workers=staging_workers,
