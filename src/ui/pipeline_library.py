@@ -9,83 +9,97 @@ from pipelines import PipelineDescriptor, load_pipeline_catalog
 from .services import services_for
 from .widgets import _Tooltip
 
-class PipelineLibraryMixin:
-    def _build_pipeline_library_tab(self, parent: ttk.Frame) -> None:
-        parent.columnconfigure(0, weight=1)
-        parent.rowconfigure(2, weight=1)
+
+class PipelineLibraryTab(ttk.Frame):
+    def __init__(self, parent: tk.Misc, controller) -> None:
+        super().__init__(parent, padding=10)
+        self.controller = controller
+        self._build()
+
+    def _build(self) -> None:
+        app = self.controller
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(2, weight=1)
 
         ttk.Label(
-            parent,
+            self,
             text="Select the pipelines to run. "
             "This preference is saved between app launches.",
         ).grid(row=0, column=0, sticky="w")
 
-        controls = ttk.Frame(parent)
+        controls = ttk.Frame(self)
         controls.grid(row=1, column=0, sticky="ew", pady=(8, 4))
         controls.columnconfigure(4, weight=1)
         ttk.Button(
             controls,
             text="Select all",
-            command=self.select_all_pipelines,
+            command=app.select_all_pipelines,
         ).grid(row=0, column=0, sticky="w")
         ttk.Button(
             controls,
             text="Deselect all",
-            command=self.deselect_all_pipelines,
+            command=app.deselect_all_pipelines,
         ).grid(row=0, column=1, sticky="w", padx=(4, 0))
         ttk.Button(
             controls,
             text="Reload pipelines",
-            command=self.refresh_pipeline_catalog,
+            command=app.refresh_pipeline_catalog,
         ).grid(row=0, column=2, sticky="w", padx=(4, 0))
         ttk.Button(
             controls,
             text="Open folder",
-            command=self.open_pipeline_folder,
+            command=app.open_pipeline_folder,
         ).grid(row=0, column=3, sticky="w", padx=(4, 0))
-        ttk.Label(controls, textvariable=self.pipeline_library_summary_var).grid(
+        ttk.Label(controls, textvariable=app.pipeline_library_summary_var).grid(
             row=0, column=4, sticky="e"
         )
 
-        library_container = ttk.Frame(parent)
+        library_container = ttk.Frame(self)
         library_container.grid(row=2, column=0, sticky="nsew")
         library_container.columnconfigure(0, weight=1)
         library_container.rowconfigure(0, weight=1)
 
-        self.pipeline_library_canvas = tk.Canvas(
-            library_container, highlightthickness=0, bg=self._bg_color
+        app.pipeline_library_canvas = tk.Canvas(
+            library_container, highlightthickness=0, bg=app._bg_color
         )
-        self.pipeline_library_canvas.grid(row=0, column=0, sticky="nsew")
+        app.pipeline_library_canvas.grid(row=0, column=0, sticky="nsew")
         library_scroll = ttk.Scrollbar(
             library_container,
             orient="vertical",
-            command=self.pipeline_library_canvas.yview,
+            command=app.pipeline_library_canvas.yview,
         )
         library_scroll.grid(row=0, column=1, sticky="ns")
-        self.pipeline_library_canvas.configure(yscrollcommand=library_scroll.set)
-        self.pipeline_library_inner = ttk.Frame(self.pipeline_library_canvas)
-        self.pipeline_library_window = self.pipeline_library_canvas.create_window(
-            (0, 0), window=self.pipeline_library_inner, anchor="nw"
+        app.pipeline_library_canvas.configure(yscrollcommand=library_scroll.set)
+        app.pipeline_library_inner = ttk.Frame(app.pipeline_library_canvas)
+        app.pipeline_library_window = app.pipeline_library_canvas.create_window(
+            (0, 0), window=app.pipeline_library_inner, anchor="nw"
         )
-        self.pipeline_library_inner.bind(
+        app.pipeline_library_inner.bind(
             "<Configure>",
-            lambda _evt: self.pipeline_library_canvas.configure(
-                scrollregion=self.pipeline_library_canvas.bbox("all")
+            lambda _evt: app.pipeline_library_canvas.configure(
+                scrollregion=app.pipeline_library_canvas.bbox("all")
             ),
         )
-        self.pipeline_library_canvas.bind(
+        app.pipeline_library_canvas.bind(
             "<Configure>",
-            lambda evt: self.pipeline_library_canvas.itemconfigure(
-                self.pipeline_library_window, width=evt.width
+            lambda evt: app.pipeline_library_canvas.itemconfigure(
+                app.pipeline_library_window, width=evt.width
             ),
         )
-        self._bind_vertical_mousewheel(
-            self.pipeline_library_canvas, self.pipeline_library_canvas
+        app._bind_vertical_mousewheel(
+            app.pipeline_library_canvas, app.pipeline_library_canvas
         )
-        self._bind_vertical_mousewheel(
-            self.pipeline_library_inner, self.pipeline_library_canvas
+        app._bind_vertical_mousewheel(
+            app.pipeline_library_inner, app.pipeline_library_canvas
         )
-        self._bind_vertical_mousewheel(library_scroll, self.pipeline_library_canvas)
+        app._bind_vertical_mousewheel(library_scroll, app.pipeline_library_canvas)
+
+
+class PipelineLibraryMixin:
+    def _build_pipeline_library_tab(self, parent: ttk.Frame) -> None:
+        tab = PipelineLibraryTab(parent, self)
+        tab.pack(fill="both", expand=True)
+        self.pipeline_library_tab = tab
 
     def _bind_vertical_mousewheel(self, widget: tk.Misc, canvas: tk.Canvas) -> None:
         for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):

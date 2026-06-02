@@ -6,83 +6,97 @@ from postprocess import PostprocessDescriptor, load_postprocess_catalog
 
 from .widgets import _Tooltip
 
-class PostprocessLibraryMixin:
-    def _build_postprocess_library_tab(self, parent: ttk.Frame) -> None:
-        parent.columnconfigure(0, weight=1)
-        parent.rowconfigure(2, weight=1)
+
+class PostprocessLibraryTab(ttk.Frame):
+    def __init__(self, parent: tk.Misc, controller) -> None:
+        super().__init__(parent, padding=10)
+        self.controller = controller
+        self._build()
+
+    def _build(self) -> None:
+        app = self.controller
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(2, weight=1)
 
         ttk.Label(
-            parent,
+            self,
             text="Select the postprocess steps to run after pipelines. "
             "This preference is saved between app launches.",
         ).grid(row=0, column=0, sticky="w")
 
-        controls = ttk.Frame(parent)
+        controls = ttk.Frame(self)
         controls.grid(row=1, column=0, sticky="ew", pady=(8, 4))
         controls.columnconfigure(4, weight=1)
         ttk.Button(
             controls,
             text="Select all",
-            command=self.select_all_postprocesses,
+            command=app.select_all_postprocesses,
         ).grid(row=0, column=0, sticky="w")
         ttk.Button(
             controls,
             text="Deselect all",
-            command=self.deselect_all_postprocesses,
+            command=app.deselect_all_postprocesses,
         ).grid(row=0, column=1, sticky="w", padx=(4, 0))
         ttk.Button(
             controls,
             text="Reload postprocess",
-            command=self.refresh_postprocess_catalog,
+            command=app.refresh_postprocess_catalog,
         ).grid(row=0, column=2, sticky="w", padx=(4, 0))
         ttk.Button(
             controls,
             text="Open folder",
-            command=self.open_postprocess_folder,
+            command=app.open_postprocess_folder,
         ).grid(row=0, column=3, sticky="w", padx=(4, 0))
-        ttk.Label(controls, textvariable=self.postprocess_library_summary_var).grid(
+        ttk.Label(controls, textvariable=app.postprocess_library_summary_var).grid(
             row=0, column=4, sticky="e"
         )
 
-        library_container = ttk.Frame(parent)
+        library_container = ttk.Frame(self)
         library_container.grid(row=2, column=0, sticky="nsew")
         library_container.columnconfigure(0, weight=1)
         library_container.rowconfigure(0, weight=1)
 
-        self.postprocess_library_canvas = tk.Canvas(
-            library_container, highlightthickness=0, bg=self._bg_color
+        app.postprocess_library_canvas = tk.Canvas(
+            library_container, highlightthickness=0, bg=app._bg_color
         )
-        self.postprocess_library_canvas.grid(row=0, column=0, sticky="nsew")
+        app.postprocess_library_canvas.grid(row=0, column=0, sticky="nsew")
         library_scroll = ttk.Scrollbar(
             library_container,
             orient="vertical",
-            command=self.postprocess_library_canvas.yview,
+            command=app.postprocess_library_canvas.yview,
         )
         library_scroll.grid(row=0, column=1, sticky="ns")
-        self.postprocess_library_canvas.configure(yscrollcommand=library_scroll.set)
-        self.postprocess_library_inner = ttk.Frame(self.postprocess_library_canvas)
-        self.postprocess_library_window = self.postprocess_library_canvas.create_window(
-            (0, 0), window=self.postprocess_library_inner, anchor="nw"
+        app.postprocess_library_canvas.configure(yscrollcommand=library_scroll.set)
+        app.postprocess_library_inner = ttk.Frame(app.postprocess_library_canvas)
+        app.postprocess_library_window = app.postprocess_library_canvas.create_window(
+            (0, 0), window=app.postprocess_library_inner, anchor="nw"
         )
-        self.postprocess_library_inner.bind(
+        app.postprocess_library_inner.bind(
             "<Configure>",
-            lambda _evt: self.postprocess_library_canvas.configure(
-                scrollregion=self.postprocess_library_canvas.bbox("all")
+            lambda _evt: app.postprocess_library_canvas.configure(
+                scrollregion=app.postprocess_library_canvas.bbox("all")
             ),
         )
-        self.postprocess_library_canvas.bind(
+        app.postprocess_library_canvas.bind(
             "<Configure>",
-            lambda evt: self.postprocess_library_canvas.itemconfigure(
-                self.postprocess_library_window, width=evt.width
+            lambda evt: app.postprocess_library_canvas.itemconfigure(
+                app.postprocess_library_window, width=evt.width
             ),
         )
-        self._bind_vertical_mousewheel(
-            self.postprocess_library_canvas, self.postprocess_library_canvas
+        app._bind_vertical_mousewheel(
+            app.postprocess_library_canvas, app.postprocess_library_canvas
         )
-        self._bind_vertical_mousewheel(
-            self.postprocess_library_inner, self.postprocess_library_canvas
+        app._bind_vertical_mousewheel(
+            app.postprocess_library_inner, app.postprocess_library_canvas
         )
-        self._bind_vertical_mousewheel(library_scroll, self.postprocess_library_canvas)
+        app._bind_vertical_mousewheel(library_scroll, app.postprocess_library_canvas)
+
+
+class PostprocessLibraryMixin:
+    def _build_postprocess_library_tab(self, parent: ttk.Frame) -> None:
+        tab = PostprocessLibraryTab(parent, self)
+        tab.pack(fill="both", expand=True)
+        self.postprocess_library_tab = tab
 
     def _register_postprocesses(self) -> None:
         available, missing = load_postprocess_catalog()
