@@ -18,6 +18,7 @@ Inputs:
 from __future__ import annotations
 
 import argparse
+import multiprocessing
 import sys
 import time
 from collections.abc import Callable, Sequence
@@ -319,5 +320,6 @@ def _format_elapsed(seconds: float) -> str:
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     raise SystemExit(main())
 

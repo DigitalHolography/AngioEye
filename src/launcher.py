@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import multiprocessing
 import platform
 import sys
 from pathlib import Path
@@ -62,10 +63,12 @@ def _call_entry(
 
 
 def main() -> Any:
+    multiprocessing.freeze_support()
     _disable_windows_platform_wmi()
     return _call_entry("angio_eye", "angio_eye.py", "main")
 
 
 def cli_main(argv: list[str] | None = None) -> Any:
+    multiprocessing.freeze_support()
     _disable_windows_platform_wmi()
     return _call_entry("cli", "cli.py", "main", argv)

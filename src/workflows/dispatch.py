@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import functools
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
 from input_output import relative_hdf5_parent
-from pipeline_engine import OutputPathAllocator, run_pipeline_file, run_postprocesses
+from pipeline_engine import run_pipeline_file, run_postprocesses
 
 from ._holo import HoloInputContext
 from ._holo import find_ae_h5 as find_holo_ae_h5
@@ -129,11 +130,13 @@ def _dispatch_holo_workflow(
         pipelines=request.pipelines,
         postprocesses=request.postprocesses,
         selected_pipeline_names=request.selected_pipeline_names,
-        run_pipeline_file=_pipeline_file_runner(request, callbacks, worker_safe=False),
+        run_pipeline_file=_pipeline_file_runner(request, callbacks, worker_safe=True),
         run_postprocesses=_postprocess_runner(request, callbacks),
         log=callbacks.log,
         advance_progress=callbacks.advance_progress,
         start_final_progress=callbacks.start_final_progress,
+        settings=request.zip_batch_settings,
+        idle_callback=callbacks.idle_callback,
     )
     return WorkflowDispatchResult(
         workflow_result=workflow_result,
@@ -269,7 +272,6 @@ def _dispatch_zip_workflow(
             request,
             callbacks,
             worker_safe=True,
-            output_path_allocator=OutputPathAllocator(),
         ),
         run_postprocesses=_postprocess_runner(request, callbacks),
         zip_output_dir=request.zip_output_dir,
@@ -331,7 +333,6 @@ def _dispatch_filesystem_workflow(
             request,
             callbacks,
             worker_safe=True,
-            output_path_allocator=OutputPathAllocator(),
         ),
         run_postprocesses=_postprocess_runner(request, callbacks),
         relative_parent=relative_hdf5_parent,
@@ -351,8 +352,17 @@ def _pipeline_file_runner(
     callbacks: WorkflowCallbacks,
     *,
     worker_safe: bool,
-    output_path_allocator: OutputPathAllocator | None = None,
 ):
+    if worker_safe:
+        return functools.partial(
+            run_pipeline_file,
+            trim_source=request.trim_source,
+            log=None,
+            advance_progress=None,
+            write_idle_callback=None,
+            output_path_allocator=None,
+        )
+
     def _run_pipeline_file(
         h5_path: Path,
         pipelines: Sequence[Any],
@@ -369,10 +379,10 @@ def _pipeline_file_runner(
             output_relative_parent,
             output_filename,
             trim_source=request.trim_source,
-            log=None if worker_safe else callbacks.log,
-            advance_progress=None if worker_safe else callbacks.advance_progress,
-            write_idle_callback=None if worker_safe else callbacks.idle_callback,
-            output_path_allocator=output_path_allocator,
+            log=callbacks.log,
+            advance_progress=callbacks.advance_progress,
+            write_idle_callback=callbacks.idle_callback,
+            output_path_allocator=None,
             record_timing=record_timing,
         )
 

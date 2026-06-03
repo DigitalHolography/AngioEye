@@ -4,14 +4,16 @@ import shutil
 import threading
 import time
 import zipfile
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from queue import Full, Queue
+from queue import Empty, Full, Queue
 from tempfile import TemporaryDirectory
 
 from batch_engine import (
     BatchExecutionSettings,
+    DEFAULT_PROCESS_WORKERS,
     batch_count,
     default_staging_workers,
     default_task_workers,
@@ -48,6 +50,10 @@ class ZipBatchSettings(BatchExecutionSettings):
                 env_int("ANGIOEYE_ZIP_EXTRACT_WORKERS", default_staging_workers()),
             ),
             task_workers=task_workers,
+            process_workers=env_int(
+                "ANGIOEYE_BATCH_PROCESS_WORKERS",
+                DEFAULT_PROCESS_WORKERS,
+            ),
         )
 
     def __init__(
@@ -55,6 +61,7 @@ class ZipBatchSettings(BatchExecutionSettings):
         batch_size: int | None = None,
         staging_workers: int | None = None,
         task_workers: int | None = None,
+        process_workers: int | None = None,
         *,
         extract_workers: int | None = None,
         pipeline_workers: int | None = None,
@@ -73,10 +80,13 @@ class ZipBatchSettings(BatchExecutionSettings):
             )
         if batch_size is None:
             batch_size = task_workers
+        if process_workers is None:
+            process_workers = DEFAULT_PROCESS_WORKERS
         super().__init__(
             batch_size=batch_size,
             staging_workers=staging_workers,
             task_workers=task_workers,
+            process_workers=process_workers,
         )
 
 
@@ -88,6 +98,33 @@ class ExtractedZipBatch:
     h5_paths: tuple[Path, ...]
     root: Path
     error: Exception | None = None
+
+
+@dataclass(frozen=True)
+class ExtractedZipBatchStream:
+    batch_queue: Queue[ExtractedZipBatch | None]
+    stop_event: threading.Event
+    idle_callback: Callable[[], None] | None = None
+    timings: TimingRecorder | None = None
+
+    def __iter__(self) -> Iterator[ExtractedZipBatch]:
+        while True:
+            wait_started_at = time.monotonic()
+            while True:
+                try:
+                    extracted_batch = self.batch_queue.get(timeout=0.05)
+                    break
+                except Empty:
+                    if self.idle_callback is not None:
+                        self.idle_callback()
+            if self.timings is not None:
+                self.timings.add(
+                    "source ZIP extraction stream: wait for next extracted batch",
+                    time.monotonic() - wait_started_at,
+                )
+            if extracted_batch is None:
+                break
+            yield extracted_batch
 
 
 def iter_extracted_zip_batches(
@@ -153,6 +190,64 @@ def iter_extracted_zip_batches(
             if timings is not None:
                 timings.add(
                     "source ZIP extraction consumer: join producer thread",
+                    time.monotonic() - join_started_at,
+                )
+
+
+@contextmanager
+def streamed_extracted_zip_batches(
+    zip_path: str | Path,
+    members: Iterable[ZipH5Member],
+    *,
+    member_count: int,
+    settings: ZipBatchSettings,
+    max_ready_batches: int,
+    idle_callback: Callable[[], None] | None = None,
+    timings: TimingRecorder | None = None,
+) -> Iterator[ExtractedZipBatchStream]:
+    batch_count_value = batch_count(member_count, settings.batch_size)
+    batch_queue: Queue[ExtractedZipBatch | None] = Queue(
+        maxsize=max(1, max_ready_batches)
+    )
+    stop_event = threading.Event()
+
+    with TemporaryDirectory() as tmp_dir:
+        extraction_root = Path(tmp_dir)
+        producer = threading.Thread(
+            target=_produce_extracted_zip_batches,
+            kwargs={
+                "zip_path": zip_path,
+                "members": members,
+                "batch_count_value": batch_count_value,
+                "batch_size": settings.batch_size,
+                "extraction_root": extraction_root,
+                "batch_queue": batch_queue,
+                "stop_event": stop_event,
+                "timings": timings,
+            },
+            daemon=True,
+        )
+        producer_start_started_at = time.monotonic()
+        producer.start()
+        if timings is not None:
+            timings.add(
+                "source ZIP extraction stream: start producer thread",
+                time.monotonic() - producer_start_started_at,
+            )
+        try:
+            yield ExtractedZipBatchStream(
+                batch_queue=batch_queue,
+                stop_event=stop_event,
+                idle_callback=idle_callback,
+                timings=timings,
+            )
+        finally:
+            stop_event.set()
+            join_started_at = time.monotonic()
+            producer.join()
+            if timings is not None:
+                timings.add(
+                    "source ZIP extraction stream: join producer thread",
                     time.monotonic() - join_started_at,
                 )
 
