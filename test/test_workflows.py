@@ -182,7 +182,7 @@ class FilesystemWorkflowTests(unittest.TestCase):
             zip_outputs=True,
             zip_name="outputs.zip",
             output_filename=None,
-            settings=ZipBatchSettings(batch_size=4, task_workers=1),
+            settings=ZipBatchSettings(batch_size=4),
             run_pipeline_file=run_pipeline_file,
             run_postprocesses=lambda *args, **kwargs: None,
             relative_parent=lambda *_args: Path("."),
@@ -340,7 +340,6 @@ class ZipPipelineParallelismTests(unittest.TestCase):
                 output_filename=None,
                 settings=ZipBatchSettings(
                     batch_size=2,
-                    task_workers=2,
                     process_workers=2,
                 ),
                 run_pipeline_file=process_pool_run_pipeline_file,
@@ -386,7 +385,6 @@ class ZipPipelineParallelismTests(unittest.TestCase):
                 output_dir=output_dir,
                 settings=ZipBatchSettings(
                     batch_size=2,
-                    task_workers=2,
                     process_workers=2,
                 ),
                 run_pipeline_file=process_pool_run_pipeline_file,
@@ -451,7 +449,6 @@ class ZipPipelineParallelismTests(unittest.TestCase):
                 start_final_progress=lambda _units, _status: None,
                 settings=ZipBatchSettings(
                     batch_size=2,
-                    task_workers=2,
                     process_workers=2,
                 ),
             )
@@ -526,10 +523,7 @@ class ZipPipelineParallelismTests(unittest.TestCase):
                 pipelines=[object()],
                 output_dir=output_dir,
                 output_filename=None,
-                settings=ZipBatchSettings(
-                    batch_size=4,
-                    task_workers=4,
-                ),
+                settings=ZipBatchSettings(batch_size=4),
                 run_pipeline_file=run_pipeline_file,
                 relative_parent=lambda *_args: Path("."),
                 log=lambda _message: None,
@@ -592,7 +586,6 @@ class ZipPipelineParallelismTests(unittest.TestCase):
                 settings=ZipBatchSettings(
                     batch_size=4,
                     extract_workers=1,
-                    pipeline_workers=4,
                 ),
                 run_pipeline_file=run_pipeline_file,
                 log=lambda _message: None,
@@ -616,7 +609,6 @@ class ZipPipelineParallelismTests(unittest.TestCase):
                 settings=ZipBatchSettings(
                     batch_size=4,
                     extract_workers=1,
-                    pipeline_workers=4,
                 ),
                 run_pipeline_file=run_pipeline_file,
                 log=lambda _message: None,

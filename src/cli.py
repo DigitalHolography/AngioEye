@@ -185,7 +185,7 @@ def run_cli(
                 zip_name=zip_name or "outputs.zip",
                 trim_source=trim_source,
                 zip_output_dir=_zip_output_dir,
-                zip_batch_settings=ZipBatchSettings.from_env(),
+                zip_batch_settings=ZipBatchSettings.from_app_settings(),
             ),
             _cli_workflow_callbacks(),
         )

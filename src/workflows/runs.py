@@ -453,7 +453,7 @@ def _run_holo_pipeline_jobs(
     use_process_pool = settings.process_workers > 1 and can_pickle(run_job)
     if use_process_pool:
         process_count = min(len(batches), max(1, settings.process_workers))
-        thread_count = max(1, settings.task_workers)
+        thread_count = max(1, settings.batch_size)
         log(
             f"[PROCESS] Starting ProcessPoolExecutor(max_workers={process_count}) "
             f"for {len(batches)} holo batch(es); each process uses "
@@ -492,7 +492,7 @@ def _run_holo_pipeline_jobs(
     for task_result in run_task_batch(
         jobs,
         run_item=run_job,
-        max_workers=settings.task_workers,
+        max_workers=settings.batch_size,
         idle_callback=idle_callback,
     ):
         _record_holo_task_result(

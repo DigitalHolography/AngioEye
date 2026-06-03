@@ -115,7 +115,7 @@ def run_filesystem_pipeline_run(
             log=log,
             advance_progress=advance_progress,
             process_workers=settings.process_workers,
-            thread_workers=settings.task_workers,
+            thread_workers=settings.batch_size,
             idle_callback=idle_callback,
             pool_timing_label="filesystem pipeline run: process pool wall time",
             batch_timing_label="filesystem pipeline run: process batch wall time",
@@ -136,7 +136,7 @@ def run_filesystem_pipeline_run(
         log(
             f"[BATCH] Running batch {batch_index}/{batch_count_value} "
             f"({len(job_batch)} file(s)) with "
-            f"{min(settings.task_workers, len(job_batch))} worker(s)..."
+            f"{min(settings.batch_size, len(job_batch))} worker(s)..."
         )
         batch_started_at = time.monotonic()
         _run_pipeline_job_batch(
@@ -147,7 +147,7 @@ def run_filesystem_pipeline_run(
             result=result,
             log=log,
             advance_progress=advance_progress,
-            max_workers=settings.task_workers,
+            max_workers=settings.batch_size,
             idle_callback=idle_callback,
             timings=result.timings,
         )
@@ -402,7 +402,7 @@ def run_zip_pipeline_run(
             "source ZIP pipeline run: pair extracted members with temp HDF5 paths",
             time.monotonic() - planning_started_at,
         )
-        worker_count = min(settings.task_workers, len(member_paths))
+        worker_count = min(settings.batch_size, len(member_paths))
         log(
             f"[ZIP] Running pipelines for batch {extracted_batch.index}/"
             f"{extracted_batch.count} with {worker_count} worker(s)..."
@@ -471,7 +471,7 @@ def _run_threaded_zip_batches_in_process_pool(
         "keeping one extracted batch ready ahead..."
     )
     process_count = min(batch_count_value, max(1, settings.process_workers))
-    thread_count = max(1, settings.task_workers)
+    thread_count = max(1, settings.batch_size)
     run_job = functools.partial(
         _run_pipeline_job_by_name,
         pipeline_names=tuple(pipeline_names),

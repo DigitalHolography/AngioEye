@@ -46,7 +46,9 @@ class WorkflowRunRequest:
     zip_output_dir: ZipOutputDir
     input_plan: RunInputPlan | None = None
     holo_paths: Sequence[Path] = ()
-    zip_batch_settings: ZipBatchSettings = field(default_factory=ZipBatchSettings.from_env)
+    zip_batch_settings: ZipBatchSettings = field(
+        default_factory=ZipBatchSettings.from_app_settings
+    )
     output_filename_for_run: OutputFilenameResolver = lambda _path, _inputs: None
 
 
@@ -254,7 +256,7 @@ def _dispatch_zip_workflow(
     callbacks.log(
         f"[ZIP] Found {input_plan.item_count} HDF5 file(s). "
         f"Extracting {request.zip_batch_settings.batch_size} at a time; "
-        f"running pipelines with {request.zip_batch_settings.pipeline_workers} "
+        f"running pipelines with {request.zip_batch_settings.batch_size} "
         "worker(s)."
     )
     workflow_result = run_zip_workflow(

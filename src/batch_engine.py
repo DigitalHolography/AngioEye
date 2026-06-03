@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import pickle
 import time
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import (
     FIRST_COMPLETED,
     ProcessPoolExecutor,
@@ -11,18 +11,20 @@ from concurrent.futures import (
     wait,
 )
 from dataclasses import dataclass, field
-from typing import Generic, TypeVar
+from typing import Any, Generic, TypeVar
+
+from app_settings import AppSettingsStore
 
 T = TypeVar("T")
 R = TypeVar("R")
 
 IdleCallback = Callable[[], None]
-MAX_TASK_WORKERS = 16 
+DEFAULT_BATCH_SIZE = 16
 DEFAULT_PROCESS_WORKERS = 8
 
 
-def default_task_workers() -> int:
-    return MAX_TASK_WORKERS
+def default_batch_size() -> int:
+    return DEFAULT_BATCH_SIZE
 
 
 def default_staging_workers() -> int:
@@ -30,36 +32,56 @@ def default_staging_workers() -> int:
     return max(1, cpu_count // 2)
 
 
-def env_int(name: str, default: int) -> int:
-    value = os.getenv(name)
+def _positive_int(value: object, default: int) -> int:
     try:
-        return max(1, int(value if value else default))
-    except ValueError:
+        if isinstance(value, bool) or value in (None, ""):
+            raise ValueError
+        return max(1, int(value))
+    except (TypeError, ValueError):
         return max(1, int(default))
+
+
+def settings_int(
+    settings: Mapping[str, Any],
+    key: str,
+    default: int,
+) -> int:
+    return _positive_int(settings.get(key), default)
 
 
 @dataclass(frozen=True)
 class BatchExecutionSettings:
-    batch_size: int = field(default_factory=default_task_workers)
+    batch_size: int = field(default_factory=default_batch_size)
     staging_workers: int = field(default_factory=default_staging_workers)
-    task_workers: int = field(default_factory=default_task_workers)
     process_workers: int = DEFAULT_PROCESS_WORKERS
 
     @classmethod
-    def from_env(cls) -> BatchExecutionSettings:
-        task_workers = env_int("ANGIOEYE_BATCH_TASK_WORKERS", default_task_workers())
+    def from_settings(
+        cls,
+        settings: Mapping[str, Any],
+    ) -> BatchExecutionSettings:
+        batch_size = settings_int(
+            settings,
+            "batch_size",
+            default_batch_size(),
+        )
         return cls(
-            batch_size=env_int("ANGIOEYE_BATCH_SIZE", task_workers),
-            staging_workers=env_int(
-                "ANGIOEYE_BATCH_STAGING_WORKERS",
+            batch_size=batch_size,
+            staging_workers=settings_int(
+                settings,
+                "staging_workers",
                 default_staging_workers(),
             ),
-            task_workers=task_workers,
-            process_workers=env_int(
-                "ANGIOEYE_BATCH_PROCESS_WORKERS",
+            process_workers=settings_int(
+                settings,
+                "process_workers",
                 DEFAULT_PROCESS_WORKERS,
             ),
         )
+
+    @classmethod
+    def from_app_settings(cls) -> BatchExecutionSettings:
+        return cls.from_settings(AppSettingsStore().load_batch_execution())
 
 
 @dataclass(frozen=True)
