@@ -13,6 +13,7 @@ if str(SRC_DIR) not in sys.path:
 
 from input_output import list_h5_members  # noqa: E402
 from workflows import (  # noqa: E402
+    HoloInputContext,
     RunWorkflowResult,
     WorkflowCallbacks,
     WorkflowInputError,
@@ -22,6 +23,7 @@ from workflows import (  # noqa: E402
     prepare_run_input,
     prepare_run_inputs,
     run_filesystem_workflow,
+    run_holo_workflow,
 )
 from workflows._pipeline_runs import (  # noqa: E402
     run_filesystem_pipeline_run,
@@ -31,6 +33,20 @@ from workflows._postprocess_requirements import (  # noqa: E402
     compatible_postprocess_files,
     missing_required_pipeline_errors,
 )
+
+
+def process_pool_run_pipeline_file(
+    h5_path,
+    _pipelines,
+    output_root,
+    output_relative_parent=Path("."),
+    output_filename=None,
+):
+    target_dir = output_root / output_relative_parent
+    target_dir.mkdir(parents=True, exist_ok=True)
+    output_path = target_dir / (output_filename or f"{h5_path.stem}_result.h5")
+    output_path.write_text("result", encoding="utf-8")
+    return output_path
 
 
 class PostprocessRequirementTests(unittest.TestCase):
@@ -166,7 +182,7 @@ class FilesystemWorkflowTests(unittest.TestCase):
             zip_outputs=True,
             zip_name="outputs.zip",
             output_filename=None,
-            settings=ZipBatchSettings(batch_size=4, task_workers=1),
+            settings=ZipBatchSettings(batch_size=4),
             run_pipeline_file=run_pipeline_file,
             run_postprocesses=lambda *args, **kwargs: None,
             relative_parent=lambda *_args: Path("."),
@@ -301,6 +317,160 @@ class FilesystemWorkflowTests(unittest.TestCase):
 
 
 class ZipPipelineParallelismTests(unittest.TestCase):
+    def test_run_filesystem_pipeline_run_uses_process_pool_for_picklable_runner(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            input_dir = tmp_path / "inputs"
+            input_dir.mkdir()
+            input_paths = []
+            for index in range(4):
+                input_path = input_dir / f"sample_{index}.h5"
+                input_path.write_text("h5", encoding="utf-8")
+                input_paths.append(input_path)
+            output_dir = tmp_path / "outputs"
+            output_dir.mkdir()
+            logs: list[str] = []
+            progress: list[float] = []
+
+            result = run_filesystem_pipeline_run(
+                inputs=input_paths,
+                data_root=input_dir,
+                pipelines=["waveform_shape_metrics"],
+                output_dir=output_dir,
+                output_filename=None,
+                settings=ZipBatchSettings(
+                    batch_size=2,
+                    process_workers=2,
+                ),
+                run_pipeline_file=process_pool_run_pipeline_file,
+                relative_parent=lambda *_args: Path("."),
+                log=logs.append,
+                advance_progress=progress.append,
+            )
+
+            self.assertEqual(4, len(result.processed_outputs))
+            self.assertEqual([], result.failures)
+            self.assertEqual([1, 1, 1, 1], progress)
+            self.assertTrue(
+                any(
+                    "Starting ProcessPoolExecutor(max_workers=2)" in message
+                    for message in logs
+                ),
+                logs,
+            )
+            self.assertTrue(
+                any(message.startswith("[BATCH OK]") for message in logs),
+                logs,
+            )
+
+    def test_run_zip_pipeline_run_uses_process_pool_for_picklable_runner(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            zip_path = tmp_path / "inputs.zip"
+            output_dir = tmp_path / "outputs"
+            output_dir.mkdir()
+            with zipfile.ZipFile(zip_path, "w") as archive:
+                for index in range(4):
+                    archive.writestr(f"CTRL/sample_{index}.h5", "h5")
+
+            members = list_h5_members(zip_path)
+            logs: list[str] = []
+            progress: list[float] = []
+
+            result = run_zip_pipeline_run(
+                zip_path=zip_path,
+                members=members,
+                member_count=len(members),
+                pipelines=["waveform_shape_metrics"],
+                output_dir=output_dir,
+                settings=ZipBatchSettings(
+                    batch_size=2,
+                    process_workers=2,
+                ),
+                run_pipeline_file=process_pool_run_pipeline_file,
+                log=logs.append,
+                advance_progress=progress.append,
+            )
+
+            self.assertEqual(4, len(result.processed_outputs))
+            self.assertEqual([], result.failures)
+            self.assertEqual([1, 1, 1, 1], progress)
+            self.assertTrue(
+                any(
+                    "Starting ProcessPoolExecutor(max_workers=2)" in message
+                    for message in logs
+                ),
+                logs,
+            )
+            self.assertTrue(
+                any(message.startswith("[ZIP] Streaming 4 file(s)") for message in logs),
+                logs,
+            )
+            self.assertTrue(
+                any(message.startswith("[PROCESS] Queued ZIP batch 2/2") for message in logs),
+                logs,
+            )
+
+    def test_run_holo_workflow_uses_process_pool_for_picklable_runner(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            contexts: list[HoloInputContext] = []
+            for index in range(4):
+                holo_path = tmp_path / f"sample_{index}.holo"
+                holo_path.write_text("holo", encoding="utf-8")
+                ef_dir = tmp_path / f"sample_{index}" / f"sample_{index}_EF"
+                h5_dir = ef_dir / "h5"
+                h5_dir.mkdir(parents=True)
+                h5_path = h5_dir / f"sample_{index}.h5"
+                h5_path.write_text("h5", encoding="utf-8")
+                contexts.append(
+                    HoloInputContext(
+                        holo_path=holo_path,
+                        ef_dir=ef_dir,
+                        h5_path=h5_path,
+                        output_dir=tmp_path
+                        / f"sample_{index}"
+                        / f"sample_{index}_AE",
+                    )
+                )
+
+            logs: list[str] = []
+            progress: list[float] = []
+
+            result = run_holo_workflow(
+                contexts=contexts,
+                pipelines=["waveform_shape_metrics"],
+                postprocesses=[],
+                selected_pipeline_names=["waveform_shape_metrics"],
+                run_pipeline_file=process_pool_run_pipeline_file,
+                run_postprocesses=lambda *args, **kwargs: None,
+                log=logs.append,
+                advance_progress=progress.append,
+                start_final_progress=lambda _units, _status: None,
+                settings=ZipBatchSettings(
+                    batch_size=2,
+                    process_workers=2,
+                ),
+            )
+
+            self.assertEqual(4, len(result.processed_outputs))
+            self.assertEqual([], result.failures)
+            self.assertEqual([1, 1, 1, 1], progress)
+            self.assertTrue(
+                any(
+                    "Starting ProcessPoolExecutor(max_workers=2)" in message
+                    for message in logs
+                ),
+                logs,
+            )
+            self.assertTrue(
+                any(
+                    message.startswith("[PROCESS] Queued holo batch 2/2")
+                    for message in logs
+                ),
+                logs,
+            )
+
     def test_run_filesystem_pipeline_run_parallelizes_files_inside_batch(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
@@ -353,10 +523,7 @@ class ZipPipelineParallelismTests(unittest.TestCase):
                 pipelines=[object()],
                 output_dir=output_dir,
                 output_filename=None,
-                settings=ZipBatchSettings(
-                    batch_size=4,
-                    task_workers=4,
-                ),
+                settings=ZipBatchSettings(batch_size=4),
                 run_pipeline_file=run_pipeline_file,
                 relative_parent=lambda *_args: Path("."),
                 log=lambda _message: None,
@@ -419,7 +586,6 @@ class ZipPipelineParallelismTests(unittest.TestCase):
                 settings=ZipBatchSettings(
                     batch_size=4,
                     extract_workers=1,
-                    pipeline_workers=4,
                 ),
                 run_pipeline_file=run_pipeline_file,
                 log=lambda _message: None,
@@ -443,7 +609,6 @@ class ZipPipelineParallelismTests(unittest.TestCase):
                 settings=ZipBatchSettings(
                     batch_size=4,
                     extract_workers=1,
-                    pipeline_workers=4,
                 ),
                 run_pipeline_file=run_pipeline_file,
                 log=lambda _message: None,

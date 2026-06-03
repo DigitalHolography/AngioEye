@@ -1,14 +1,25 @@
 from __future__ import annotations
 
 import shutil
+import threading
 import time
+from functools import cache, partial
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import mkdtemp
 from typing import Any, Protocol
 
+from batch_engine import (
+    BatchGroupResult,
+    BatchTaskResult,
+    can_pickle,
+    iter_batches,
+    run_task_batch,
+    run_threaded_batches_in_process_pool,
+)
 from input_output import ZipH5Member
+from pipelines import load_pipeline_catalog
 
 from ._holo import HoloInputContext, output_filename
 from ._pipeline_runs import (
@@ -19,6 +30,8 @@ from ._pipeline_runs import (
 )
 from ._zip_batches import ZipBatchSettings
 from .timing import TimingSamples
+
+_PIPELINE_RESOLVE_LOCK = threading.Lock()
 
 
 @dataclass
@@ -79,6 +92,12 @@ ZipProgressCallback = Callable[[int, int, Path], None]
 ZipOutputDir = Callable[[Path, Path | None, ZipProgressCallback | None], Path]
 IdleCallback = Callable[[], None]
 ZIP_COMPANION_OUTPUT_FOLDERS = ("png",)
+
+
+@dataclass(frozen=True)
+class HoloPipelineJob:
+    context: HoloInputContext
+    output_filename: str
 
 
 def copy_zip_companion_output_folders(
@@ -334,6 +353,8 @@ def run_holo_workflow(
     log: Callable[[str], None],
     advance_progress: Callable[[float], None],
     start_final_progress: Callable[[float, str], None],
+    settings: ZipBatchSettings,
+    idle_callback: IdleCallback | None = None,
 ) -> RunWorkflowResult:
     result = PipelineRunResult()
     pipeline_started_at = time.monotonic()
@@ -344,27 +365,30 @@ def run_holo_workflow(
         context: [] for context in contexts
     }
 
+    jobs = [
+        HoloPipelineJob(
+            context=context,
+            output_filename=output_filename(context.holo_path),
+        )
+        for context in contexts
+    ]
     for context in contexts:
         log(f"[INPUT] Holo file -> {context.holo_path}")
         log(f"[INPUT] EF h5 -> {context.h5_path}")
         log(f"[OUTPUT] AE folder -> {context.output_dir}")
-        try:
-            combined_output = run_pipeline_file(
-                context.h5_path,
-                pipelines,
-                context.output_dir,
-                Path("."),
-                output_filename(context.holo_path),
-            )
-        except Exception as exc:  # noqa: BLE001
-            result.failures.append(f"{context.h5_path}: {exc}")
-            log(f"[FAIL] {context.h5_path.name}: {exc}")
-            continue
 
-        result.processed_outputs.append(combined_output)
-        result.processed_input_paths.append(context.h5_path)
-        outputs_by_context[context].append(combined_output)
-        inputs_by_context[context].append(context.h5_path)
+    _run_holo_pipeline_jobs(
+        jobs=jobs,
+        pipelines=pipelines,
+        run_pipeline_file=run_pipeline_file,
+        settings=settings,
+        result=result,
+        outputs_by_context=outputs_by_context,
+        inputs_by_context=inputs_by_context,
+        log=log,
+        advance_progress=advance_progress,
+        idle_callback=idle_callback,
+    )
     _log_elapsed(log, "Pipeline phase", pipeline_started_at)
 
     if postprocesses:
@@ -401,6 +425,197 @@ def run_holo_workflow(
         failures=result.failures,
         summary_message=_holo_summary(result.processed_outputs),
     )
+
+
+def _run_holo_pipeline_jobs(
+    *,
+    jobs: Sequence[HoloPipelineJob],
+    pipelines: Sequence[Any],
+    run_pipeline_file: RunPipelineFile,
+    settings: ZipBatchSettings,
+    result: PipelineRunResult,
+    outputs_by_context: dict[HoloInputContext, list[Path]],
+    inputs_by_context: dict[HoloInputContext, list[Path]],
+    log: Callable[[str], None],
+    advance_progress: Callable[[float], None],
+    idle_callback: IdleCallback | None,
+) -> None:
+    if not jobs:
+        return
+
+    batches = list(iter_batches(jobs, settings.batch_size))
+    pipeline_names = _pipeline_names(pipelines)
+    run_job = partial(
+        _run_holo_pipeline_job_by_name,
+        pipeline_names=pipeline_names,
+        run_pipeline_file=run_pipeline_file,
+    )
+    use_process_pool = settings.process_workers > 1 and can_pickle(run_job)
+    if use_process_pool:
+        process_count = min(len(batches), max(1, settings.process_workers))
+        thread_count = max(1, settings.batch_size)
+        log(
+            f"[PROCESS] Starting ProcessPoolExecutor(max_workers={process_count}) "
+            f"for {len(batches)} holo batch(es); each process uses "
+            f"ThreadPoolExecutor(max_workers={thread_count})."
+        )
+        for batch_index, batch in enumerate(batches, start=1):
+            log(
+                f"[PROCESS] Queued holo batch {batch_index}/{len(batches)} "
+                f"({len(batch)} file(s))."
+            )
+        for batch_result in run_threaded_batches_in_process_pool(
+            batches,
+            run_item=run_job,
+            process_workers=process_count,
+            thread_workers=thread_count,
+            idle_callback=idle_callback,
+        ):
+            _record_holo_batch_result(
+                batch_result=batch_result,
+                jobs=batches[batch_result.index - 1],
+                result=result,
+                outputs_by_context=outputs_by_context,
+                inputs_by_context=inputs_by_context,
+                log=log,
+                advance_progress=advance_progress,
+                pipeline_count=len(pipeline_names),
+            )
+        log(f"[PROCESS] Process pool completed {len(batches)} holo batch(es).")
+        return
+
+    if settings.process_workers > 1:
+        log(
+            "[HOLO WARN] Process pool disabled because the configured file runner "
+            "or pipeline descriptors cannot be pickled; using threads."
+        )
+    for task_result in run_task_batch(
+        jobs,
+        run_item=run_job,
+        max_workers=settings.batch_size,
+        idle_callback=idle_callback,
+    ):
+        _record_holo_task_result(
+            task_result=task_result,
+            result=result,
+            outputs_by_context=outputs_by_context,
+            inputs_by_context=inputs_by_context,
+            log=log,
+            advance_progress=advance_progress,
+            pipeline_count=len(pipeline_names),
+        )
+
+
+def _run_holo_pipeline_job(
+    job: HoloPipelineJob,
+    *,
+    pipelines: Sequence[Any],
+    run_pipeline_file: RunPipelineFile,
+) -> Path:
+    return run_pipeline_file(
+        job.context.h5_path,
+        pipelines,
+        job.context.output_dir,
+        Path("."),
+        job.output_filename,
+    )
+
+
+def _run_holo_pipeline_job_by_name(
+    job: HoloPipelineJob,
+    *,
+    pipeline_names: tuple[str, ...],
+    run_pipeline_file: RunPipelineFile,
+) -> Path:
+    return _run_holo_pipeline_job(
+        job,
+        pipelines=_pipeline_descriptors_by_name(pipeline_names),
+        run_pipeline_file=run_pipeline_file,
+    )
+
+
+def _pipeline_names(pipelines: Sequence[Any]) -> tuple[str, ...]:
+    return tuple(getattr(pipeline, "name", str(pipeline)) for pipeline in pipelines)
+
+
+@cache
+def _pipeline_descriptors_by_name(pipeline_names: tuple[str, ...]) -> tuple[Any, ...]:
+    with _PIPELINE_RESOLVE_LOCK:
+        available, _missing = load_pipeline_catalog()
+        registry = {pipeline.name: pipeline for pipeline in available}
+        missing = [name for name in pipeline_names if name not in registry]
+        if missing:
+            raise ValueError(
+                f"Pipeline(s) not available in worker: {', '.join(missing)}"
+            )
+        return tuple(registry[name] for name in pipeline_names)
+
+
+def _record_holo_batch_result(
+    *,
+    batch_result: BatchGroupResult[HoloPipelineJob, Path],
+    jobs: Sequence[HoloPipelineJob],
+    result: PipelineRunResult,
+    outputs_by_context: dict[HoloInputContext, list[Path]],
+    inputs_by_context: dict[HoloInputContext, list[Path]],
+    log: Callable[[str], None],
+    advance_progress: Callable[[float], None],
+    pipeline_count: int,
+) -> None:
+    if batch_result.error is not None:
+        log(
+            f"[BATCH FAIL] Holo batch {batch_result.index}/"
+            f"{batch_result.count}: {batch_result.error}"
+        )
+        for job in jobs:
+            message = f"Batch process failed: {batch_result.error}"
+            result.failures.append(f"{job.context.h5_path}: {message}")
+            log(f"[FAIL] {job.context.h5_path.name}: {message}")
+            advance_progress(pipeline_count)
+        return
+
+    log(
+        f"[BATCH OK] Holo batch {batch_result.index}/{batch_result.count} "
+        f"finished in {_format_elapsed(batch_result.elapsed_seconds)} "
+        f"(process {batch_result.process_id})."
+    )
+    for task_result in batch_result.results:
+        _record_holo_task_result(
+            task_result=task_result,
+            result=result,
+            outputs_by_context=outputs_by_context,
+            inputs_by_context=inputs_by_context,
+            log=log,
+            advance_progress=advance_progress,
+            pipeline_count=pipeline_count,
+        )
+
+
+def _record_holo_task_result(
+    *,
+    task_result: BatchTaskResult[HoloPipelineJob, Path],
+    result: PipelineRunResult,
+    outputs_by_context: dict[HoloInputContext, list[Path]],
+    inputs_by_context: dict[HoloInputContext, list[Path]],
+    log: Callable[[str], None],
+    advance_progress: Callable[[float], None],
+    pipeline_count: int,
+) -> None:
+    job = task_result.item
+    context = job.context
+    if task_result.error is not None:
+        result.failures.append(f"{context.h5_path}: {task_result.error}")
+        log(f"[FAIL] {context.h5_path.name}: {task_result.error}")
+        advance_progress(pipeline_count)
+        return
+
+    assert task_result.value is not None
+    result.processed_outputs.append(task_result.value)
+    result.processed_input_paths.append(context.h5_path)
+    outputs_by_context[context].append(task_result.value)
+    inputs_by_context[context].append(context.h5_path)
+    log(f"[OK] {context.h5_path.name}: combined results -> {task_result.value}")
+    advance_progress(pipeline_count)
 
 
 def _holo_summary(processed_outputs: Sequence[Path]) -> str:
