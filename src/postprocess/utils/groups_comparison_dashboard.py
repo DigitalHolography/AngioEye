@@ -915,7 +915,6 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
             sig,
             where=mask,
             color=fill_color2,
-            interpolate=True,
         )
 
         info_box(
@@ -942,7 +941,6 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
             sig,
             where=mask,
             color=fill_color2,
-            interpolate=True,
         )
 
         info_box(
@@ -967,7 +965,6 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
             p,
             where=np.isfinite(p),
             color=fill_color2,
-            interpolate=True,
         )
 
         info_box([rf"$N_t/T = {nt_over_t:.3f}$"])
