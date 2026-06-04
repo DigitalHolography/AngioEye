@@ -20,6 +20,14 @@ from .dispatch import (
     make_zip_progress_callback,
 )
 from .inputs import RunInputKind, RunInputPlan, prepare_run_input, prepare_run_inputs
+from .request_state import (
+    WorkflowInputSelection,
+    WorkflowOutputOptions,
+    WorkflowRequestState,
+    WorkflowWorkSelection,
+    build_workflow_request,
+    resolve_base_output_dir,
+)
 from .runs import (
     ZIP_COMPANION_OUTPUT_FOLDERS,
     RunWorkflowResult,
@@ -42,7 +50,12 @@ __all__ = [
     "WorkflowCallbacks",
     "WorkflowDispatchResult",
     "WorkflowInputError",
+    "WorkflowInputSelection",
+    "WorkflowOutputOptions",
     "WorkflowRunRequest",
+    "WorkflowRequestState",
+    "WorkflowWorkSelection",
+    "build_workflow_request",
     "copy_zip_companion_output_folders",
     "dataset_dir",
     "ef_dir",
@@ -57,6 +70,7 @@ __all__ = [
     "prepare_run_inputs",
     "missing_required_pipeline_errors",
     "reset_output_dir",
+    "resolve_base_output_dir",
     "resolve_context",
     "run_filesystem_workflow",
     "run_holo_workflow",

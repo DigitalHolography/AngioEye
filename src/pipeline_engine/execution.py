@@ -73,6 +73,7 @@ def run_pipeline_file(
     output_path_allocator: OutputPathAllocator | None = None,
     record_timing: TimingCallback | None = None,
 ) -> Path:
+    output_path_started_at = time.monotonic()
     if output_path_allocator is None:
         output_path = _unique_pipeline_output_path(
             h5_path=h5_path,
@@ -87,6 +88,11 @@ def run_pipeline_file(
             output_relative_parent=output_relative_parent,
             output_filename=output_filename,
         )
+    _record_timing(
+        record_timing,
+        "per-file output path allocation",
+        time.monotonic() - output_path_started_at,
+    )
 
     try:
         compute_started_at = time.monotonic()
@@ -95,6 +101,7 @@ def run_pipeline_file(
             pipelines=pipelines,
             log=log,
             advance_progress=advance_progress,
+            record_timing=record_timing,
         )
         _record_timing(
             record_timing,
@@ -109,6 +116,7 @@ def run_pipeline_file(
             source_file=str(h5_path),
             trim_source=trim_source,
             idle_callback=write_idle_callback,
+            record_timing=record_timing,
         )
         _record_timing(
             record_timing,
@@ -138,10 +146,19 @@ def run_postprocesses(
     advance_progress: ProgressCallback,
     idle_callback: IdleCallback | None = None,
     resolve_postprocess_files: PostprocessFileResolver | None = None,
+    record_timing: TimingCallback | None = None,
 ) -> None:
     for descriptor in postprocesses:
+        descriptor_name = getattr(descriptor, "name", type(descriptor).__name__)
+        instantiate_started_at = time.monotonic()
         postprocess = descriptor.instantiate()
+        _record_timing(
+            record_timing,
+            f"per-postprocess instantiate [{descriptor_name}]",
+            time.monotonic() - instantiate_started_at,
+        )
         skipped_files: tuple[Path, ...] = ()
+        resolve_started_at = time.monotonic()
         if resolve_postprocess_files is None:
             processed_files = tuple(processed_outputs)
         else:
@@ -150,6 +167,12 @@ def run_postprocesses(
                 processed_outputs,
                 input_h5_paths,
             )
+        _record_timing(
+            record_timing,
+            f"per-postprocess compatible file resolution [{descriptor_name}]",
+            time.monotonic() - resolve_started_at,
+        )
+        context_started_at = time.monotonic()
         context = PostprocessContext(
             output_dir=output_dir,
             processed_files=processed_files,
@@ -159,6 +182,11 @@ def run_postprocesses(
             input_h5_paths=tuple(input_h5_paths),
             idle_callback=idle_callback,
         )
+        _record_timing(
+            record_timing,
+            f"per-postprocess context build [{descriptor_name}]",
+            time.monotonic() - context_started_at,
+        )
         log(f"[POST] Running {descriptor.name}...")
         if skipped_files:
             skipped_message = (
@@ -167,13 +195,23 @@ def run_postprocesses(
             )
             failures.append(skipped_message)
             log(f"[POST WARN] {skipped_message}")
-        if not processed_files and getattr(descriptor, "required_pipelines", ()):
+        has_pipeline_requirements = bool(
+            getattr(descriptor, "required_pipeline_options", ())
+            or getattr(descriptor, "required_pipelines", ())
+        )
+        if not processed_files and has_pipeline_requirements:
             log(f"[POST SKIP] {descriptor.name}: no compatible input files.")
             advance_progress(1.0)
             continue
         try:
+            run_started_at = time.monotonic()
             result = postprocess.run(context)
         except Exception as exc:  # noqa: BLE001
+            _record_timing(
+                record_timing,
+                f"per-postprocess run failed [{descriptor_name}]",
+                time.monotonic() - run_started_at,
+            )
             error_message = (
                 f"Postprocess '{descriptor.name}' failed: "
                 f"{type(exc).__name__}: {exc}"
@@ -182,7 +220,13 @@ def run_postprocesses(
             log(f"[POST FAIL] {error_message}")
             advance_progress(1.0)
             continue
+        _record_timing(
+            record_timing,
+            f"per-postprocess run [{descriptor_name}]",
+            time.monotonic() - run_started_at,
+        )
 
+        finish_started_at = time.monotonic()
         summary = (result.summary or "").strip()
         if summary:
             log(f"[POST OK] {descriptor.name}: {summary}")
@@ -192,6 +236,11 @@ def run_postprocesses(
             failures.append(warning)
             log(f"[POST WARN] {warning}")
         advance_progress(1.0)
+        _record_timing(
+            record_timing,
+            f"per-postprocess result logging/progress [{descriptor_name}]",
+            time.monotonic() - finish_started_at,
+        )
 
 
 def _unique_pipeline_output_path(
@@ -232,18 +281,63 @@ def _run_pipeline_descriptors(
     pipelines: Sequence[PipelineDescriptor],
     log: LogCallback | None,
     advance_progress: ProgressCallback | None,
+    record_timing: TimingCallback | None,
 ) -> list[tuple[str, ProcessResult]]:
     pipeline_results: list[tuple[str, ProcessResult]] = []
-    with h5py.File(h5_path, "r") as h5file:
+    h5_open_started_at = time.monotonic()
+    h5file = h5py.File(h5_path, "r")
+    _record_timing(
+        record_timing,
+        "per-file input HDF5 open for pipeline compute",
+        time.monotonic() - h5_open_started_at,
+    )
+    try:
         for pipeline_desc in pipelines:
+            descriptor_name = getattr(
+                pipeline_desc,
+                "name",
+                type(pipeline_desc).__name__,
+            )
+            instantiate_started_at = time.monotonic()
             pipeline = pipeline_desc.instantiate()
+            pipeline_name = getattr(pipeline, "name", descriptor_name)
+            _record_timing(
+                record_timing,
+                f"per-pipeline instantiate [{pipeline_name}]",
+                time.monotonic() - instantiate_started_at,
+            )
             try:
+                pipeline_started_at = time.monotonic()
                 result = pipeline.run(h5file)
             except Exception as exc:  # noqa: BLE001
+                _record_timing(
+                    record_timing,
+                    f"per-pipeline compute failed [{pipeline_name}]",
+                    time.monotonic() - pipeline_started_at,
+                )
                 raise RuntimeError(format_pipeline_exception(exc, pipeline)) from exc
+            _record_timing(
+                record_timing,
+                f"per-pipeline compute [{pipeline_name}]",
+                time.monotonic() - pipeline_started_at,
+            )
             pipeline_results.append((pipeline.name, result))
+            result_pack_started_at = time.monotonic()
             _log(log, f"[OK] {h5_path.name} -> {pipeline.name}")
             _advance(advance_progress)
+            _record_timing(
+                record_timing,
+                f"per-pipeline callback/log/progress [{pipeline_name}]",
+                time.monotonic() - result_pack_started_at,
+            )
+    finally:
+        h5_close_started_at = time.monotonic()
+        h5file.close()
+        _record_timing(
+            record_timing,
+            "per-file input HDF5 close after pipeline compute",
+            time.monotonic() - h5_close_started_at,
+        )
     return pipeline_results
 
 
@@ -254,6 +348,7 @@ def _write_pipeline_output(
     source_file: str,
     trim_source: bool,
     idle_callback: IdleCallback | None,
+    record_timing: TimingCallback | None,
 ) -> None:
     if idle_callback is None:
         _write_pipeline_output_sync(
@@ -261,6 +356,7 @@ def _write_pipeline_output(
             output_path=output_path,
             source_file=source_file,
             trim_source=trim_source,
+            record_timing=record_timing,
         )
         return
 
@@ -274,6 +370,7 @@ def _write_pipeline_output(
                 output_path=output_path,
                 source_file=source_file,
                 trim_source=trim_source,
+                record_timing=record_timing,
             )
         except Exception as exc:  # noqa: BLE001
             errors.append(exc)
@@ -281,10 +378,16 @@ def _write_pipeline_output(
             done_event.set()
 
     writer_thread = threading.Thread(target=_worker, daemon=True)
+    writer_wait_started_at = time.monotonic()
     writer_thread.start()
     while not done_event.wait(timeout=0.05):
         idle_callback()
     writer_thread.join()
+    _record_timing(
+        record_timing,
+        "per-file output write: wait for background writer thread",
+        time.monotonic() - writer_wait_started_at,
+    )
     if errors:
         raise errors[0]
 
@@ -295,18 +398,43 @@ def _write_pipeline_output_sync(
     output_path: Path,
     source_file: str,
     trim_source: bool,
+    record_timing: TimingCallback | None,
 ) -> None:
     copy_source = not pipeline_results
+    source_mode = (
+        "source copy disabled"
+        if trim_source and not copy_source
+        else "source copy enabled"
+    )
+    create_started_at = time.monotonic()
     create_h5_file(
         output_path,
         source_file=source_file,
         trim_source=trim_source and not copy_source,
     )
+    _record_timing(
+        record_timing,
+        f"per-file output write: create output HDF5 ({source_mode})",
+        time.monotonic() - create_started_at,
+    )
+    metric_tree_started_at = time.monotonic()
+    metric_trees = process_results_to_metric_trees(pipeline_results)
+    _record_timing(
+        record_timing,
+        "per-file output write: convert process results to metric trees",
+        time.monotonic() - metric_tree_started_at,
+    )
+    metrics_write_started_at = time.monotonic()
     write_metrics_trees_to_h5(
         output_path,
         ANGIOEYE_PROCESSING_ROOT,
-        process_results_to_metric_trees(pipeline_results),
+        metric_trees,
         overwrite=False,
+    )
+    _record_timing(
+        record_timing,
+        "per-file output write: write metric trees into HDF5",
+        time.monotonic() - metrics_write_started_at,
     )
 
 

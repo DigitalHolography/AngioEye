@@ -8,6 +8,9 @@ from typing import Any
 import h5py
 import numpy as np
 
+UTF8_STRING_DTYPE = h5py.string_dtype(encoding="utf-8")
+GroupCache = dict[str, h5py.Group]
+
 
 @dataclass
 class MetricsTree:
@@ -119,19 +122,38 @@ def create_unique_group(parent: h5py.Group, base_name: str) -> h5py.Group:
 
 
 def resolve_dataset_target(root_group: h5py.Group, key: str) -> tuple[h5py.Group, str]:
-    normalized_key = str(key).replace("\\", "/").strip("/")
-    parts = [part for part in normalized_key.split("/") if part]
+    return resolve_dataset_target_cached(root_group, key, {"": root_group})
+
+
+def resolve_dataset_target_cached(
+    root_group: h5py.Group,
+    key: str,
+    group_cache: GroupCache,
+) -> tuple[h5py.Group, str]:
+    parts = _dataset_key_parts(key)
     if not parts:
         raise ValueError("Dataset key cannot be empty.")
 
     parent = root_group
+    parent_path = ""
     for part in parts[:-1]:
+        group_path = f"{parent_path}/{part}" if parent_path else part
+        cached = group_cache.get(group_path)
+        if cached is not None:
+            parent = cached
+            parent_path = group_path
+            continue
+
         existing = parent.get(part)
         if existing is None:
             parent = parent.create_group(part)
+            group_cache[group_path] = parent
+            parent_path = group_path
             continue
         if isinstance(existing, h5py.Group):
             parent = existing
+            group_cache[group_path] = parent
+            parent_path = group_path
             continue
         raise ValueError(
             f"Cannot create subgroup '{part}' for key '{key}': a dataset already exists at that path."
@@ -140,16 +162,16 @@ def resolve_dataset_target(root_group: h5py.Group, key: str) -> tuple[h5py.Group
     return parent, parts[-1]
 
 
+def _dataset_key_parts(key: str) -> list[str]:
+    normalized_key = str(key).replace("\\", "/").strip("/")
+    return [part for part in normalized_key.split("/") if part]
+
+
 def set_attr_safe(h5obj: h5py.File | h5py.Group | h5py.Dataset, key: str, value) -> None:
     if isinstance(value, str):
-        h5obj.attrs.create(key, value, dtype=h5py.string_dtype(encoding="utf-8"))
+        h5obj.attrs.create(key, value, dtype=UTF8_STRING_DTYPE)
         return
-    data = value
-    if isinstance(value, (list, tuple)):
-        if all(isinstance(v, str) for v in value):
-            data = np.asarray(value, dtype=h5py.string_dtype(encoding="utf-8"))
-        else:
-            data = np.asarray(value)
+    data = _list_payload(value)
     try:
         h5obj.attrs[key] = data
     except (TypeError, ValueError):
@@ -157,56 +179,67 @@ def set_attr_safe(h5obj: h5py.File | h5py.Group | h5py.Dataset, key: str, value)
 
 
 def write_value_dataset(group: h5py.Group, key: str, value) -> None:
-    ds_attrs = None
-    data = value
+    write_value_dataset_cached(group, key, value, {"": group})
 
-    if hasattr(value, "data") and hasattr(value, "attrs"):
-        data = value.data
-        ds_attrs = value.attrs
-    elif isinstance(value, tuple) and len(value) == 2 and isinstance(value[1], dict):
-        data, ds_attrs = value
 
-    target_group, dataset_key = resolve_dataset_target(group, str(key))
+def write_value_dataset_cached(
+    group: h5py.Group,
+    key: str,
+    value,
+    group_cache: GroupCache,
+) -> None:
+    data, ds_attrs = _dataset_payload_and_attrs(value)
+    target_group, dataset_key = resolve_dataset_target_cached(
+        group,
+        str(key),
+        group_cache,
+    )
     if dataset_key in target_group:
         del target_group[dataset_key]
 
-    if isinstance(data, str):
-        dataset = target_group.create_dataset(
-            dataset_key, data=data, dtype=h5py.string_dtype(encoding="utf-8")
-        )
-    elif isinstance(data, (list, tuple)) and all(
-        isinstance(item, str) for item in data
-    ):
-        str_dtype = h5py.string_dtype(encoding="utf-8")
-        dataset = target_group.create_dataset(
-            dataset_key,
-            data=np.asarray(data, dtype=object),
-            dtype=str_dtype,
-        )
-    else:
-        payload = data
-        if isinstance(data, (list, tuple)):
-            payload = np.asarray(data)
-        try:
-            dataset = target_group.create_dataset(dataset_key, data=payload)
-        except (TypeError, ValueError):
-            if isinstance(payload, np.ndarray) and payload.dtype.kind in {"U", "O"}:
-                str_dtype = h5py.string_dtype(encoding="utf-8")
-                dataset = target_group.create_dataset(
-                    dataset_key,
-                    data=np.asarray(payload, dtype=object),
-                    dtype=str_dtype,
-                )
-            else:
-                dataset = target_group.create_dataset(
-                    dataset_key,
-                    data=str(data),
-                    dtype=h5py.string_dtype(encoding="utf-8"),
-                )
-
+    dataset = _create_dataset(target_group, dataset_key, data)
     if ds_attrs:
         for attr_key, attr_val in ds_attrs.items():
             set_attr_safe(dataset, attr_key, attr_val)
+
+
+def _dataset_payload_and_attrs(value) -> tuple[Any, dict[str, Any] | None]:
+    if hasattr(value, "data") and hasattr(value, "attrs"):
+        return value.data, value.attrs
+    if isinstance(value, tuple) and len(value) == 2 and isinstance(value[1], dict):
+        return value
+    return value, None
+
+
+def _list_payload(data):
+    if not isinstance(data, (list, tuple)):
+        return data
+    if all(isinstance(item, str) for item in data):
+        return np.asarray(data, dtype=UTF8_STRING_DTYPE)
+    return np.asarray(data)
+
+
+def _create_dataset(group: h5py.Group, key: str, data) -> h5py.Dataset:
+    if isinstance(data, str):
+        return group.create_dataset(key, data=data, dtype=UTF8_STRING_DTYPE)
+    if isinstance(data, (list, tuple)) and all(isinstance(item, str) for item in data):
+        return group.create_dataset(
+            key,
+            data=np.asarray(data, dtype=object),
+            dtype=UTF8_STRING_DTYPE,
+        )
+
+    payload = _list_payload(data)
+    try:
+        return group.create_dataset(key, data=payload)
+    except (TypeError, ValueError):
+        if isinstance(payload, np.ndarray) and payload.dtype.kind in {"U", "O"}:
+            return group.create_dataset(
+                key,
+                data=np.asarray(payload, dtype=object),
+                dtype=UTF8_STRING_DTYPE,
+            )
+        return group.create_dataset(key, data=str(data), dtype=UTF8_STRING_DTYPE)
 
 
 def write_metrics_tree_group(
@@ -222,25 +255,22 @@ def write_metrics_tree_group(
             del parent[group_name]
         else:
             group = create_unique_group(parent, group_name)
-            set_attr_safe(group, "pipeline", tree.name)
-            if tree.attrs:
-                for key, value in tree.attrs.items():
-                    if key == "pipeline":
-                        continue
-                    set_attr_safe(group, key, value)
-            for key, value in tree.metrics.items():
-                write_value_dataset(group, key, value)
-            return group
+            return _write_metrics_to_group(group, tree)
 
     group = parent.create_group(group_name)
+    return _write_metrics_to_group(group, tree)
+
+
+def _write_metrics_to_group(group: h5py.Group, tree: MetricsTree) -> h5py.Group:
     set_attr_safe(group, "pipeline", tree.name)
     if tree.attrs:
         for key, value in tree.attrs.items():
             if key == "pipeline":
                 continue
             set_attr_safe(group, key, value)
+    group_cache: GroupCache = {"": group}
     for key, value in tree.metrics.items():
-        write_value_dataset(group, key, value)
+        write_value_dataset_cached(group, key, value, group_cache)
     return group
 
 

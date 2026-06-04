@@ -18,6 +18,7 @@ Inputs:
 from __future__ import annotations
 
 import argparse
+import multiprocessing
 import sys
 import time
 from collections.abc import Callable, Sequence
@@ -184,7 +185,7 @@ def run_cli(
                 zip_name=zip_name or "outputs.zip",
                 trim_source=trim_source,
                 zip_output_dir=_zip_output_dir,
-                zip_batch_settings=ZipBatchSettings.from_env(),
+                zip_batch_settings=ZipBatchSettings.from_app_settings(),
             ),
             _cli_workflow_callbacks(),
         )
@@ -319,5 +320,6 @@ def _format_elapsed(seconds: float) -> str:
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     raise SystemExit(main())
 

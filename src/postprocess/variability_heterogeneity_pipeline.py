@@ -22,7 +22,10 @@ from .core.base import (
         "metrics computed from by-segment arterial waveform shape metrics."
     ),
     required_deps=["pandas>=2.1", "scipy>=1.10"],
-    required_pipelines=["waveform_shape_metrics_denoised"],
+    required_pipeline_options=[
+        ["waveform_shape_metrics"],
+        ["waveform_shape_metrics_denoised"],
+    ],
 )
 class VariabilityHeterogeneityPostprocess(BatchPostprocess):
     def run(self, context: PostprocessContext) -> PostprocessResult:

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import functools
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
 from input_output import relative_hdf5_parent
-from pipeline_engine import OutputPathAllocator, run_pipeline_file, run_postprocesses
+from pipeline_engine import run_pipeline_file, run_postprocesses
 
 from ._holo import HoloInputContext
 from ._holo import find_ae_h5 as find_holo_ae_h5
@@ -45,7 +46,9 @@ class WorkflowRunRequest:
     zip_output_dir: ZipOutputDir
     input_plan: RunInputPlan | None = None
     holo_paths: Sequence[Path] = ()
-    zip_batch_settings: ZipBatchSettings = field(default_factory=ZipBatchSettings.from_env)
+    zip_batch_settings: ZipBatchSettings = field(
+        default_factory=ZipBatchSettings.from_app_settings
+    )
     output_filename_for_run: OutputFilenameResolver = lambda _path, _inputs: None
 
 
@@ -129,11 +132,13 @@ def _dispatch_holo_workflow(
         pipelines=request.pipelines,
         postprocesses=request.postprocesses,
         selected_pipeline_names=request.selected_pipeline_names,
-        run_pipeline_file=_pipeline_file_runner(request, callbacks, worker_safe=False),
+        run_pipeline_file=_pipeline_file_runner(request, callbacks, worker_safe=True),
         run_postprocesses=_postprocess_runner(request, callbacks),
         log=callbacks.log,
         advance_progress=callbacks.advance_progress,
         start_final_progress=callbacks.start_final_progress,
+        settings=request.zip_batch_settings,
+        idle_callback=callbacks.idle_callback,
     )
     return WorkflowDispatchResult(
         workflow_result=workflow_result,
@@ -179,7 +184,9 @@ def _dispatch_holo_postprocess_workflow(
             log=callbacks.log,
             advance_progress=callbacks.advance_progress,
             idle_callback=callbacks.idle_callback,
-            resolve_postprocess_files=_resolve_postprocess_files,
+            resolve_postprocess_files=_postprocess_file_resolver(
+                request.selected_pipeline_names
+            ),
         )
 
     summary = (
@@ -249,7 +256,7 @@ def _dispatch_zip_workflow(
     callbacks.log(
         f"[ZIP] Found {input_plan.item_count} HDF5 file(s). "
         f"Extracting {request.zip_batch_settings.batch_size} at a time; "
-        f"running pipelines with {request.zip_batch_settings.pipeline_workers} "
+        f"running pipelines with {request.zip_batch_settings.batch_size} "
         "worker(s)."
     )
     workflow_result = run_zip_workflow(
@@ -267,7 +274,6 @@ def _dispatch_zip_workflow(
             request,
             callbacks,
             worker_safe=True,
-            output_path_allocator=OutputPathAllocator(),
         ),
         run_postprocesses=_postprocess_runner(request, callbacks),
         zip_output_dir=request.zip_output_dir,
@@ -329,7 +335,6 @@ def _dispatch_filesystem_workflow(
             request,
             callbacks,
             worker_safe=True,
-            output_path_allocator=OutputPathAllocator(),
         ),
         run_postprocesses=_postprocess_runner(request, callbacks),
         relative_parent=relative_hdf5_parent,
@@ -349,8 +354,17 @@ def _pipeline_file_runner(
     callbacks: WorkflowCallbacks,
     *,
     worker_safe: bool,
-    output_path_allocator: OutputPathAllocator | None = None,
 ):
+    if worker_safe:
+        return functools.partial(
+            run_pipeline_file,
+            trim_source=request.trim_source,
+            log=None,
+            advance_progress=None,
+            write_idle_callback=None,
+            output_path_allocator=None,
+        )
+
     def _run_pipeline_file(
         h5_path: Path,
         pipelines: Sequence[Any],
@@ -367,10 +381,10 @@ def _pipeline_file_runner(
             output_relative_parent,
             output_filename,
             trim_source=request.trim_source,
-            log=None if worker_safe else callbacks.log,
-            advance_progress=None if worker_safe else callbacks.advance_progress,
-            write_idle_callback=None if worker_safe else callbacks.idle_callback,
-            output_path_allocator=output_path_allocator,
+            log=callbacks.log,
+            advance_progress=callbacks.advance_progress,
+            write_idle_callback=callbacks.idle_callback,
+            output_path_allocator=None,
             record_timing=record_timing,
         )
 
@@ -391,6 +405,7 @@ def _postprocess_runner(
         failures: list[str],
         *,
         zip_outputs: bool,
+        record_timing=None,
     ) -> None:
         run_postprocesses(
             postprocesses,
@@ -404,17 +419,43 @@ def _postprocess_runner(
             log=callbacks.log,
             advance_progress=callbacks.advance_progress,
             idle_callback=callbacks.idle_callback,
-            resolve_postprocess_files=_resolve_postprocess_files,
+            resolve_postprocess_files=_postprocess_file_resolver(
+                selected_pipeline_names
+            ),
+            record_timing=record_timing,
         )
 
     return _run_postprocesses
 
 
-def _resolve_postprocess_files(descriptor, processed_outputs, input_h5_paths):
+def _postprocess_file_resolver(selected_pipeline_names):
+    return lambda descriptor, processed_outputs, input_h5_paths: (
+        _resolve_postprocess_files(
+            descriptor,
+            processed_outputs,
+            input_h5_paths,
+            selected_pipeline_names=selected_pipeline_names,
+        )
+    )
+
+
+def _resolve_postprocess_files(
+    descriptor,
+    processed_outputs,
+    input_h5_paths,
+    *,
+    selected_pipeline_names=(),
+):
     result = compatible_postprocess_files(
         processed_outputs=processed_outputs,
         input_h5_paths=input_h5_paths,
         required_pipelines=getattr(descriptor, "required_pipelines", ()),
+        required_pipeline_options=getattr(
+            descriptor,
+            "required_pipeline_options",
+            (),
+        ),
+        selected_pipeline_names=selected_pipeline_names,
     )
     return result.files, result.skipped
 

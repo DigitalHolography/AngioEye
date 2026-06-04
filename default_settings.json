@@ -1,4 +1,8 @@
 {
+  "batch_execution": {
+    "batch_size": 16,
+    "process_workers": 8
+  },
   "pipeline_visibility": {
     "Windkessel_RC": false,
     "lowrank_pulsatility_metrics": false,
