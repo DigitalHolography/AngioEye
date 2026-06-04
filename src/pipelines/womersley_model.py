@@ -2,18 +2,15 @@ import h5py
 
 # import matplotlib.pyplot as plt
 import numpy as np
-from numpy.ma import ceil
 from scipy.interpolate import interp1d
 from scipy.optimize import curve_fit
-from scipy.signal import convolve, windows
 from scipy.special import jv
 
 from .core.base import ProcessPipeline, ProcessResult, registerPipeline
 
 num_interp_points_t = 128  # Number of temporal points for interpolation
 num_interp_points_x = 16  # Number of spatial points for interpolation
-fwhm = 10 * 1e-6  # Full width at half maximum for Gaussian PSF in m
-pixel_size = 4.5e-6  # in m
+pixel_size = 10e-6  # in m
 nu = 3.5 * 1e-6  # Viscosity in m^2/s
 f0 = 1.2
 omega_0 = 2 * np.pi * f0
@@ -47,8 +44,9 @@ def preprocess_v_profile_meas(num_interp_points_x, v_profile):
         fill_value="extrapolate",  # type: ignore
     )
     v_interp = interpolator(x_interp)
+    ratio = (num_interp_points_x - 1) / (len(v_valid) - 1)
 
-    return np.asanyarray(v_interp)
+    return np.asarray(v_interp), ratio
 
 
 def extract_v_profile_meas(dataset, num_interp_points_x):
@@ -65,12 +63,14 @@ def extract_v_profile_meas(dataset, num_interp_points_x):
         (n_t, num_interp_points_x, n_branches, n_radii), dtype=float
     )
 
+    ratio_map = np.zeros((n_branches, n_radii))
+
     for branch_idx in range(n_branches):
         for radii_idx in range(n_radii):
             for t_idx in range(n_t):
                 v_profile = np.asarray(dataset[t_idx, :, branch_idx, radii_idx]) * 1e-3
 
-                v_interp = preprocess_v_profile_meas(
+                v_interp, ratio = preprocess_v_profile_meas(
                     num_interp_points_x=num_interp_points_x,
                     v_profile=v_profile,
                 )
@@ -91,7 +91,9 @@ def extract_v_profile_meas(dataset, num_interp_points_x):
                     v_meas_dc
                 )
 
-    return dataset_x, v_profile_fft, v_profile_meas_n1, v_profile_meas_dc
+                ratio_map[branch_idx, radii_idx] = ratio
+
+    return dataset_x, v_profile_fft, v_profile_meas_n1, v_profile_meas_dc, ratio_map
 
 
 # v_profile_meas_extraction
@@ -175,38 +177,29 @@ def _abel_cell_integral(x_abs, r_left, r_right):
     return 2.0 * (upper_term - lower_term)
 
 
-def apply_abel_projection(u_n):
-    L = len(u_n)
-    n_half = L // 2
+def apply_abel_projection(L):
+    x_grid = np.linspace(1 / L, 1, L // 2)
 
-    u_left = u_n[:n_half]
-    u_right = u_n[n_half:]
-    u_left = u_left[::-1]
-    x_grid = (np.arange(n_half) + 0.5) / n_half
-    r_grid = (np.arange(n_half + 1)) / n_half
+    r_edges = np.linspace(0, 1.1, L // 2 + 1)
 
-    K = np.zeros((n_half, n_half))
-    for i, xi in enumerate(x_grid):
-        for j in range(n_half):
-            K[i, j] = _abel_cell_integral(xi, r_grid[j], r_grid[j + 1])
-    print(f"K: {K}")
-    v_left = K @ u_left
-    v_right = K @ u_right
+    K_block = np.zeros((L // 2, L // 2))
 
-    v_left = v_left[::-1]
+    for i, x in enumerate(x_grid):
+        x_abs = abs(x)
 
-    v_model = np.concatenate([v_left, v_right])
-    return v_model
+        for j in range(L // 2):
+            K_block[i, j] = _abel_cell_integral(
+                x_abs,
+                r_edges[j],
+                r_edges[j + 1],
+            )
+    A = np.fliplr(np.flipud(K_block))
+    B = np.zeros_like(K_block)
+    C = np.zeros_like(K_block)
+    D = K_block
+    K = np.block([[A, B], [C, D]])
 
-
-def psf_gaussian(fwhm, dx):
-    fwhm_in_points = fwhm / dx
-    sigma_in_points = fwhm_in_points / (2 * np.sqrt(2 * np.log(2)))
-    kernel_radius = ceil(3 * sigma_in_points)
-    kernel_size = 2 * kernel_radius + 1
-    psf_kernel = windows.gaussian(kernel_size, std=sigma_in_points)
-    psf_kernel /= psf_kernel.sum()
-    return psf_kernel
+    return K
 
 
 def parabola(x, A, x0, y0):
@@ -251,7 +244,7 @@ def parabola_fit(V):
                     f"r0={r0_fit:.4f}, "
                     f"x0={x0_fit:.4f}, "
                     f"y0={y0_fit:.4f}, "
-                    f"A={A_fit:.4f}"
+                    f"A={A_fit:.4f},"
                 )
 
             except Exception as e:
@@ -261,112 +254,46 @@ def parabola_fit(V):
     return segment_data
 
 
-def liste_complet(liste2):
-    def union_liste(liste1, liste2):
-        liste = []
+def womersley_Bn(L, R0, nu, omega_n, x0, r0):
+    x = np.arange(L)
 
-        for k in range(len(liste1)):
-            liste.append(liste1[k])
-
-        for k in range(len(liste2)):
-            liste.append(liste2[k])
-
-        return liste
-
-    liste1 = []
-
-    n = len(liste2)
-
-    for k in range(len(liste2)):
-        liste1.append(liste2[n - k - 1])
-
-    return union_liste(liste1, liste2)
-
-
-def womersley_Bn(Vn, R0, nu, omega_n, x0):
-    L = len(Vn)
-
-    n_points = int(L / 2)
-
-    x = np.linspace(1 / (2 * n_points), 1, n_points)
+    x_norm = (x - x0) / r0
 
     alpha_n = R0 * np.sqrt(omega_n / nu)
 
-    lambda_n = np.exp(1j * 3 * np.pi / 4) * alpha_n
+    print("===================================================")
+    print(f"x_norm: {x_norm},")
+    print(f"alpha: {alpha_n}")
 
-    Bn_half = 1 - jv(0, lambda_n * x) / jv(0, lambda_n)
+    lam = np.exp(1j * 3 * np.pi / 4) * alpha_n
 
-    Bn_full = liste_complet(Bn_half)
+    Bn = 1 - jv(0, lam * np.abs(x_norm)) / jv(0, lam)
 
-    x_old = np.arange(L)
+    mask = np.abs(x_norm) > 1
+    idx = np.where(mask)[0]
 
-    x_center_ideal = (L - 1) / 2.0
+    left_idx = idx[idx < L / 2]
+    for i in left_idx[::-1]:
+        if i + 1 < L:
+            Bn[i] = Bn[i + 1] / 4
 
-    delta_x = x0 - x_center_ideal
+    right_idx = idx[idx >= L / 2]
+    for i in right_idx:
+        if i - 1 >= 0:
+            Bn[i] = Bn[i - 1] / 4
 
-    x_shifted = x_old - delta_x
-
-    Bn_shifted_real = np.interp(x_shifted, x_old, np.real(Bn_full), left=0, right=0)
-
-    Bn_shifted_imag = np.interp(x_shifted, x_old, np.imag(Bn_full), left=0, right=0)
-
-    Bn_shifted = Bn_shifted_real + 1j * Bn_shifted_imag
-
-    return np.array(Bn_shifted, dtype=complex)
-
-
-def womersley_Psin(Vn, R0, nu, omega_n, x0):
-    L = len(Vn)
-
-    n_points = int(L / 2)
-
-    x = np.linspace(1 / (2 * n_points), 1, n_points)
-
-    alpha_n = R0 * np.sqrt(omega_n / nu)
-
-    lambda_n = np.exp(1j * 3 * np.pi / 4) * alpha_n
-
-    Psin_half = (
-        (-lambda_n * jv(1, lambda_n)) / (jv(0, lambda_n) ** 2) * jv(0, lambda_n * x)
-    )
-
-    Psin_full = liste_complet(Psin_half)
-
-    x_old = np.arange(L)
-
-    x_center_ideal = (L - 1) / 2.0
-
-    delta_x = x0 - x_center_ideal
-
-    x_shifted = x_old - delta_x
-
-    Psin_shifted_real = np.interp(x_shifted, x_old, np.real(Psin_full), left=0, right=0)
-
-    Psin_shifted_imag = np.interp(x_shifted, x_old, np.imag(Psin_full), left=0, right=0)
-
-    Psin_shifted = Psin_shifted_real + 1j * Psin_shifted_imag
-
-    return np.array(Psin_shifted, dtype=complex)
+    return Bn.astype(complex)
 
 
-def compute_Cn(Vn, model, flag):
-    if flag:
-        print("TODO")
+def compute_Cn(Vn, KBn):
+    numerator = np.sum(np.conj(KBn) * Vn)
 
-    else:
-        numerator = np.sum(np.conj(model) * Vn)
+    denominator = np.sum(np.abs(KBn) ** 2)
 
-        denominator = np.sum(np.abs(model) ** 2)
-
-        return numerator / denominator
+    return numerator / denominator
 
 
-def compute_Dn(Vn, model, flag):
-    if flag:
-        print("TODO")
-
-
-def generate_harmonic_flow_profile(V, segment_data):
+def generate_harmonic_flow_profile(V, segment_data, ratio_map):
     v_model_fft = np.zeros(
         (V.shape[0], V.shape[1], V.shape[2], V.shape[3]), dtype=complex
     )
@@ -379,46 +306,41 @@ def generate_harmonic_flow_profile(V, segment_data):
             y0 = segment_data[(branch_index, circle_index)]["y0"]
             x0 = segment_data[(branch_index, circle_index)]["x0"]
             A = segment_data[(branch_index, circle_index)]["A"]
-
-            print("\n===================================================")
-            print(f"branch = {branch_index}, circle = {circle_index}")
-            print(f"r0 = {r0}, y0 = {y0}, x0 = {x0}")
-            print("===================================================\n")
+            dx = ratio_map[branch_index, circle_index]
 
             matrix = V[:, :, branch_index, circle_index]
-
             x = np.arange(matrix.shape[1])
 
+            threshold = -2
+            model_0 = parabola(x, A, x0, y0)
+            skip_segment = model_0[0] < threshold or model_0[-1] < threshold
+            # if model_0[0] < threshold or model_0[-1] < threshold:
+            #     print(f"Skip branch={branch_index}, circle={circle_index} for Womersley modeling.")
+
             Cn = np.zeros(V.shape[0], dtype=complex)
-            # Dn = np.zeros(V.shape[0], dtype=complex)
 
-            for n in range(3):
-                print(f"n = {n}")
+            L = len(x)
+            K = apply_abel_projection(L)
 
+            for n in range(4):
                 Vn = np.array(matrix[n], dtype=complex)
 
-                R0 = r0 * pixel_size
+                R0 = r0 * pixel_size / dx
 
                 if n == 0:
                     model = parabola(x, A, x0, y0)
+
                 else:
+                    if skip_segment:
+                        continue
+
                     omega_n = n * omega_0
+                    Bn = womersley_Bn(L, R0, nu, omega_n, x0, r0)
+                    KBn = K @ Bn
+                    Cn[n] = compute_Cn(Vn, KBn)
+                    model = Cn[n] * Bn
 
-                    Bn = womersley_Bn(Vn, R0, nu, omega_n, x0)
-
-                    Cn[n] = compute_Cn(Vn, Bn, flag=False)
-                    model_rigidwall = Cn[n] * Bn
-
-                    # model_movingwall = (Cn[n] * Bn) + (Dn[n] * Psin)
-
-                    model = model_rigidwall
-
-                u_n = model
-
-                psf_kernel = psf_gaussian(fwhm, pixel_size)
-                v_prof = apply_abel_projection(u_n)
-                v_blurred = convolve(v_prof, psf_kernel, mode="same")
-                v_model_fft[n, :, branch_index, circle_index] = v_blurred
+                v_model_fft[n, :, branch_index, circle_index] = model
 
     v_model = np.fft.irfft(v_model_fft, axis=0)
 
@@ -451,7 +373,7 @@ class WomersleyModeling(ProcessPipeline):
         # b_period = np.mean(obj[:])
         # print(f"b_period: {b_period}")
 
-        dataset_x, v_profile_fft, v_profile_meas_n1, v_profile_meas_dc = (
+        dataset_x, v_profile_fft, v_profile_meas_n1, v_profile_meas_dc, ratio_map = (
             extract_v_profile_meas(
                 dataset=dataset,
                 num_interp_points_x=num_interp_points_x,
@@ -465,7 +387,9 @@ class WomersleyModeling(ProcessPipeline):
 
         # v_pulse_fft_filtered, r0_std = profile_analysis()
         segment_data = parabola_fit(v_pulse_fft)
-        v_model, v_model_fft = generate_harmonic_flow_profile(v_pulse_fft, segment_data)
+        v_model, v_model_fft = generate_harmonic_flow_profile(
+            v_pulse_fft, segment_data, ratio_map
+        )
 
         metrics: dict = {}
         metrics["dataset_x"] = np.asarray(dataset_x)
@@ -477,7 +401,5 @@ class WomersleyModeling(ProcessPipeline):
         metrics["v_pulse_meas_dc"] = np.asarray(v_pulse_meas_dc)
         metrics["v_model"] = np.asarray(v_model)
         metrics["v_model_fft"] = np.asarray(v_model_fft)
-        # metrics["v_profile_fft_filtered"] = np.asarray(v_pulse_fft_filtered)
-        # metrics["r0_std"] = r0_std
 
         return ProcessResult(metrics=metrics)
