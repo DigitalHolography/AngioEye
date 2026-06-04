@@ -56,9 +56,6 @@ SELECTED_METRICS = {
     "t50_over_T",
     "eta_h",
 }
-METRIC_ALIASES = {
-    "Hspec": "spectral_entropy",
-}
 
 LATEX_FORMULAS = {
     "RI": r"$\rm RI$",
@@ -206,7 +203,7 @@ def build_metrics_table_for_file(metrics_dict):
     rows = []
 
     for metric in sorted(SELECTED_METRICS):
-        metric_key = METRIC_ALIASES.get(metric, metric)
+        metric_key = metric
 
         artery_values = metrics_dict.get("artery", {}).get(metric_key, {})
         vein_values = metrics_dict.get("vein", {}).get(metric_key, {})
