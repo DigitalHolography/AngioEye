@@ -1,6 +1,6 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
-from angioeye_io.archive_io import (
+from input_output.archive_io import (
     extract_file_from_zip,
     extract_folder_from_zip,
     temporary_zip_from_tree,
@@ -72,3 +72,4 @@ class GraphicsDashboardPostprocess(BatchPostprocess):
         ]
         summary = f" Generated dashboard {len(png_paths)} PNG illustration(s)."
         return PostprocessResult(summary=summary, generated_paths=created_paths)
+

@@ -1,11 +1,11 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from pathlib import Path
 
 import h5py
 
-from angioeye_io.hdf5_schema import get_processing_root, iter_metric_datasets
+from input_output.hdf5_schema import get_processing_root, iter_metric_datasets
 
 from .core.base import (
     BatchPostprocess,
@@ -77,3 +77,4 @@ class PipelineMetricsManifestPostprocess(BatchPostprocess):
         metric_paths = [name for name, _dataset in iter_metric_datasets(group)]
         metric_paths.sort()
         return metric_paths
+

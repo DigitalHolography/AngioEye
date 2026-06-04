@@ -1,4 +1,4 @@
-import os
+﻿import os
 import tempfile
 import zipfile
 from collections import defaultdict
@@ -10,9 +10,9 @@ import pandas as pd
 from matplotlib.ticker import FormatStrFormatter
 from tkinter import Tk, filedialog
 import base64
-from angioeye_io.hdf5_io import find_first_existing_path
-from angioeye_io.hdf5_schema import pipeline_path_candidates
-from angioeye_io.archive_io import (
+from input_output.hdf5_io import find_first_existing_path
+from input_output.hdf5_schema import pipeline_path_candidates
+from input_output.archive_io import (
     replace_folder_in_zip,
     reset_output_dir,
 )
@@ -54,38 +54,36 @@ SELECTED_METRICS_PNG = {
     "t50_over_T",
     "eta_h",
 }
-METRIC_ALIASES = {
-    "Hspec": "spectral_entropy",
-}
+
 EPS = 1e-12
 LATEX_FORMULAS = {
     "RI": r"$\rm RI$",
     "CF": r"$\rm CF$",
     "t50_over_T": r"$t_{50}/T$",
-    "R_VTI": r"$R_{VTI}$",
+    "R_VTI": r"$R_{\mathrm{VTI}}$",    
     "mu_t_over_T": r"$\mu_t/T$",
     "PI": r"$\rm PI$",
-    "SF_VTI": r"$SF_{VTI}$",
-    "sigma_t_over_T": r"$\sigma_t/T$",
+    "SF_VTI": r"$SF_{\mathrm{VTI}}$",
+    "sigma_t_over_T": r"$\sigma_t/T$",    
     "t_max_over_T": r"$t_{\mathrm{max}}/T$",
-    "t_min_over_T": r"$t_{\mathrm{min}}/T$",
+    "t_min_over_T": r"$t_{\mathrm{min}}/T$",   
     "t_rise_over_T": r"$t_{\mathrm{rise}}/T$",
-    "t_fall_over_T": r"$t_{\mathrm{fall}}/T$",
+    "t_fall_over_T": r"$t_{\mathrm{fall}}/T$",    
     "Delta_DTI": r"$\Delta_{\mathrm{DTI}}$",
     "E_LF_over_E_HF": r"$E_{\mathrm{LF}}/E_{\mathrm{HF}}$",
     "S_fall": r"$S_{\mathrm{fall}}$",
     "S_rise": r"$S_{\mathrm{rise}}$",
-    "gamma_t": r"$\gamma_t$",
-    "N_eff_over_T": r"$N_{\mathrm{eff}}/T$",
+    "gamma_t": r"$\gamma_t$",    
+    "N_eff_over_T": r"$N_{\mathrm{eff}}/T$",    
     "Q_t_skew": r"$Q_{\mathrm{t,skew}}$",
     "Q_t_width": r"$Q_{\mathrm{t,width}}$",
     "Q_d_skew": r"$Q_{\mathrm{d,skew}}$",
     "Q_d_width": r"$Q_{\mathrm{d,width}}$",
-    "v_end_over_vbar": r"$v_{\mathrm{end}}/\bar{\mathrm{v}}$",
-    "E_slope": r"$E_{\mathrm{slope}}$",
+    "v_end_over_vbar": r"$\bar{\mathrm{v}}_{\mathrm{end}}/\bar{\mathrm{v}}$",
+    "E_slope": r"$E_{\mathrm{slope}}$",   
     "W50_over_T": r"$W_{50}/T$",
     "W80_over_T": r"$W_{80}/T$",
-    "N_t_over_T": r"$N_t/T$",
+    "N_t_over_T": r"$N_t/T$",    
     "eta_h": r"$\eta_h$",
 }
 
@@ -272,7 +270,7 @@ def export_group_statistics_figures(all_results, out_dir, formats=("png")):
     os.makedirs(out_dir, exist_ok=True)
 
     if "bandlimited" not in all_results:
-        print("Aucune donnée bandlimited trouvée.")
+        print("Aucune donnÃ©e bandlimited trouvÃ©e.")
         return
 
     for vessel in VALID_VESSELS:
@@ -280,7 +278,7 @@ def export_group_statistics_figures(all_results, out_dir, formats=("png")):
             continue
 
         for metric in sorted(SELECTED_METRICS_PNG):
-            metric_key = METRIC_ALIASES.get(metric, metric)
+            metric_key = metric
 
             if metric_key not in all_results["bandlimited"][vessel]:
                 continue
@@ -447,7 +445,7 @@ def generate_html_gallery(image_dir, html_dir, html_name="metric_dashboard.html"
         html.extend([
             "        <div class='filter-group-box'>",
             "            <div class='group-header'>",
-            f"                <span class='group-toggle' onclick=\"toggleCollapse('{group_id}', this)\">▼</span>",
+            f"                <span class='group-toggle' onclick=\"toggleCollapse('{group_id}', this)\">â–¼</span>",
             f"                <input type='checkbox' checked onchange=\"toggleGroup('{group_id}', this.checked)\">",
             f"                <label>{group_name}</label>",
             "            </div>",
@@ -510,7 +508,7 @@ def generate_html_gallery(image_dir, html_dir, html_name="metric_dashboard.html"
         html.extend([
             "        <div class='filter-group-box'>",
             "            <div class='group-header'>",
-            "                <span class='group-toggle' onclick=\"toggleCollapse('other', this)\">▼</span>",
+            "                <span class='group-toggle' onclick=\"toggleCollapse('other', this)\">â–¼</span>",
             "                <input type='checkbox' checked onchange=\"toggleGroup('other', this.checked)\">",
             "                <label>Other</label>",
             "            </div>",
@@ -582,7 +580,7 @@ def generate_html_gallery(image_dir, html_dir, html_name="metric_dashboard.html"
     "            if (!container) return;",
     "",
     "            container.classList.toggle('collapsed');",
-    "            element.textContent = container.classList.contains('collapsed') ? '▶' : '▼';",
+    "            element.textContent = container.classList.contains('collapsed') ? 'â–¶' : 'â–¼';",
     "        }",
     "",
     "        function openImageModal(src) {",
@@ -636,7 +634,7 @@ def generate_html_gallery(image_dir, html_dir, html_name="metric_dashboard.html"
     "            });",
     "",
     "            document.querySelectorAll('.group-toggle').forEach(toggle => {",
-    "                toggle.textContent = '▶';",
+    "                toggle.textContent = 'â–¶';",
     "            });",
     "        }",
     "",
@@ -646,7 +644,7 @@ def generate_html_gallery(image_dir, html_dir, html_name="metric_dashboard.html"
     "            });",
     "",
     "            document.querySelectorAll('.group-toggle').forEach(toggle => {",
-    "                toggle.textContent = '▼';",
+    "                toggle.textContent = 'â–¼';",
     "            });",
     "        }",
     "",
@@ -756,3 +754,4 @@ if __name__ == "__main__":
     zip_path = choose_zip()
 
     save_dashboard(zip_path)
+

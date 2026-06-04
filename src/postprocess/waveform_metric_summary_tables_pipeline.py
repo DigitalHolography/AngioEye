@@ -1,6 +1,6 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
-from angioeye_io.archive_io import extract_folder_from_zip, temporary_zip_from_tree
+from input_output.archive_io import extract_folder_from_zip, temporary_zip_from_tree
 
 from .core.base import (
     BatchPostprocess,
@@ -55,3 +55,4 @@ class WaveformMetricSummaryTablesPostprocess(BatchPostprocess):
         created_paths = [*[str(path) for path in table_paths]]
         summary = f"Generated {len(table_paths)} tables."
         return PostprocessResult(summary=summary, generated_paths=created_paths)
+

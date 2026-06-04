@@ -1,7 +1,7 @@
 import sys
 import tempfile
-import types
 import unittest
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -10,47 +10,9 @@ SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-fake_h5py = types.ModuleType("h5py")
-fake_h5py.File = object
-sys.modules.setdefault("h5py", fake_h5py)
-
-fake_pipelines = types.ModuleType("pipelines")
-fake_pipelines.PipelineDescriptor = object
-fake_pipelines.ProcessResult = object
-fake_pipelines.load_pipeline_catalog = lambda: ([], [])
-fake_pipelines.process_results_to_metric_trees = lambda *args, **kwargs: []
-sys.modules.setdefault("pipelines", fake_pipelines)
-sys.modules.setdefault("pipelines.core", types.ModuleType("pipelines.core"))
-
-fake_pipeline_errors = types.ModuleType("pipelines.core.errors")
-fake_pipeline_errors.format_pipeline_exception = lambda exc, _pipeline: str(exc)
-sys.modules.setdefault("pipelines.core.errors", fake_pipeline_errors)
-
-fake_angioeye_io = types.ModuleType("angioeye_io")
-fake_angioeye_io.ANGIOEYE_PROCESSING_ROOT = "/AngioEye/Processing"
-fake_angioeye_io.create_h5_file = lambda *args, **kwargs: None
-fake_angioeye_io.write_metrics_trees_to_h5 = lambda *args, **kwargs: None
-sys.modules.setdefault("angioeye_io", fake_angioeye_io)
-
-fake_postprocess = types.ModuleType("postprocess")
-fake_postprocess.PostprocessContext = object
-fake_postprocess.PostprocessDescriptor = object
-fake_postprocess.load_postprocess_catalog = lambda: ([], [])
-sys.modules.setdefault("postprocess", fake_postprocess)
-
+import pipeline_engine.execution as pipeline_execution  # noqa: E402
 from angio_eye import ProcessApp  # noqa: E402
-
-for _module_name in (
-    "h5py",
-    "angioeye_io",
-    "pipelines",
-    "pipelines.core",
-    "pipelines.core.errors",
-    "postprocess",
-):
-    _module = sys.modules.get(_module_name)
-    if _module is not None and getattr(_module, "__file__", None) is None:
-        sys.modules.pop(_module_name, None)
+from workflows import RunWorkflowResult, WorkflowDispatchResult  # noqa: E402
 
 
 class _Var:
@@ -82,9 +44,16 @@ class BatchZipCleanupTests(unittest.TestCase):
             output_dir,
             output_relative_parent=Path("."),
             output_filename=None,
+            **_kwargs,
         ):
             target_dir = output_dir / output_relative_parent
             target_dir.mkdir(parents=True, exist_ok=True)
+            png_dir = output_dir / "png"
+            png_dir.mkdir(parents=True, exist_ok=True)
+            (png_dir / "composite_scoring_raw_rwas_by_cohort.png").write_text(
+                "png",
+                encoding="utf-8",
+            )
             result_path = target_dir / (output_filename or "sample_pipelines_result.h5")
             result_path.write_text("result", encoding="utf-8")
             return result_path
@@ -103,6 +72,7 @@ class BatchZipCleanupTests(unittest.TestCase):
             batch_output_var=_Var(str(base_output_dir)),
             batch_zip_var=_Var(True),
             batch_zip_name_var=_Var("outputs.zip"),
+            batch_input_paths=[],
             ui_mode="advanced",
             _progress_total_units=1.0,
             _progress_completed_units=0.0,
@@ -120,15 +90,21 @@ class BatchZipCleanupTests(unittest.TestCase):
             _run_pipelines_on_file=_run_pipelines_on_file,
             _run_postprocesses=lambda *args, **kwargs: None,
             _zip_output_dir=_zip_output_dir,
+            run_pipeline_file=_run_pipelines_on_file,
             _log_batch=logs.append,
             _show_batch_error_dialog=lambda *args, **kwargs: None,
             _reset_progress=lambda: None,
-            _start_progress=lambda total_units: None,
+            _start_progress=lambda total_units, **_kwargs: None,
             _set_progress_units=lambda completed_units: None,
             _advance_progress=lambda units=1.0: None,
             _minimal_output_filename_for_run=lambda _data_path, _inputs: None,
             update=lambda: None,
             logs=logs,
+            _uses_holo_input_convention=lambda: False,
+            _selected_batch_input_paths=lambda: [],
+            _progress_primary_style="primary.Horizontal.TProgressbar",
+            _progress_final_style="final.Horizontal.TProgressbar",
+            _set_minimal_status=lambda *_args, **_kwargs: None,
         )
 
     @mock.patch("angio_eye.messagebox.showwarning")
@@ -143,7 +119,8 @@ class BatchZipCleanupTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
             input_path = tmp_path / "input.zip"
-            input_path.write_text("dummy", encoding="utf-8")
+            with zipfile.ZipFile(input_path, "w") as archive:
+                archive.writestr("sample.h5", "dummy")
             base_output_dir = tmp_path / "outputs"
             base_output_dir.mkdir()
 
@@ -153,14 +130,28 @@ class BatchZipCleanupTests(unittest.TestCase):
                 zip_should_fail=False,
             )
 
-            ProcessApp.run_batch(app)
+            with mock.patch(
+                "workflows.dispatch.run_pipeline_file",
+                app.run_pipeline_file,
+            ):
+                ProcessApp.run_batch(app)
 
             self.assertTrue((base_output_dir / "outputs.zip").exists())
             self.assertEqual(
-                [base_output_dir / "outputs.zip"],
+                [base_output_dir / "outputs.zip", base_output_dir / "png"],
                 sorted(base_output_dir.iterdir()),
             )
-            self.assertIn("outputs.zip", showinfo.call_args.args[1])
+            self.assertTrue(
+                (
+                    base_output_dir
+                    / "png"
+                    / "composite_scoring_raw_rwas_by_cohort.png"
+                ).exists()
+            )
+            self.assertTrue(
+                any("outputs.zip" in message for message in app.logs),
+            )
+            showinfo.assert_not_called()
 
     @mock.patch("angio_eye.messagebox.showwarning")
     @mock.patch("angio_eye.messagebox.showerror")
@@ -174,7 +165,8 @@ class BatchZipCleanupTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
             input_path = tmp_path / "input.zip"
-            input_path.write_text("dummy", encoding="utf-8")
+            with zipfile.ZipFile(input_path, "w") as archive:
+                archive.writestr("sample.h5", "dummy")
             base_output_dir = tmp_path / "outputs"
             base_output_dir.mkdir()
 
@@ -184,7 +176,11 @@ class BatchZipCleanupTests(unittest.TestCase):
                 zip_should_fail=True,
             )
 
-            ProcessApp.run_batch(app)
+            with mock.patch(
+                "workflows.dispatch.run_pipeline_file",
+                app.run_pipeline_file,
+            ):
+                ProcessApp.run_batch(app)
 
             work_dirs = [path for path in base_output_dir.iterdir() if path.is_dir()]
             self.assertEqual(1, len(work_dirs))
@@ -192,8 +188,11 @@ class BatchZipCleanupTests(unittest.TestCase):
                 (work_dirs[0] / "sample_pipelines_result.h5").exists(),
             )
             self.assertFalse((base_output_dir / "outputs.zip").exists())
-            self.assertIn(str(work_dirs[0]), showinfo.call_args.args[1])
-            self.assertEqual("Zip failed", showerror.call_args.args[0])
+            self.assertTrue(
+                any(str(work_dirs[0]) in message for message in app.logs),
+            )
+            self.assertEqual("ZIP failed", showerror.call_args.args[0])
+            showinfo.assert_not_called()
 
     def test_apply_input_defaults_for_zip_input(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -202,17 +201,27 @@ class BatchZipCleanupTests(unittest.TestCase):
             input_path.write_text("dummy", encoding="utf-8")
 
             app = SimpleNamespace(
+                input_convention_var=_Var("legacy"),
+                holo_input_paths=[],
+                holo_input_var=_Var(""),
                 batch_output_var=_Var(""),
                 batch_zip_var=_Var(False),
                 batch_zip_name_var=_Var("outputs.zip"),
                 _default_output_stem=lambda input_path: f"{input_path.stem}_angioeye",
-                _default_archive_name=lambda input_path: f"{input_path.stem}_angioeye.zip",
+                _default_archive_name=(
+                    lambda input_path: f"{input_path.stem}_angioeye.zip"
+                ),
+                _update_holo_status_labels=lambda: None,
                 _reset_progress=lambda: None,
+                _set_minimal_status=lambda *_args, **_kwargs: None,
             )
 
             ProcessApp._apply_input_defaults(app, input_path)
 
-            self.assertEqual(str(tmp_path), app.batch_output_var.get())
+            self.assertEqual(
+                str(tmp_path / "sample_angioeye"),
+                app.batch_output_var.get(),
+            )
             self.assertTrue(app.batch_zip_var.get())
             self.assertEqual("sample_angioeye.zip", app.batch_zip_name_var.get())
 
@@ -243,6 +252,7 @@ class BatchZipCleanupTests(unittest.TestCase):
             logs: list[str] = []
 
             app = SimpleNamespace(
+                input_convention_var=_Var("legacy"),
                 batch_input_var=_Var(""),
                 _apply_input_defaults=lambda path: applied_paths.append(path),
                 _log_batch=logs.append,
@@ -254,6 +264,135 @@ class BatchZipCleanupTests(unittest.TestCase):
             self.assertEqual(str(input_path), app.batch_input_var.get())
             self.assertEqual([input_path], applied_paths)
             self.assertIn("Drag and drop", logs[0])
+
+    @mock.patch("angio_eye.messagebox.showwarning")
+    @mock.patch("angio_eye.messagebox.showerror")
+    def test_run_batch_sends_explicit_file_folder_and_zip_modes(
+        self,
+        _showerror,
+        _showwarning,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            base_output_dir = tmp_path / "outputs"
+            base_output_dir.mkdir()
+            file_input = tmp_path / "sample.h5"
+            file_input.write_text("h5", encoding="utf-8")
+            folder_input = tmp_path / "folder"
+            folder_input.mkdir()
+            (folder_input / "nested.h5").write_text("h5", encoding="utf-8")
+            zip_input = tmp_path / "input.zip"
+            with zipfile.ZipFile(zip_input, "w") as archive:
+                archive.writestr("sample.h5", "h5")
+
+            captured_modes: list[str] = []
+
+            def _dispatch(request, _callbacks):
+                captured_modes.append(request.mode)
+                return WorkflowDispatchResult(
+                    workflow_result=RunWorkflowResult(
+                        output_dir=base_output_dir,
+                        processed_outputs=[],
+                        failures=[],
+                        summary_message="done",
+                    )
+                )
+
+            with mock.patch("angio_eye.dispatch_workflow", side_effect=_dispatch):
+                for input_path in (file_input, folder_input, zip_input):
+                    app = self._make_fake_app(
+                        input_path=input_path,
+                        base_output_dir=base_output_dir,
+                        zip_should_fail=False,
+                    )
+                    ProcessApp.run_batch(app)
+
+            self.assertEqual(["file", "folder", "zip"], captured_modes)
+
+    def test_zip_output_dir_excludes_root_png_companion_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            work_dir = tmp_path / "work"
+            work_dir.mkdir()
+            (work_dir / "sample_result.h5").write_text("result", encoding="utf-8")
+            png_dir = work_dir / "png"
+            png_dir.mkdir()
+            (png_dir / "composite_scoring_raw_rwas_by_cohort.png").write_text(
+                "png",
+                encoding="utf-8",
+            )
+            zip_path = tmp_path / "outputs.zip"
+
+            ProcessApp._zip_output_dir(
+                ProcessApp.__new__(ProcessApp),
+                work_dir,
+                target_path=zip_path,
+            )
+
+            with zipfile.ZipFile(zip_path, "r") as archive:
+                names = sorted(archive.namelist())
+
+            self.assertEqual(["sample_result.h5"], names)
+
+
+class PostprocessExecutionTests(unittest.TestCase):
+    def test_postprocess_metadata_failures_do_not_block_next_postprocess(self) -> None:
+        calls: list[str] = []
+        logs: list[str] = []
+        failures: list[str] = []
+        progress: list[float] = []
+
+        class _Postprocess:
+            def __init__(self, name, result):
+                self._name = name
+                self._result = result
+
+            def run(self, _context):
+                calls.append(self._name)
+                return self._result
+
+        class _Descriptor:
+            def __init__(self, name, result):
+                self.name = name
+                self._result = result
+
+            def instantiate(self):
+                return _Postprocess(self.name, self._result)
+
+        first_result = SimpleNamespace(
+            summary="partial",
+            metadata={"failures": ["Composite Scoring skipped broken.h5"]},
+        )
+        second_result = SimpleNamespace(summary="done", metadata={})
+        with mock.patch(
+            "pipeline_engine.execution.PostprocessContext",
+            lambda **kwargs: kwargs,
+        ):
+            pipeline_execution.run_postprocesses(
+                postprocesses=(
+                    _Descriptor("Composite Scoring", first_result),
+                    _Descriptor("Next Postprocess", second_result),
+                ),
+                output_dir=Path("."),
+                processed_outputs=(Path("ok.h5"),),
+                input_h5_paths=(Path("ok_input.h5"),),
+                input_path=Path("archive.zip"),
+                selected_pipeline_names=("waveform_shape_metrics",),
+                failures=failures,
+                zip_outputs=False,
+                log=logs.append,
+                advance_progress=lambda units=1.0: progress.append(units),
+            )
+
+        self.assertEqual(["Composite Scoring", "Next Postprocess"], calls)
+        self.assertEqual(["Composite Scoring skipped broken.h5"], failures)
+        self.assertTrue(
+            any(
+                "[POST WARN] Composite Scoring skipped broken.h5" == log
+                for log in logs
+            )
+        )
+        self.assertEqual([1.0, 1.0], progress)
 
 
 class MouseWheelBindingTests(unittest.TestCase):

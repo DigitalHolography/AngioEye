@@ -1,6 +1,6 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
-from angioeye_io.archive_io import (
+from input_output.archive_io import (
     extract_file_from_zip,
     extract_folder_from_zip,
     temporary_zip_from_tree,
@@ -65,3 +65,4 @@ class GroupsComparisonHTMLPostprocess(BatchPostprocess):
         created_paths = [str(dashboard_path), *[str(path) for path in png_paths]]
         summary = f"Generated dashboard and {len(png_paths)} PNG illustration(s)."
         return PostprocessResult(summary=summary, generated_paths=created_paths)
+

@@ -63,3 +63,7 @@ Desktop.ini
 process_result.csv
 pipelines.txt
 requirements-optional.txt
+
+# Local agent guidance
+AGENTS.md
+codex-*.md

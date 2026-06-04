@@ -1,11 +1,16 @@
 {
+  "batch_execution": {
+    "batch_size": 16,
+    "process_workers": 8
+  },
   "pipeline_visibility": {
     "Windkessel_RC": false,
     "lowrank_pulsatility_metrics": false,
     "modal_analysis": false,
     "waveform_harmonic_organization": false,
     "waveform_harmonic_organization_SVD": false,
-    "waveform_shape_metrics": true
+    "waveform_shape_metrics": true,
+    "waveform_shape_metrics_denoised": true
   },
   "postprocess_visibility": {
     "Pipeline Metrics Manifest": false,

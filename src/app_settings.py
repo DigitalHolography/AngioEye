@@ -215,16 +215,14 @@ class AppSettingsStore:
 
     def load_ui_mode(self) -> str:
         mode = self.load().get("ui_mode")
-        return (
-            mode
-            if mode in {"minimal", "advanced", "sandbox_advanced"}
-            else "minimal"
-        )
+        if mode in {"advanced", "sandbox_advanced"}:
+            return "advanced"
+        return "minimal"
 
     def save_ui_mode(self, mode: str) -> None:
         settings = self.load()
         settings["ui_mode"] = (
-            mode if mode in {"advanced", "sandbox_advanced"} else "minimal"
+            "advanced" if mode in {"advanced", "sandbox_advanced"} else "minimal"
         )
         self.save(settings)
 
@@ -244,3 +242,15 @@ class AppSettingsStore:
         settings = self.load()
         settings["trim_h5source"] = bool(trim_h5source)
         self.save(settings)
+
+    def load_batch_execution(self) -> dict[str, Any]:
+        batch_execution = self.load().get("batch_execution")
+        if isinstance(batch_execution, dict):
+            return batch_execution
+
+        default_batch_execution = self.load_defaults().get("batch_execution")
+        return (
+            default_batch_execution
+            if isinstance(default_batch_execution, dict)
+            else {}
+        )

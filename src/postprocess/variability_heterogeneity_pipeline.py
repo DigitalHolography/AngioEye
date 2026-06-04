@@ -1,8 +1,11 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
-from angioeye_io.archive_io import extract_folder_from_zip, temporary_zip_from_tree
-from angioeye_io.hdf5_io import MetricsTree, append_metrics_trees_to_h5, read_dataset
-from angioeye_io.hdf5_schema import ANGIOEYE_POSTPROCESS_ROOT, find_pipeline_group
+import shutil
+from collections import defaultdict
+
+from input_output.hdf5_io import append_metrics_trees_to_h5
+from input_output.hdf5_schema import ANGIOEYE_POSTPROCESS_ROOT
+from postprocess.core.grouped_batch import extract_group_name
 
 from .core.base import (
     BatchPostprocess,
@@ -18,8 +21,11 @@ from .core.base import (
         "Build group-level LaTeX and CSV tables for variability and heterogeneity "
         "metrics computed from by-segment arterial waveform shape metrics."
     ),
-    required_deps=["pandas>=2.1"],
-    required_pipelines=["waveform_shape_metrics"],
+    required_deps=["pandas>=2.1", "scipy>=1.10"],
+    required_pipeline_options=[
+        ["waveform_shape_metrics"],
+        ["waveform_shape_metrics_denoised"],
+    ],
 )
 class VariabilityHeterogeneityPostprocess(BatchPostprocess):
     def run(self, context: PostprocessContext) -> PostprocessResult:
@@ -34,10 +40,23 @@ class VariabilityHeterogeneityPostprocess(BatchPostprocess):
 
         from .utils import variability_heterogeneity_dashboard
 
-        for file_path in context.processed_files:
-            tree = variability_heterogeneity_dashboard.write_variability_tree(file_path)
+        def _idle() -> None:
+            if context.idle_callback is not None:
+                context.idle_callback()
 
-            if tree is None:
+        results = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
+        for file_path in context.processed_files:
+            blocks = (
+                variability_heterogeneity_dashboard.compute_file_higher_metric_blocks(
+                    file_path,
+                    mode="raw_segment",
+                )
+            )
+            tree = variability_heterogeneity_dashboard.variability_tree_from_blocks(
+                blocks
+            )
+
+            if not blocks or tree is None:
                 continue
 
             append_metrics_trees_to_h5(
@@ -46,33 +65,34 @@ class VariabilityHeterogeneityPostprocess(BatchPostprocess):
                 [tree],
                 overwrite=True,
             )
-
-        with temporary_zip_from_tree(
-            output_dir,
-            source_paths=context.processed_files,
-        ) as temp_zip:
-            results = variability_heterogeneity_dashboard.analyze_zip(
-                str(temp_zip),
-                mode="bandlimited_segment",
+            group_name = extract_group_name(file_path.parent, output_dir)
+            variability_heterogeneity_dashboard.add_file_blocks_to_results(
+                results,
+                group_name,
+                blocks,
             )
-            if not results:
-                raise ValueError(
-                    "No compatible by-segment metrics were found for the variability/heterogeneity tables."
-                )
+            _idle()
 
-            variability_heterogeneity_dashboard.export_group_tables(
-                str(temp_zip),
-                mode="bandlimited_segment",
+        if not results:
+            raise ValueError(
+                "No compatible by-segment metrics were found for the variability/heterogeneity tables."
             )
 
-            table_paths = extract_folder_from_zip(
-                zip_path=temp_zip,
-                member_prefix="latex_tables/",
-                output_dir=output_dir,
+        table_dir = output_dir / "latex_tables"
+        if table_dir.exists():
+            shutil.rmtree(table_dir)
+
+        table_paths = (
+            variability_heterogeneity_dashboard.export_group_tables_from_results(
+                results,
+                table_dir,
+                idle_callback=context.idle_callback,
             )
+        )
 
         created_paths = [str(path) for path in table_paths]
         summary = (
             f"Generated {len(table_paths)} variability/heterogeneity table file(s)."
         )
         return PostprocessResult(summary=summary, generated_paths=created_paths)
+
