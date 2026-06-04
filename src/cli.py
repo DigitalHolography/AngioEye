@@ -18,6 +18,7 @@ Inputs:
 from __future__ import annotations
 
 import argparse
+import multiprocessing
 import sys
 import time
 from collections.abc import Callable, Sequence
@@ -38,6 +39,7 @@ from workflows import (
     WorkflowRunRequest,
     ZipBatchSettings,
     dispatch_workflow,
+    missing_required_pipeline_errors,
     prepare_run_input,
 )
 
@@ -106,18 +108,15 @@ def _load_postprocess_list(
 def _validate_postprocess_selection(
     postprocesses: Sequence[PostprocessDescriptor],
     selected_pipeline_names: Sequence[str],
+    reusable_h5_paths: Sequence[Path] = (),
+    defer_when_no_reusable_paths: bool = False,
 ) -> None:
-    selected_set = set(selected_pipeline_names)
-    errors = []
-    for postprocess in postprocesses:
-        missing_required = [
-            name for name in postprocess.required_pipelines if name not in selected_set
-        ]
-        if missing_required:
-            errors.append(
-                f"{postprocess.name} requires pipeline(s): "
-                f"{', '.join(missing_required)}"
-            )
+    errors = missing_required_pipeline_errors(
+        postprocesses=postprocesses,
+        selected_pipeline_names=selected_pipeline_names,
+        reusable_h5_paths=reusable_h5_paths,
+        defer_when_no_reusable_paths=defer_when_no_reusable_paths,
+    )
     if errors:
         raise ValueError("\n".join(errors))
 
@@ -163,11 +162,13 @@ def run_cli(
         if postprocess_file is not None
         else []
     )
+    input_plan = prepare_run_input(data_path)
     _validate_postprocess_selection(
         postprocesses,
         selected_pipeline_names=[pipeline.name for pipeline in pipelines],
+        reusable_h5_paths=() if input_plan.is_zip else input_plan.h5_paths,
+        defer_when_no_reusable_paths=input_plan.is_zip,
     )
-    input_plan = prepare_run_input(data_path)
     output_root = output_dir.expanduser().resolve()
     output_root.mkdir(parents=True, exist_ok=True)
 
@@ -184,7 +185,7 @@ def run_cli(
                 zip_name=zip_name or "outputs.zip",
                 trim_source=trim_source,
                 zip_output_dir=_zip_output_dir,
-                zip_batch_settings=ZipBatchSettings.from_env(),
+                zip_batch_settings=ZipBatchSettings.from_app_settings(),
             ),
             _cli_workflow_callbacks(),
         )
@@ -319,5 +320,6 @@ def _format_elapsed(seconds: float) -> str:
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     raise SystemExit(main())
 

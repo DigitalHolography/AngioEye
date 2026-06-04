@@ -161,6 +161,17 @@ class AppSettingsTests(unittest.TestCase):
 
             self.assertFalse(store.load_trim_h5source())
 
+    def test_load_batch_execution_reads_settings_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            settings_path = Path(tmp_dir) / "settings.json"
+            settings_path.write_text(
+                json.dumps({"batch_execution": {"batch_size": 12}}),
+                encoding="utf-8",
+            )
+            store = AppSettingsStore(settings_path)
+
+            self.assertEqual(store.load_batch_execution(), {"batch_size": 12})
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,16 +1,22 @@
 from __future__ import annotations
 
+import functools
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
 from input_output import relative_hdf5_parent
-from pipeline_engine import OutputPathAllocator, run_pipeline_file, run_postprocesses
+from pipeline_engine import run_pipeline_file, run_postprocesses
 
 from ._holo import HoloInputContext
+from ._holo import find_ae_h5 as find_holo_ae_h5
+from ._holo import output_dir as holo_output_dir
 from ._holo import reset_output_dir as reset_holo_output_dir
 from ._holo import resolve_context as resolve_holo_context
+from ._postprocess_requirements import (
+    compatible_postprocess_files,
+)
 from ._zip_batches import ZipBatchSettings
 from .inputs import RunInputPlan
 from .runs import (
@@ -40,7 +46,9 @@ class WorkflowRunRequest:
     zip_output_dir: ZipOutputDir
     input_plan: RunInputPlan | None = None
     holo_paths: Sequence[Path] = ()
-    zip_batch_settings: ZipBatchSettings = field(default_factory=ZipBatchSettings.from_env)
+    zip_batch_settings: ZipBatchSettings = field(
+        default_factory=ZipBatchSettings.from_app_settings
+    )
     output_filename_for_run: OutputFilenameResolver = lambda _path, _inputs: None
 
 
@@ -99,6 +107,9 @@ def _dispatch_holo_workflow(
             status="Ready.",
         )
 
+    if not request.pipelines and request.postprocesses:
+        return _dispatch_holo_postprocess_workflow(request, callbacks)
+
     contexts, skipped_holo_stems = _resolve_holo_contexts(request.holo_paths)
     if not contexts:
         return WorkflowDispatchResult(
@@ -121,15 +132,77 @@ def _dispatch_holo_workflow(
         pipelines=request.pipelines,
         postprocesses=request.postprocesses,
         selected_pipeline_names=request.selected_pipeline_names,
-        run_pipeline_file=_pipeline_file_runner(request, callbacks, worker_safe=False),
+        run_pipeline_file=_pipeline_file_runner(request, callbacks, worker_safe=True),
         run_postprocesses=_postprocess_runner(request, callbacks),
         log=callbacks.log,
         advance_progress=callbacks.advance_progress,
         start_final_progress=callbacks.start_final_progress,
+        settings=request.zip_batch_settings,
+        idle_callback=callbacks.idle_callback,
     )
     return WorkflowDispatchResult(
         workflow_result=workflow_result,
         skipped_holo_stems=tuple(skipped_holo_stems),
+    )
+
+
+def _dispatch_holo_postprocess_workflow(
+    request: WorkflowRunRequest,
+    callbacks: WorkflowCallbacks,
+) -> WorkflowDispatchResult:
+    ae_records: list[tuple[Path, Path]] = []
+    failures: list[str] = []
+    skipped_stems: list[str] = []
+
+    for holo_path in request.holo_paths:
+        holo_path = holo_path.expanduser()
+        ae_h5 = find_holo_ae_h5(holo_path)
+        if ae_h5 is None:
+            skipped_stems.append(holo_path.stem)
+            failures.append(
+                f"{holo_path}: no existing AE HDF5 output found under "
+                f"{holo_output_dir(holo_path)}"
+            )
+            continue
+        ae_records.append((holo_path, ae_h5))
+
+    callbacks.start_final_progress(
+        len(ae_records) * len(request.postprocesses),
+        "Running postprocess...",
+    )
+
+    for holo_path, ae_h5 in ae_records:
+        run_postprocesses(
+            request.postprocesses,
+            ae_h5.parent,
+            (ae_h5,),
+            (ae_h5,),
+            holo_path,
+            request.selected_pipeline_names,
+            failures,
+            zip_outputs=False,
+            log=callbacks.log,
+            advance_progress=callbacks.advance_progress,
+            idle_callback=callbacks.idle_callback,
+            resolve_postprocess_files=_postprocess_file_resolver(
+                request.selected_pipeline_names
+            ),
+        )
+
+    summary = (
+        f"Postprocessed {len(ae_records)} existing AE HDF5 file(s)."
+        if ae_records
+        else "No existing AE HDF5 files were available for postprocessing."
+    )
+    return WorkflowDispatchResult(
+        workflow_result=RunWorkflowResult(
+            output_dir=ae_records[0][1].parent if ae_records else Path("."),
+            processed_outputs=[ae_h5 for _, ae_h5 in ae_records],
+            processed_input_paths=[ae_h5 for _, ae_h5 in ae_records],
+            failures=failures,
+            summary_message=summary,
+        ),
+        skipped_holo_stems=tuple(skipped_stems),
     )
 
 
@@ -183,7 +256,7 @@ def _dispatch_zip_workflow(
     callbacks.log(
         f"[ZIP] Found {input_plan.item_count} HDF5 file(s). "
         f"Extracting {request.zip_batch_settings.batch_size} at a time; "
-        f"running pipelines with {request.zip_batch_settings.pipeline_workers} "
+        f"running pipelines with {request.zip_batch_settings.batch_size} "
         "worker(s)."
     )
     workflow_result = run_zip_workflow(
@@ -201,7 +274,6 @@ def _dispatch_zip_workflow(
             request,
             callbacks,
             worker_safe=True,
-            output_path_allocator=OutputPathAllocator(),
         ),
         run_postprocesses=_postprocess_runner(request, callbacks),
         zip_output_dir=request.zip_output_dir,
@@ -263,7 +335,6 @@ def _dispatch_filesystem_workflow(
             request,
             callbacks,
             worker_safe=True,
-            output_path_allocator=OutputPathAllocator(),
         ),
         run_postprocesses=_postprocess_runner(request, callbacks),
         relative_parent=relative_hdf5_parent,
@@ -283,8 +354,17 @@ def _pipeline_file_runner(
     callbacks: WorkflowCallbacks,
     *,
     worker_safe: bool,
-    output_path_allocator: OutputPathAllocator | None = None,
 ):
+    if worker_safe:
+        return functools.partial(
+            run_pipeline_file,
+            trim_source=request.trim_source,
+            log=None,
+            advance_progress=None,
+            write_idle_callback=None,
+            output_path_allocator=None,
+        )
+
     def _run_pipeline_file(
         h5_path: Path,
         pipelines: Sequence[Any],
@@ -301,10 +381,10 @@ def _pipeline_file_runner(
             output_relative_parent,
             output_filename,
             trim_source=request.trim_source,
-            log=None if worker_safe else callbacks.log,
-            advance_progress=None if worker_safe else callbacks.advance_progress,
-            write_idle_callback=None if worker_safe else callbacks.idle_callback,
-            output_path_allocator=output_path_allocator,
+            log=callbacks.log,
+            advance_progress=callbacks.advance_progress,
+            write_idle_callback=callbacks.idle_callback,
+            output_path_allocator=None,
             record_timing=record_timing,
         )
 
@@ -325,6 +405,7 @@ def _postprocess_runner(
         failures: list[str],
         *,
         zip_outputs: bool,
+        record_timing=None,
     ) -> None:
         run_postprocesses(
             postprocesses,
@@ -337,9 +418,46 @@ def _postprocess_runner(
             zip_outputs=zip_outputs,
             log=callbacks.log,
             advance_progress=callbacks.advance_progress,
+            idle_callback=callbacks.idle_callback,
+            resolve_postprocess_files=_postprocess_file_resolver(
+                selected_pipeline_names
+            ),
+            record_timing=record_timing,
         )
 
     return _run_postprocesses
+
+
+def _postprocess_file_resolver(selected_pipeline_names):
+    return lambda descriptor, processed_outputs, input_h5_paths: (
+        _resolve_postprocess_files(
+            descriptor,
+            processed_outputs,
+            input_h5_paths,
+            selected_pipeline_names=selected_pipeline_names,
+        )
+    )
+
+
+def _resolve_postprocess_files(
+    descriptor,
+    processed_outputs,
+    input_h5_paths,
+    *,
+    selected_pipeline_names=(),
+):
+    result = compatible_postprocess_files(
+        processed_outputs=processed_outputs,
+        input_h5_paths=input_h5_paths,
+        required_pipelines=getattr(descriptor, "required_pipelines", ()),
+        required_pipeline_options=getattr(
+            descriptor,
+            "required_pipeline_options",
+            (),
+        ),
+        selected_pipeline_names=selected_pipeline_names,
+    )
+    return result.files, result.skipped
 
 
 def make_zip_progress_callback(
