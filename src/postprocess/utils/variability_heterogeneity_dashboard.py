@@ -26,6 +26,8 @@ from input_output.hdf5_io import MetricsTree
 
 
 SEGMENT_METRIC_FOLDERS = (
+    "/AngioEye/Processing/waveform_shape_metrics_denoised_correl/artery/by_segment/",
+    "/AngioEye/Processing/waveform_shape_metrics_denoised_joint/artery/by_segment/",
     "/AngioEye/Processing/waveform_shape_metrics_denoised/artery/by_segment/",
     "/AngioEye/Processing/waveform_shape_metrics/artery/by_segment/",
 )

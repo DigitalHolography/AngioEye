@@ -16,6 +16,7 @@ from batch_engine import (
     batch_count,
     can_pickle,
     iter_batches,
+    process_pool_thread_workers,
     run_indexed_threaded_batches_in_process_pool_bounded,
     run_task_batch,
     run_threaded_batches_in_process_pool,
@@ -225,7 +226,10 @@ def _run_threaded_pipeline_batches_in_process_pool(
         return
 
     process_count = min(len(job_batches), max(1, process_workers))
-    thread_count = max(1, thread_workers)
+    thread_count = process_pool_thread_workers(
+        process_workers=process_count,
+        requested_thread_workers=thread_workers,
+    )
     run_job = functools.partial(
         _run_pipeline_job_by_name,
         pipeline_names=tuple(pipeline_names),
@@ -471,7 +475,10 @@ def _run_threaded_zip_batches_in_process_pool(
         "keeping one extracted batch ready ahead..."
     )
     process_count = min(batch_count_value, max(1, settings.process_workers))
-    thread_count = max(1, settings.batch_size)
+    thread_count = process_pool_thread_workers(
+        process_workers=process_count,
+        requested_thread_workers=settings.batch_size,
+    )
     run_job = functools.partial(
         _run_pipeline_job_by_name,
         pipeline_names=tuple(pipeline_names),

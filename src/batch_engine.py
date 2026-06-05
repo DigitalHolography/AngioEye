@@ -10,6 +10,7 @@ from concurrent.futures import (
     ThreadPoolExecutor,
     wait,
 )
+from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass, field
 from typing import Any, Generic, TypeVar
 
@@ -30,6 +31,19 @@ def default_batch_size() -> int:
 def default_staging_workers() -> int:
     cpu_count = os.cpu_count() or 2
     return max(1, cpu_count // 2)
+
+
+def process_pool_thread_workers(
+    *,
+    process_workers: int,
+    requested_thread_workers: int,
+) -> int:
+    """
+    Avoid multiplying process-pool parallelism by a full thread pool per child.
+    """
+    if max(1, process_workers) > 1:
+        return 1
+    return max(1, requested_thread_workers)
 
 
 def _positive_int(value: object, default: int) -> int:
@@ -247,9 +261,10 @@ def run_indexed_threaded_batches_in_process_pool_bounded(
     with ProcessPoolExecutor(max_workers=process_count) as executor:
         futures = {}
         exhausted = False
+        broken_submission: tuple[int, BrokenProcessPool] | None = None
 
         def submit_ready() -> None:
-            nonlocal exhausted
+            nonlocal broken_submission, exhausted
             while not exhausted and len(futures) < pending_limit:
                 try:
                     group_index, batch = next(batch_iter)
@@ -257,17 +272,30 @@ def run_indexed_threaded_batches_in_process_pool_bounded(
                     exhausted = True
                     return
                 worker_count = min(len(batch), max(1, thread_workers))
-                future = executor.submit(
-                    _run_task_group_in_process,
-                    group_index,
-                    group_count,
-                    tuple(batch),
-                    run_item,
-                    worker_count,
-                )
+                try:
+                    future = executor.submit(
+                        _run_task_group_in_process,
+                        group_index,
+                        group_count,
+                        tuple(batch),
+                        run_item,
+                        worker_count,
+                    )
+                except BrokenProcessPool as exc:
+                    broken_submission = (group_index, exc)
+                    exhausted = True
+                    return
                 futures[future] = group_index
 
         submit_ready()
+        if broken_submission is not None:
+            group_index, exc = broken_submission
+            yield BatchGroupResult(
+                index=group_index,
+                count=group_count,
+                error=exc,
+            )
+            return
         while futures:
             done, _pending = wait(
                 set(futures),
@@ -290,6 +318,14 @@ def run_indexed_threaded_batches_in_process_pool_bounded(
                         error=exc,
                     )
             submit_ready()
+            if broken_submission is not None:
+                group_index, exc = broken_submission
+                yield BatchGroupResult(
+                    index=group_index,
+                    count=group_count,
+                    error=exc,
+                )
+                return
             if idle_callback is not None:
                 idle_callback()
 

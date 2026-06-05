@@ -359,6 +359,13 @@ class ZipPipelineParallelismTests(unittest.TestCase):
                 logs,
             )
             self.assertTrue(
+                any(
+                    "ThreadPoolExecutor(max_workers=1)" in message
+                    for message in logs
+                ),
+                logs,
+            )
+            self.assertTrue(
                 any(message.startswith("[BATCH OK]") for message in logs),
                 logs,
             )
@@ -398,6 +405,13 @@ class ZipPipelineParallelismTests(unittest.TestCase):
             self.assertTrue(
                 any(
                     "Starting ProcessPoolExecutor(max_workers=2)" in message
+                    for message in logs
+                ),
+                logs,
+            )
+            self.assertTrue(
+                any(
+                    "ThreadPoolExecutor(max_workers=1)" in message
                     for message in logs
                 ),
                 logs,
@@ -459,6 +473,13 @@ class ZipPipelineParallelismTests(unittest.TestCase):
             self.assertTrue(
                 any(
                     "Starting ProcessPoolExecutor(max_workers=2)" in message
+                    for message in logs
+                ),
+                logs,
+            )
+            self.assertTrue(
+                any(
+                    "ThreadPoolExecutor(max_workers=1)" in message
                     for message in logs
                 ),
                 logs,

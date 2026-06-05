@@ -15,6 +15,7 @@ from batch_engine import (
     BatchTaskResult,
     can_pickle,
     iter_batches,
+    process_pool_thread_workers,
     run_task_batch,
     run_threaded_batches_in_process_pool,
 )
@@ -453,7 +454,10 @@ def _run_holo_pipeline_jobs(
     use_process_pool = settings.process_workers > 1 and can_pickle(run_job)
     if use_process_pool:
         process_count = min(len(batches), max(1, settings.process_workers))
-        thread_count = max(1, settings.batch_size)
+        thread_count = process_pool_thread_workers(
+            process_workers=process_count,
+            requested_thread_workers=settings.batch_size,
+        )
         log(
             f"[PROCESS] Starting ProcessPoolExecutor(max_workers={process_count}) "
             f"for {len(batches)} holo batch(es); each process uses "

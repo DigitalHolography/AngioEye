@@ -25,6 +25,8 @@ from .core.base import (
     required_pipeline_options=[
         ["waveform_shape_metrics"],
         ["waveform_shape_metrics_denoised"],
+        ["waveform_shape_metrics_denoised_correl"],
+        ["waveform_shape_metrics_denoised_joint"],
     ],
 )
 class VariabilityHeterogeneityPostprocess(BatchPostprocess):

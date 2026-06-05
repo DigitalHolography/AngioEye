@@ -1,0 +1,322 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+
+\title{Denoised Waveform-Shape Metric Filtering Methods}
+\author{AngioEye pipelines}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Overview}
+
+The denoised waveform-shape metric pipelines apply filtering to arterial
+per-segment pulse waveforms before computing arterial waveform metrics.  Each
+arterial pulse is represented as
+\[
+    y_i(t)=v[t,\mathrm{beat},\mathrm{branch},\mathrm{radius}],
+\]
+where \(i\) indexes one \((\mathrm{beat},\mathrm{branch},\mathrm{radius})\)
+realization and \(t\) indexes samples within the beat.
+
+All three methods first reject pulses with no finite samples, too few finite
+samples, or near-zero variance.  Missing samples in valid pulses are linearly
+interpolated for the filtering computation, and the original missing-sample
+mask can be restored after filtering.  By default, these new methods use the
+bandlimited arterial segment signal as input and use the filtered result as
+the arterial metric signal.
+
+\section{Cross-Correlation Non-Local Averaging}
+
+Pipeline:
+\[
+    \texttt{waveform\_shape\_metrics\_denoised\_correl}.
+\]
+
+This method treats every valid arterial segment pulse as a noisy realization
+of a shared pulse morphology.  For each target pulse, it finds other pulses
+with similar shape, phase-aligns them by circular lag, optionally rescales
+their amplitude to the target, averages them into a local template, and blends
+that template back into the target pulse.
+
+For a filled pulse \(\tilde y_i\), the normalized matching signal is
+\[
+    z_i =
+    \frac{\tilde y_i-\bar y_i\mathbf{1}}
+         {\|\tilde y_i-\bar y_i\mathbf{1}\|_2}.
+\]
+For each candidate neighbor \(j\), the algorithm searches circular lags
+\[
+    \ell \in \{-L_{\max},\ldots,L_{\max}\},
+    \qquad
+    L_{\max} =
+    \min\left(\left\lfloor \rho_{\max}T \right\rceil,
+    \left\lfloor T/2 \right\rfloor - 1\right),
+\]
+with \(\rho_{\max}=\texttt{correlation\_max\_lag\_fraction}\).  The retained
+correlation and lag are
+\[
+    c_{ij}=\max_{\ell} z_i^\top \operatorname{roll}(z_j,\ell),
+    \qquad
+    \ell_{ij}=\arg\max_{\ell} z_i^\top \operatorname{roll}(z_j,\ell).
+\]
+Only neighbors with \(c_{ij}\geq\texttt{correlation\_min\_corr}\) are kept.
+
+The neighbor weight is
+\[
+    w_{ij}
+    =
+    \max(c_{ij},0)^p
+    \exp\left[-\frac{1}{2}
+        \left(\frac{\ell_{ij}}{\sigma_{\ell}T}\right)^2\right]
+    s_{ij},
+\]
+where \(p=\texttt{correlation\_corr\_power}\),
+\(\sigma_{\ell}=\texttt{correlation\_lag\_sigma\_fraction}\), and \(s_{ij}\)
+is an optional branch/radius locality factor.  The largest
+\(\texttt{correlation\_top\_k\_neighbors}\) neighbors are retained.
+
+If amplitude matching is enabled, an aligned neighbor is transformed to the
+target mean and standard deviation:
+\[
+    \hat y_{j\rightarrow i}
+    =
+    \bar y_i+
+    \left(\operatorname{roll}(\tilde y_j,\ell_{ij})-\bar y_j\right)
+    \frac{\sigma_i}{\sigma_j}.
+\]
+The local template is
+\[
+    m_i(t)=
+    \frac{\lambda_0\tilde y_i(t)+
+    \sum_{j\in\mathcal{N}_i}w_{ij}\hat y_{j\rightarrow i}(t)}
+    {\lambda_0+\sum_{j\in\mathcal{N}_i}w_{ij}},
+\]
+where \(\lambda_0=\texttt{correlation\_self\_weight}\).  The final filtered
+pulse is
+\[
+    x_i(t)=(1-\alpha)\tilde y_i(t)+\alpha m_i(t),
+    \qquad
+    \alpha=\texttt{correlation\_blend\_alpha}.
+\]
+The result is clipped to the finite range of the original pulse and, by
+default, the original \texttt{NaN} mask is restored.
+
+\begin{tabular}{@{}ll@{}}
+\toprule
+Main default & Value \\
+\midrule
+\texttt{correlation\_top\_k\_neighbors} & 12 \\
+\texttt{correlation\_min\_corr} & 0.65 \\
+\texttt{correlation\_corr\_power} & 3.0 \\
+\texttt{correlation\_blend\_alpha} & 0.75 \\
+\texttt{correlation\_self\_weight} & 0.25 \\
+\texttt{correlation\_max\_lag\_fraction} & 0.12 \\
+\texttt{correlation\_lag\_sigma\_fraction} & 0.06 \\
+\bottomrule
+\end{tabular}
+
+\section{Graph-Laplacian Pulse Denoising}
+
+Pipeline:
+\[
+    \texttt{waveform\_shape\_metrics\_denoised\_laplace}.
+\]
+
+This method builds a graph whose vertices are valid arterial pulses.  Edges
+connect pulse realizations with similar phase-aligned morphology.  The
+denoised ensemble solves the graph Tikhonov problem
+\[
+    \min_X \|X-Y\|_F^2+\gamma\operatorname{tr}(X^\top L X),
+\]
+where rows of \(Y\) and \(X\) are pulse realizations, columns are time samples,
+\(L\) is the pulse-graph Laplacian, and
+\(\gamma=\texttt{laplacian\_gamma}\).
+
+The method first constructs a reference pulse from the median valid pulse,
+falling back to the mean if needed.  Each pulse is circularly aligned to that
+reference using the same bounded lag search idea as the correlation method.
+After alignment, pulse similarities are computed at zero lag.
+
+A directed candidate edge \(i\rightarrow j\) is retained when the aligned
+correlation satisfies
+\[
+    c_{ij}\geq\texttt{laplacian\_min\_corr}.
+\]
+Its weight is
+\[
+    w_{ij}
+    =
+    \max(c_{ij},0)^p
+    \exp\left[-\frac{1}{2}
+        \left(\frac{\ell_i-\ell_j}{\sigma_{\ell}T}\right)^2\right]
+    s_{ij},
+\]
+where \(p=\texttt{laplacian\_corr\_power}\), \(\ell_i\) and \(\ell_j\) are
+the reference-alignment lags, and \(s_{ij}\) optionally penalizes branch/radius
+index distance.  Only the largest
+\(\texttt{laplacian\_top\_k\_neighbors}\) directed weights are retained per
+pulse.  The graph is symmetrized by
+\[
+    W_{ij}=\max(W^{\mathrm{directed}}_{ij},
+                W^{\mathrm{directed}}_{ji}),
+\]
+and the Laplacian is
+\[
+    L=D-W,\qquad D_{ii}=\sum_j W_{ij}.
+\]
+
+The objective gives the linear system
+\[
+    (I+\gamma L)X=Y.
+\]
+The implementation adds a small diagonal
+\(\texttt{laplacian\_self\_jitter}I\) for numerical stability and solves the
+dense system.  After solving, the result is blended with the aligned input:
+\[
+    X_{\mathrm{final}}=(1-\alpha)Y+\alpha X,
+    \qquad
+    \alpha=\texttt{laplacian\_blend\_alpha}.
+\]
+Rows are then shifted back to their original phase.  By default the solve is
+performed on standardized pulse shapes and restored to each pulse's original
+mean and standard deviation afterward.
+
+\begin{tabular}{@{}ll@{}}
+\toprule
+Main default & Value \\
+\midrule
+\texttt{laplacian\_gamma} & 0.75 \\
+\texttt{laplacian\_top\_k\_neighbors} & 6 \\
+\texttt{laplacian\_min\_corr} & 0.70 \\
+\texttt{laplacian\_corr\_power} & 3.0 \\
+\texttt{laplacian\_self\_jitter} & \(10^{-8}\) \\
+\texttt{laplacian\_blend\_alpha} & 1.0 \\
+\texttt{laplacian\_branch\_sigma} & 2.0 \\
+\texttt{laplacian\_radius\_sigma} & 2.0 \\
+\bottomrule
+\end{tabular}
+
+\section{Joint Pulse-Graph and Temporal-Graph Denoising}
+
+Pipeline:
+\[
+    \texttt{waveform\_shape\_metrics\_denoised\_joint}.
+\]
+
+This method extends the graph-Laplacian denoiser by adding a temporal graph
+over within-pulse samples.  The pulse graph encourages similar pulse
+realizations to have similar denoised shapes, while the temporal graph
+suppresses high-frequency variation inside each pulse.
+
+The joint objective is
+\[
+    \min_X
+    \|X-Y\|_F^2
+    +\gamma_p\operatorname{tr}(X^\top L_p X)
+    +\gamma_t\operatorname{tr}(X L_t X^\top),
+\]
+where \(L_p\) is the pulse-similarity graph Laplacian,
+\(L_t\) is the temporal Laplacian,
+\(\gamma_p=\texttt{joint\_pulse\_gamma}\), and
+\(\gamma_t=\texttt{joint\_temporal\_gamma}\).
+
+The pulse graph \(L_p\) is built from reference-aligned pulses using the same
+neighbor selection and weighting strategy as the graph-Laplacian method, with
+the \texttt{joint\_*} parameters.  The temporal graph \(L_t\) connects adjacent
+time samples:
+\[
+    (L_t)_{k,k}\mathrel{+}=1,\quad
+    (L_t)_{k+1,k+1}\mathrel{+}=1,\quad
+    (L_t)_{k,k+1}\mathrel{-}=1,\quad
+    (L_t)_{k+1,k}\mathrel{-}=1.
+\]
+When \texttt{joint\_temporal\_cycle} is enabled, the first and last time
+samples are also connected, making the temporal graph cyclic.
+
+The optimality condition is a Sylvester-type system:
+\[
+    (I+\gamma_p L_p)X+\gamma_t X L_t=Y.
+\]
+The implementation solves it spectrally.  With
+\[
+    A_p=I+\gamma_p L_p+\epsilon I,
+    \qquad
+    A_p=U_p\Lambda_pU_p^\top,
+    \qquad
+    L_t=U_t\Lambda_tU_t^\top,
+\]
+where \(\epsilon=\texttt{joint\_self\_jitter}\), the solution is
+\[
+    X =
+    U_p
+    \left[
+        \frac{U_p^\top Y U_t}
+             {\lambda_p+\gamma_t\lambda_t}
+    \right]
+    U_t^\top.
+\]
+The denominator is evaluated for every pulse-eigenvalue and temporal-eigenvalue
+pair.  The reported condition number is the ratio of the largest and smallest
+absolute denominator.
+
+The solved ensemble is blended with the aligned input using
+\[
+    X_{\mathrm{final}}=(1-\alpha)Y+\alpha X,
+    \qquad
+    \alpha=\texttt{joint\_blend\_alpha}.
+\]
+Rows are shifted back to the original pulse phase, restored to the original
+pulse scale when enabled, optionally clipped, and finally masked with the
+original \texttt{NaN} locations.
+
+\begin{tabular}{@{}ll@{}}
+\toprule
+Main default & Value \\
+\midrule
+\texttt{joint\_pulse\_gamma} & 0.75 \\
+\texttt{joint\_temporal\_gamma} & 0.03 \\
+\texttt{joint\_top\_k\_neighbors} & 6 \\
+\texttt{joint\_min\_corr} & 0.70 \\
+\texttt{joint\_corr\_power} & 3.0 \\
+\texttt{joint\_self\_jitter} & \(10^{-8}\) \\
+\texttt{joint\_blend\_alpha} & 1.0 \\
+\texttt{joint\_temporal\_cycle} & \texttt{True} \\
+\texttt{joint\_branch\_sigma} & 2.0 \\
+\texttt{joint\_radius\_sigma} & 2.0 \\
+\bottomrule
+\end{tabular}
+
+\section{Common Diagnostics and Fallback Codes}
+
+All three methods record denoising diagnostics under
+\[
+    \texttt{artery/by\_segment/denoising}.
+\]
+Common diagnostics include finite-sample fraction, original-versus-filtered
+correlation, status code, and mean absolute pointwise change.  The graph-based
+methods also record phase-alignment lag, phase-alignment correlation, graph
+neighbor statistics, graph degree, energy values, edge counts, valid pulse
+count, and system condition number.
+
+\begin{tabular}{@{}ll@{}}
+\toprule
+Status code & Meaning \\
+\midrule
+0 & Pulse was denoised. \\
+1 & Pulse contained no finite samples. \\
+2 & Pulse had too few finite samples. \\
+3 & Pulse had near-zero variance. \\
+4 & No eligible neighbors were found. \\
+5 & Graph or joint solve failed. \\
+\bottomrule
+\end{tabular}
+
+Status code 5 is only used by the graph-Laplacian and joint methods.  In
+fallback cases, valid pulses are returned without the corresponding graph
+smoothing step rather than being replaced by invalid values.
+
+\end{document}
