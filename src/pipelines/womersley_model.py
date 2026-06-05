@@ -202,12 +202,18 @@ def apply_abel_projection(L):
     return K
 
 
-def parabola(x, A, x0, y0):
-    return A * (x - x0) ** 2 + y0
+def projected_parabola_model(x, A, x0, y0, K):
+    return K @ (A * (x - x0) ** 2 + y0)
 
 
 def parabola_fit(V):
     segment_data = {}
+
+    L = V.shape[1]
+    K = apply_abel_projection(L)
+
+    x = np.arange(L)
+
     for branch_index in range(V.shape[2]):
         for circle_index in range(V.shape[3]):
             profile_complex = V[0, :, branch_index, circle_index]
@@ -216,15 +222,19 @@ def parabola_fit(V):
             if np.all(profile == 0):
                 continue
 
-            x = np.arange(len(profile))
-
             try:
                 A_guess = -0.1
                 x0_guess = np.argmax(profile)
                 y0_guess = np.max(profile)
 
+                def fit_func(x_dummy, A, x0, y0):
+                    return np.real(K @ (A * (x - x0) ** 2 + y0))
+
                 popt, pcov = curve_fit(
-                    parabola, x, profile, p0=[A_guess, x0_guess, y0_guess]
+                    fit_func,
+                    x,
+                    profile,
+                    p0=[A_guess, x0_guess, y0_guess],
                 )
 
                 A_fit, x0_fit, y0_fit = popt
@@ -244,13 +254,13 @@ def parabola_fit(V):
                     f"r0={r0_fit:.4f}, "
                     f"x0={x0_fit:.4f}, "
                     f"y0={y0_fit:.4f}, "
-                    f"A={A_fit:.4f},"
+                    f"A={A_fit:.4f}"
                 )
 
             except Exception as e:
                 print(f"Fit failed for branch={branch_index}, circle={circle_index}")
-
                 print(e)
+
     return segment_data
 
 
@@ -260,10 +270,6 @@ def womersley_Bn(L, R0, nu, omega_n, x0, r0):
     x_norm = (x - x0) / r0
 
     alpha_n = R0 * np.sqrt(omega_n / nu)
-
-    print("===================================================")
-    print(f"x_norm: {x_norm},")
-    print(f"alpha: {alpha_n}")
 
     lam = np.exp(1j * 3 * np.pi / 4) * alpha_n
 
@@ -311,16 +317,16 @@ def generate_harmonic_flow_profile(V, segment_data, ratio_map):
             matrix = V[:, :, branch_index, circle_index]
             x = np.arange(matrix.shape[1])
 
-            threshold = -2
-            model_0 = parabola(x, A, x0, y0)
+            L = len(x)
+            K = apply_abel_projection(L)
+
+            threshold = 0
+            model_0 = projected_parabola_model(x, A, x0, y0, K)
             skip_segment = model_0[0] < threshold or model_0[-1] < threshold
             # if model_0[0] < threshold or model_0[-1] < threshold:
             #     print(f"Skip branch={branch_index}, circle={circle_index} for Womersley modeling.")
 
             Cn = np.zeros(V.shape[0], dtype=complex)
-
-            L = len(x)
-            K = apply_abel_projection(L)
 
             for n in range(4):
                 Vn = np.array(matrix[n], dtype=complex)
@@ -328,7 +334,7 @@ def generate_harmonic_flow_profile(V, segment_data, ratio_map):
                 R0 = r0 * pixel_size / dx
 
                 if n == 0:
-                    model = parabola(x, A, x0, y0)
+                    model = projected_parabola_model(x, A, x0, y0, K)
 
                 else:
                     if skip_segment:
