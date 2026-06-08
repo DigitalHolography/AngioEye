@@ -141,30 +141,31 @@ falling back to the mean if needed.  Each pulse is circularly aligned to that
 reference using the same bounded lag search idea as the correlation method.
 After alignment, pulse similarities are computed at zero lag.
 
-A directed candidate edge \(i\rightarrow j\) is retained when the aligned
-correlation satisfies
+A symmetric candidate edge \(\{i,j\}\) is retained when the aligned
+zero-lag correlation satisfies
 \[
     c_{ij}\geq\texttt{laplacian\_min\_corr}.
 \]
-Its weight is
+The correlation term is first normalized to
+\[
+    q_{ij} =
+    \frac{c_{ij}-\texttt{laplacian\_min\_corr}}
+         {1-\texttt{laplacian\_min\_corr}},
+    \qquad 0\leq q_{ij}\leq 1.
+\]
+The undirected edge weight is
 \[
     w_{ij}
     =
-    \max(c_{ij},0)^p
+    q_{ij}^p
     \exp\left[-\frac{1}{2}
         \left(\frac{\ell_i-\ell_j}{\sigma_{\ell}T}\right)^2\right]
     s_{ij},
 \]
 where \(p=\texttt{laplacian\_corr\_power}\), \(\ell_i\) and \(\ell_j\) are
 the reference-alignment lags, and \(s_{ij}\) optionally penalizes branch/radius
-index distance.  Only the largest
-\(\texttt{laplacian\_top\_k\_neighbors}\) directed weights are retained per
-pulse.  The graph is symmetrized by
-\[
-    W_{ij}=\max(W^{\mathrm{directed}}_{ij},
-                W^{\mathrm{directed}}_{ji}),
-\]
-and the Laplacian is
+index distance.  All threshold-passing pairs are evaluated directly, so the
+weight matrix is symmetric by construction.  The Laplacian is
 \[
     L=D-W,\qquad D_{ii}=\sum_j W_{ij}.
 \]
@@ -173,28 +174,19 @@ The objective gives the linear system
 \[
     (I+\gamma L)X=Y.
 \]
-The implementation adds a small diagonal
-\(\texttt{laplacian\_self\_jitter}I\) for numerical stability and solves the
-dense system.  After solving, the result is blended with the aligned input:
-\[
-    X_{\mathrm{final}}=(1-\alpha)Y+\alpha X,
-    \qquad
-    \alpha=\texttt{laplacian\_blend\_alpha}.
-\]
-Rows are then shifted back to their original phase.  By default the solve is
-performed on standardized pulse shapes and restored to each pulse's original
-mean and standard deviation afterward.
+The implementation detects connected components of the threshold graph and
+solves each non-singleton component separately.  Singleton components are
+returned unchanged.  Rows are then shifted back to their original phase.  By
+default the solve is performed on standardized pulse shapes and restored to
+each pulse's original mean and standard deviation afterward.
 
 \begin{tabular}{@{}ll@{}}
 \toprule
 Main default & Value \\
 \midrule
 \texttt{laplacian\_gamma} & 0.75 \\
-\texttt{laplacian\_top\_k\_neighbors} & 6 \\
 \texttt{laplacian\_min\_corr} & 0.70 \\
 \texttt{laplacian\_corr\_power} & 3.0 \\
-\texttt{laplacian\_self\_jitter} & \(10^{-8}\) \\
-\texttt{laplacian\_blend\_alpha} & 1.0 \\
 \texttt{laplacian\_branch\_sigma} & 2.0 \\
 \texttt{laplacian\_radius\_sigma} & 2.0 \\
 \bottomrule
@@ -225,9 +217,9 @@ where \(L_p\) is the pulse-similarity graph Laplacian,
 \(\gamma_t=\texttt{joint\_temporal\_gamma}\).
 
 The pulse graph \(L_p\) is built from reference-aligned pulses using the same
-neighbor selection and weighting strategy as the graph-Laplacian method, with
-the \texttt{joint\_*} parameters.  The temporal graph \(L_t\) connects adjacent
-time samples:
+symmetric threshold graph and weighting strategy as the graph-Laplacian method,
+with the \texttt{joint\_*} parameters.  The temporal graph \(L_t\) connects
+adjacent time samples:
 \[
     (L_t)_{k,k}\mathrel{+}=1,\quad
     (L_t)_{k+1,k+1}\mathrel{+}=1,\quad
@@ -241,15 +233,16 @@ The optimality condition is a Sylvester-type system:
 \[
     (I+\gamma_p L_p)X+\gamma_t X L_t=Y.
 \]
-The implementation solves it spectrally.  With
+The implementation solves each non-singleton pulse-graph component spectrally.
+With
 \[
-    A_p=I+\gamma_p L_p+\epsilon I,
+    A_p=I+\gamma_p L_p,
     \qquad
     A_p=U_p\Lambda_pU_p^\top,
     \qquad
     L_t=U_t\Lambda_tU_t^\top,
 \]
-where \(\epsilon=\texttt{joint\_self\_jitter}\), the solution is
+the solution is
 \[
     X =
     U_p
@@ -263,15 +256,10 @@ The denominator is evaluated for every pulse-eigenvalue and temporal-eigenvalue
 pair.  The reported condition number is the ratio of the largest and smallest
 absolute denominator.
 
-The solved ensemble is blended with the aligned input using
-\[
-    X_{\mathrm{final}}=(1-\alpha)Y+\alpha X,
-    \qquad
-    \alpha=\texttt{joint\_blend\_alpha}.
-\]
-Rows are shifted back to the original pulse phase, restored to the original
-pulse scale when enabled, optionally clipped, and finally masked with the
-original \texttt{NaN} locations.
+Singleton pulse-graph components are returned unchanged.  Rows are shifted
+back to the original pulse phase, restored to the original pulse scale when
+enabled, optionally clipped, and finally masked with the original \texttt{NaN}
+locations.
 
 \begin{tabular}{@{}ll@{}}
 \toprule
@@ -279,11 +267,8 @@ Main default & Value \\
 \midrule
 \texttt{joint\_pulse\_gamma} & 0.75 \\
 \texttt{joint\_temporal\_gamma} & 0.03 \\
-\texttt{joint\_top\_k\_neighbors} & 6 \\
 \texttt{joint\_min\_corr} & 0.70 \\
 \texttt{joint\_corr\_power} & 3.0 \\
-\texttt{joint\_self\_jitter} & \(10^{-8}\) \\
-\texttt{joint\_blend\_alpha} & 1.0 \\
 \texttt{joint\_temporal\_cycle} & \texttt{True} \\
 \texttt{joint\_branch\_sigma} & 2.0 \\
 \texttt{joint\_radius\_sigma} & 2.0 \\
@@ -299,8 +284,8 @@ All three methods record denoising diagnostics under
 Common diagnostics include finite-sample fraction, original-versus-filtered
 correlation, status code, and mean absolute pointwise change.  The graph-based
 methods also record phase-alignment lag, phase-alignment correlation, graph
-neighbor statistics, graph degree, energy values, edge counts, valid pulse
-count, and system condition number.
+neighbor statistics, graph degree, connected-component labels/counts, energy
+values, edge counts, valid pulse count, and system condition number.
 
 \begin{tabular}{@{}ll@{}}
 \toprule
@@ -312,10 +297,11 @@ Status code & Meaning \\
 3 & Pulse had near-zero variance. \\
 4 & No eligible neighbors were found. \\
 5 & Graph or joint solve failed. \\
+6 & Pulse was in a singleton graph component and was returned unchanged. \\
 \bottomrule
 \end{tabular}
 
-Status code 5 is only used by the graph-Laplacian and joint methods.  In
+Status codes 5 and 6 are only used by the graph-Laplacian and joint methods.  In
 fallback cases, valid pulses are returned without the corresponding graph
 smoothing step rather than being replaced by invalid values.
 

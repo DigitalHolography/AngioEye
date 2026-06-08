@@ -1,7 +1,8 @@
 #!/usr/bin/env python
 """
 Generate an optional requirements file by aggregating `required_deps` declared
-in `@registerPipeline(...)` decorators across the built-in pipeline modules.
+in `@registerPipeline(...)` decorators across built-in pipeline modules and
+package entrypoints.
 
 Output: requirements-optional.txt
 Usage:   python scripts/gen_optional_reqs.py
@@ -60,11 +61,27 @@ def parse_required_deps(path: Path) -> list[str]:
     return sorted(required_deps)
 
 
+def iter_pipeline_entrypoints(pipelines_dir: Path = PIPELINES_DIR):
+    """Yield files that can register top-level pipelines.
+
+    Pipeline implementations may be single files (`foo.py`) or packages
+    (`foo/__init__.py`). Helper submodules inside a package are intentionally
+    not scanned; the package entrypoint owns registration.
+    """
+    for path in pipelines_dir.iterdir():
+        if path.name.startswith("_") or path.name in {"core", "__pycache__"}:
+            continue
+        if path.is_file() and path.suffix == ".py":
+            yield path
+        elif path.is_dir():
+            init_path = path / "__init__.py"
+            if init_path.is_file():
+                yield init_path
+
+
 def main() -> None:
     requirements: set[str] = set()
-    for path in PIPELINES_DIR.glob("*.py"):
-        if path.name.startswith("_") or path.stem == "core":
-            continue
+    for path in iter_pipeline_entrypoints():
         for req in parse_required_deps(path):
             requirements.add(req)
 

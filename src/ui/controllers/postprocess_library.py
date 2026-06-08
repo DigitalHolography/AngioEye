@@ -123,6 +123,7 @@ class PostprocessLibraryController(LibraryController):
             child.destroy()
         self.app.postprocess_visibility_vars = {}
         self.app.postprocess_library_inner.columnconfigure(0, weight=1)
+        status_labels: list[tk.Widget] = []
 
         selected_header = ttk.Label(self.app.postprocess_library_inner, text="Selected")
         selected_header.grid(row=0, column=0, sticky="w", pady=(0, 6))
@@ -146,15 +147,16 @@ class PostprocessLibraryController(LibraryController):
                     self.set_visibility(name, visible_var.get())
                 ),
             )
-            check.grid(row=idx, column=0, sticky="w", pady=(0, 6))
+            check.grid(row=idx, column=0, sticky="nw", pady=(0, 6))
             self.bind_mousewheel(check, self.app.postprocess_library_canvas)
 
             status = ttk.Label(
                 self.app.postprocess_library_inner,
                 text=self.status_text(postprocess),
             )
-            status.grid(row=idx, column=1, sticky="w", padx=(12, 18), pady=(0, 6))
+            status.grid(row=idx, column=1, sticky="nw", padx=(12, 18), pady=(0, 6))
             self.bind_mousewheel(status, self.app.postprocess_library_canvas)
+            status_labels.append(status)
 
             tip_text = self.descriptor_tooltip_text(postprocess)
             if tip_text:
@@ -173,6 +175,11 @@ class PostprocessLibraryController(LibraryController):
 
             self.app.postprocess_visibility_vars[postprocess.name] = var
 
+        self.configure_status_column_wrapping(
+            self.app.postprocess_library_inner,
+            self.app.postprocess_library_canvas,
+            status_labels,
+        )
         self.update_summary()
 
     def update_summary(self) -> None:

@@ -37,18 +37,30 @@ def _extend_with_external_pipeline_dir() -> None:
 _extend_with_external_pipeline_dir()
 
 
+def _iter_discoverable_pipeline_modules():
+    """Yield immediate pipeline modules and package entrypoints.
+
+    A pipeline can live in either:
+    - ``pipelines/my_pipeline.py``
+    - ``pipelines/my_pipeline/__init__.py``
+
+    Importing the module/package must execute its ``@registerPipeline`` call.
+    Submodules inside a pipeline package are private implementation details and
+    are imported by that package's ``__init__.py`` when needed.
+    """
+    for module_info in pkgutil.iter_modules(__path__):
+        if module_info.name in {"core"} or module_info.name.startswith("_"):
+            continue
+        yield f"{__name__}.{module_info.name}", module_info.name
+
+
 def _discover_pipelines() -> tuple[list[PipelineDescriptor], list[PipelineDescriptor]]:
     available: list[PipelineDescriptor] = []
     missing: list[PipelineDescriptor] = []
     PIPELINE_REGISTRY.clear()
     importlib.invalidate_caches()
 
-    for module_info in pkgutil.iter_modules(__path__):
-        if module_info.name in {"core"} or module_info.name.startswith("_"):
-            continue
-
-        module_name = f"{__name__}.{module_info.name}"
-
+    for module_name, display_name in _iter_discoverable_pipeline_modules():
         try:
             if module_name in sys.modules:
                 importlib.reload(sys.modules[module_name])
@@ -58,7 +70,7 @@ def _discover_pipelines() -> tuple[list[PipelineDescriptor], list[PipelineDescri
             # Fallback for unknown failures (SyntaxError, etc.)
             missing.append(
                 PipelineDescriptor(
-                    name=module_info.name,
+                    name=display_name,
                     description=f"Import Error: {e}",
                     available=False,
                     error_msg=str(e),

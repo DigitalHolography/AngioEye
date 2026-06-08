@@ -27,6 +27,7 @@ from .core.base import (
         ["waveform_shape_metrics_denoised"],
         ["waveform_shape_metrics_denoised_correl"],
         ["waveform_shape_metrics_denoised_joint"],
+        ["waveform_shape_metrics_denoised_laplace"],
     ],
 )
 class VariabilityHeterogeneityPostprocess(BatchPostprocess):

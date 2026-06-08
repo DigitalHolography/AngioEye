@@ -27,6 +27,7 @@ from input_output.hdf5_io import MetricsTree
 
 SEGMENT_METRIC_FOLDERS = (
     "/AngioEye/Processing/waveform_shape_metrics_denoised_correl/artery/by_segment/",
+    "/AngioEye/Processing/waveform_shape_metrics_denoised_laplace/artery/by_segment/",
     "/AngioEye/Processing/waveform_shape_metrics_denoised_joint/artery/by_segment/",
     "/AngioEye/Processing/waveform_shape_metrics_denoised/artery/by_segment/",
     "/AngioEye/Processing/waveform_shape_metrics/artery/by_segment/",
@@ -701,7 +702,13 @@ def combine_variability_score(
         return np.asarray([], dtype=float)
 
     matrix = np.vstack([x[:min_len] for x in arrays]).T
-    values = np.nanmean(matrix, axis=1)
+    finite = np.isfinite(matrix)
+    finite_count = np.sum(finite, axis=1)
+    values = np.full((matrix.shape[0],), np.nan, dtype=float)
+    has_values = finite_count > 0
+    values[has_values] = (
+        np.nansum(matrix[has_values], axis=1) / finite_count[has_values]
+    )
     return clean_values(values)
 
 

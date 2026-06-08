@@ -11,6 +11,9 @@ from .base import ViewController
 
 
 class LibraryController(ViewController):
+    STATUS_DEFAULT_WRAP_PX = 420
+    STATUS_MIN_WRAP_PX = 220
+
     @staticmethod
     def mousewheel_scroll_units(event: tk.Event) -> int:
         delta = int(getattr(event, "delta", 0) or 0)
@@ -41,6 +44,35 @@ class LibraryController(ViewController):
             return None
         canvas.yview_scroll(scroll_units, "units")
         return "break"
+
+    def configure_status_column_wrapping(
+        self,
+        inner: tk.Widget,
+        canvas: tk.Canvas,
+        status_labels: list[tk.Widget],
+    ) -> None:
+        canvas._library_status_wrap_inner = inner
+        canvas._library_status_wrap_labels = status_labels
+
+        def update_wraplength(_event: tk.Event | None = None) -> None:
+            current_inner = getattr(canvas, "_library_status_wrap_inner", inner)
+            current_labels = getattr(canvas, "_library_status_wrap_labels", [])
+            canvas_width = canvas.winfo_width()
+            if canvas_width <= 1:
+                wraplength = self.STATUS_DEFAULT_WRAP_PX
+            else:
+                selected_column_width = current_inner.grid_bbox(column=0)[2]
+                available_width = canvas_width - selected_column_width - 36
+                wraplength = max(self.STATUS_MIN_WRAP_PX, available_width)
+                wraplength = min(self.STATUS_DEFAULT_WRAP_PX, wraplength)
+            for label in current_labels:
+                if label.winfo_exists():
+                    label.configure(wraplength=wraplength)
+
+        update_wraplength()
+        if not getattr(canvas, "_library_status_wrap_bound", False):
+            canvas.bind("<Configure>", update_wraplength, add="+")
+            canvas._library_status_wrap_bound = True
 
     def descriptor_tooltip_text(self, descriptor) -> str:
         parts: list[str] = []

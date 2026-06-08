@@ -1,12 +1,15 @@
 import numpy as np
+from scipy.sparse.csgraph import connected_components
 
-from .core.base import ProcessResult, registerPipeline, with_attrs
-from .waveform_shape_metrics_denoised import ArterialSegExample as BaseDenoisedMetrics
-from .waveform_shape_metrics_denoised_correl import WaveformShapeMetricsDenoisedCorrel
+from ..core.base import ProcessResult, with_attrs
+from ..waveform_shape_metrics_denoised import ArterialSegExample as BaseDenoisedMetrics
+from ..waveform_shape_metrics_denoised_correl import WaveformShapeMetricsDenoisedCorrel
+from .reference_gate import ReferenceGateMixin
 
 
-@registerPipeline(name="waveform_shape_metrics_denoised_laplace")
-class WaveformShapeMetricsDenoisedLaplace(WaveformShapeMetricsDenoisedCorrel):
+class WaveformShapeMetricsDenoisedLaplaceBase(
+    ReferenceGateMixin, WaveformShapeMetricsDenoisedCorrel
+):
     """
     Waveform-shape metrics after graph-Laplacian denoising of arterial pulses.
 
@@ -28,15 +31,13 @@ class WaveformShapeMetricsDenoisedLaplace(WaveformShapeMetricsDenoisedCorrel):
     laplacian_use_bandlimited_input = True
 
     laplacian_gamma = 0.75
-    laplacian_top_k_neighbors = 6
     laplacian_min_corr = 0.70
+    laplacian_reference_min_corr = 0.80
     laplacian_corr_power = 3.0
-    laplacian_self_jitter = 1.0e-8
 
     laplacian_max_lag_fraction = 0.12
     laplacian_lag_sigma_fraction = 0.06
 
-    laplacian_blend_alpha = 1.0
     laplacian_preserve_nan_mask = True
     laplacian_restore_pulse_scale = True
     laplacian_clip_output = False
@@ -105,7 +106,13 @@ class WaveformShapeMetricsDenoisedLaplace(WaveformShapeMetricsDenoisedCorrel):
         neighbor_count = np.zeros(pulse_shape, dtype=np.int32)
         effective_neighbor_count = np.zeros(pulse_shape, dtype=float)
         graph_degree = np.zeros(pulse_shape, dtype=float)
+        graph_component_label = np.full(pulse_shape, -1, dtype=np.int32)
         mean_abs_change = np.full(pulse_shape, np.nan, dtype=float)
+        reference_corr = np.full(pulse_shape, np.nan, dtype=float)
+        reference_lag = np.full(pulse_shape, np.nan, dtype=float)
+        reference_keep_mask = np.zeros(pulse_shape, dtype=bool)
+        reference_kept_count = 0
+        reference_rejected_count = 0
 
         filled = np.full((n_pulses, n_time), np.nan, dtype=float)
         normalized = np.full((n_pulses, n_time), np.nan, dtype=float)
@@ -181,23 +188,38 @@ class WaveformShapeMetricsDenoisedLaplace(WaveformShapeMetricsDenoisedCorrel):
                 neighbor_count,
                 effective_neighbor_count,
                 graph_degree,
+                graph_component_label,
                 mean_abs_change,
+                reference_corr,
+                reference_lag,
+                reference_keep_mask,
+                reference_kept_count,
+                reference_rejected_count,
                 np.nan,
                 np.nan,
                 0,
+                n_valid,
                 n_valid,
                 np.nan,
             )
             self._last_laplacian_denoise_diag = diagnostics
             return out, diagnostics
 
-        reference = np.nanmedian(filled[valid_flat_indices], axis=0)
-        reference_norm = self._normalize_1d(reference)
-        if reference_norm is None:
-            reference = np.nanmean(filled[valid_flat_indices], axis=0)
-            reference_norm = self._normalize_1d(reference)
+        # Reference-correlation prefilter.
+        #
+        # This is the "is this pulse an arterial-shaped waveform?" gate.
+        # It happens before graph construction, so rejected pulses never become
+        # graph vertices and remain NaN in the downstream metric input.
+        reference, reference_gate_norm, reference_norm = (
+            self._prepare_laplacian_reference_for_gate(
+                v_block=v_block,
+                filled=filled,
+                valid_flat_indices=valid_flat_indices,
+                n_time=n_time,
+            )
+        )
 
-        if reference_norm is None:
+        if reference_gate_norm is None or reference_norm is None:
             self._mark_valid_without_graph_neighbors(
                 out=out,
                 v_block=v_block,
@@ -217,10 +239,69 @@ class WaveformShapeMetricsDenoisedLaplace(WaveformShapeMetricsDenoisedCorrel):
                 neighbor_count,
                 effective_neighbor_count,
                 graph_degree,
+                graph_component_label,
                 mean_abs_change,
+                reference_corr,
+                reference_lag,
+                reference_keep_mask,
+                reference_kept_count,
+                reference_rejected_count,
                 np.nan,
                 np.nan,
                 0,
+                n_valid,
+                n_valid,
+                np.nan,
+            )
+            self._last_laplacian_denoise_diag = diagnostics
+            return out, diagnostics
+
+        valid_flat_indices, reference_kept_count, reference_rejected_count = (
+            self._apply_laplacian_reference_gate(
+                valid_flat_indices=valid_flat_indices,
+                filled=filled,
+                coords=coords,
+                lags=lags,
+                reference_gate_norm=reference_gate_norm,
+                reference_corr=reference_corr,
+                reference_lag=reference_lag,
+                reference_keep_mask=reference_keep_mask,
+                status_code=status_code,
+            )
+        )
+        n_valid = int(valid_flat_indices.size)
+
+        if n_valid < 2:
+            self._mark_valid_without_graph_neighbors(
+                out=out,
+                v_block=v_block,
+                filled=filled,
+                finite_masks=finite_masks,
+                coords=coords,
+                valid_flat_indices=valid_flat_indices,
+                status_code=status_code,
+            )
+            diagnostics = self._laplacian_diagnostics(
+                corr_original,
+                finite_fraction,
+                status_code,
+                phase_alignment_lag,
+                phase_alignment_corr,
+                best_neighbor_corr,
+                neighbor_count,
+                effective_neighbor_count,
+                graph_degree,
+                graph_component_label,
+                mean_abs_change,
+                reference_corr,
+                reference_lag,
+                reference_keep_mask,
+                reference_kept_count,
+                reference_rejected_count,
+                np.nan,
+                np.nan,
+                0,
+                n_valid,
                 n_valid,
                 np.nan,
             )
@@ -257,6 +338,13 @@ class WaveformShapeMetricsDenoisedLaplace(WaveformShapeMetricsDenoisedCorrel):
             graph_degree=graph_degree,
         )
 
+        n_components, component_labels = connected_components(
+            W > 0.0, directed=False, return_labels=True
+        )
+        component_labels = np.asarray(component_labels, dtype=np.int32)
+        for row_i, flat_i in enumerate(valid_flat_indices):
+            graph_component_label[coords[flat_i]] = int(component_labels[row_i])
+
         edge_count = int(np.sum(W > 0.0) // 2)
         if edge_count == 0:
             self._mark_valid_without_graph_neighbors(
@@ -278,36 +366,49 @@ class WaveformShapeMetricsDenoisedLaplace(WaveformShapeMetricsDenoisedCorrel):
                 neighbor_count,
                 effective_neighbor_count,
                 graph_degree,
+                graph_component_label,
                 mean_abs_change,
+                reference_corr,
+                reference_lag,
+                reference_keep_mask,
+                reference_kept_count,
+                reference_rejected_count,
                 np.nan,
                 np.nan,
                 edge_count,
+                n_components,
                 n_valid,
                 np.nan,
             )
             self._last_laplacian_denoise_diag = diagnostics
             return out, diagnostics
 
-        degree = np.sum(W, axis=1)
-        L = np.diag(degree) - W
         gamma = float(max(self.laplacian_gamma, 0.0))
-        A = np.eye(n_valid, dtype=float) + gamma * L
-        A += float(max(self.laplacian_self_jitter, 0.0)) * np.eye(
-            n_valid, dtype=float
-        )
-
         dirichlet_before = self._dirichlet_energy(W, aligned_shape)
-        condition_number = np.nan
-        solve_failed = False
-        try:
-            condition_number = float(np.linalg.cond(A))
-            denoised_aligned = np.linalg.solve(A, aligned_shape)
-        except np.linalg.LinAlgError:
-            solve_failed = True
-            denoised_aligned = aligned_shape.copy()
+        denoised_aligned = aligned_shape.copy()
+        component_failed = np.zeros((n_valid,), dtype=bool)
+        component_sizes = np.bincount(component_labels, minlength=n_components)
+        condition_numbers = []
 
-        alpha = float(np.clip(self.laplacian_blend_alpha, 0.0, 1.0))
-        denoised_aligned = (1.0 - alpha) * aligned_shape + alpha * denoised_aligned
+        for component_idx in range(n_components):
+            rows = np.flatnonzero(component_labels == component_idx)
+            if rows.size <= 1:
+                continue
+
+            W_component = W[np.ix_(rows, rows)]
+            degree = np.sum(W_component, axis=1)
+            L = np.diag(degree) - W_component
+            A = np.eye(rows.size, dtype=float) + gamma * L
+
+            try:
+                condition_numbers.append(float(np.linalg.cond(A)))
+                denoised_aligned[rows] = np.linalg.solve(A, aligned_shape[rows])
+            except np.linalg.LinAlgError:
+                component_failed[rows] = True
+
+        condition_number = (
+            float(np.nanmax(condition_numbers)) if condition_numbers else np.nan
+        )
         dirichlet_after = self._dirichlet_energy(W, denoised_aligned)
 
         for row_idx, flat_i in enumerate(valid_flat_indices):
@@ -330,7 +431,12 @@ class WaveformShapeMetricsDenoisedLaplace(WaveformShapeMetricsDenoisedCorrel):
             mean_abs_change[coords[flat_i]] = self._safe_mean_abs_change(
                 original, denoised
             )
-            status_code[coords[flat_i]] = 5 if solve_failed else 0
+            if component_sizes[int(component_labels[row_idx])] <= 1:
+                status_code[coords[flat_i]] = 6
+            elif component_failed[row_idx]:
+                status_code[coords[flat_i]] = 5
+            else:
+                status_code[coords[flat_i]] = 0
 
         diagnostics = self._laplacian_diagnostics(
             corr_original,
@@ -342,10 +448,17 @@ class WaveformShapeMetricsDenoisedLaplace(WaveformShapeMetricsDenoisedCorrel):
             neighbor_count,
             effective_neighbor_count,
             graph_degree,
+            graph_component_label,
             mean_abs_change,
+            reference_corr,
+            reference_lag,
+            reference_keep_mask,
+            reference_kept_count,
+            reference_rejected_count,
             dirichlet_before,
             dirichlet_after,
             edge_count,
+            n_components,
             n_valid,
             condition_number,
         )
@@ -365,16 +478,16 @@ class WaveformShapeMetricsDenoisedLaplace(WaveformShapeMetricsDenoisedCorrel):
         graph_degree: np.ndarray,
     ) -> np.ndarray:
         n_valid = int(valid_flat_indices.size)
-        W_directed = np.zeros((n_valid, n_valid), dtype=float)
-        top_k = max(1, int(self.laplacian_top_k_neighbors))
+        W = np.zeros((n_valid, n_valid), dtype=float)
+        corr_matrix = np.asarray(aligned_norm, dtype=float) @ np.asarray(
+            aligned_norm, dtype=float
+        ).T
+        np.fill_diagonal(corr_matrix, 0.0)
 
         for row_i, flat_i in enumerate(valid_flat_indices):
-            candidates = []
-            for row_j, flat_j in enumerate(valid_flat_indices):
-                if row_i == row_j:
-                    continue
-
-                corr = float(np.dot(aligned_norm[row_i], aligned_norm[row_j]))
+            for row_j in range(row_i + 1, n_valid):
+                flat_j = int(valid_flat_indices[row_j])
+                corr = float(corr_matrix[row_i, row_j])
                 if (not np.isfinite(corr)) or corr < float(self.laplacian_min_corr):
                     continue
 
@@ -389,26 +502,19 @@ class WaveformShapeMetricsDenoisedLaplace(WaveformShapeMetricsDenoisedCorrel):
                 )
                 if weight <= 0.0 or not np.isfinite(weight):
                     continue
-                candidates.append((weight, corr, row_j))
+                W[row_i, row_j] = weight
+                W[row_j, row_i] = weight
 
-            candidates.sort(key=lambda item: item[0], reverse=True)
-            candidates = candidates[:top_k]
-
-            if candidates:
-                weights = np.asarray([item[0] for item in candidates], dtype=float)
-                best_neighbor_corr[coords[flat_i]] = float(
-                    max(item[1] for item in candidates)
-                )
-                neighbor_count[coords[flat_i]] = len(candidates)
+        for row_i, flat_i in enumerate(valid_flat_indices):
+            neighbor_rows = np.flatnonzero(W[row_i] > 0.0)
+            neighbor_count[coords[flat_i]] = int(neighbor_rows.size)
+            if neighbor_rows.size:
+                weights = W[row_i, neighbor_rows]
+                corrs = corr_matrix[row_i, neighbor_rows]
+                best_neighbor_corr[coords[flat_i]] = float(np.max(corrs))
                 effective_neighbor_count[coords[flat_i]] = self._effective_count(
                     weights
                 )
-                for weight, _, row_j in candidates:
-                    W_directed[row_i, row_j] = weight
-
-        W = np.maximum(W_directed, W_directed.T)
-
-        for row_i, flat_i in enumerate(valid_flat_indices):
             graph_degree[coords[flat_i]] = float(np.sum(W[row_i]))
 
         return W
@@ -421,7 +527,10 @@ class WaveformShapeMetricsDenoisedLaplace(WaveformShapeMetricsDenoisedCorrel):
         coord_i: tuple[int, int, int],
         coord_j: tuple[int, int, int],
     ) -> float:
-        corr_weight = max(float(corr), 0.0) ** float(self.laplacian_corr_power)
+        min_corr = float(self.laplacian_min_corr)
+        corr_score = (float(corr) - min_corr) / max(1.0 - min_corr, self.eps)
+        corr_score = float(np.clip(corr_score, 0.0, 1.0))
+        corr_weight = corr_score ** float(self.laplacian_corr_power)
 
         lag_sigma = float(self.laplacian_lag_sigma_fraction) * float(n_time)
         if lag_sigma > self.eps:
@@ -518,10 +627,17 @@ class WaveformShapeMetricsDenoisedLaplace(WaveformShapeMetricsDenoisedCorrel):
         neighbor_count: np.ndarray,
         effective_neighbor_count: np.ndarray,
         graph_degree: np.ndarray,
+        graph_component_label: np.ndarray,
         mean_abs_change: np.ndarray,
+        reference_corr: np.ndarray,
+        reference_lag: np.ndarray,
+        reference_keep_mask: np.ndarray,
+        reference_kept_count: int,
+        reference_rejected_count: int,
         dirichlet_before: float,
         dirichlet_after: float,
         edge_count: int,
+        component_count: int,
         valid_pulse_count: int,
         condition_number: float,
     ) -> dict:
@@ -535,10 +651,17 @@ class WaveformShapeMetricsDenoisedLaplace(WaveformShapeMetricsDenoisedCorrel):
             "neighbor_count": neighbor_count,
             "effective_neighbor_count": effective_neighbor_count,
             "graph_degree": graph_degree,
+            "graph_component_label": graph_component_label,
             "mean_abs_change": mean_abs_change,
+            "reference_corr": reference_corr,
+            "reference_lag_samples": reference_lag,
+            "reference_keep_mask": reference_keep_mask,
+            "reference_kept_count": int(reference_kept_count),
+            "reference_rejected_count": int(reference_rejected_count),
             "dirichlet_energy_before": float(dirichlet_before),
             "dirichlet_energy_after": float(dirichlet_after),
             "graph_edge_count": int(edge_count),
+            "graph_component_count": int(component_count),
             "valid_pulse_count": int(valid_pulse_count),
             "system_condition_number": float(condition_number),
         }
@@ -553,7 +676,8 @@ class WaveformShapeMetricsDenoisedLaplace(WaveformShapeMetricsDenoisedCorrel):
         if hasattr(status_value, "attrs") and status_value.attrs is not None:
             status_value.attrs["definition"] = (
                 "0 denoised, 1 all_nan, 2 too_sparse, 3 low_variance, "
-                "4 no_eligible_graph_neighbors, 5 graph_solve_failed"
+                "4 no_eligible_graph_neighbors, 5 graph_solve_failed, "
+                "6 singleton_graph_component, 7 low_reference_corr"
             )
 
     def _pack_laplacian_denoising_outputs(self, metrics: dict) -> None:
@@ -577,24 +701,46 @@ class WaveformShapeMetricsDenoisedLaplace(WaveformShapeMetricsDenoisedCorrel):
                 "after ensemble phase alignment."
             ),
             "neighbor_count": (
-                "Number of retained graph neighbors before symmetrizing the "
-                "adjacency matrix."
+                "Number of positive-weight neighbors in the final undirected "
+                "pulse graph."
             ),
             "effective_neighbor_count": (
-                "Inverse-concentration effective count of directed retained "
+                "Inverse-concentration effective count of final undirected "
                 "neighbor weights."
             ),
             "graph_degree": (
-                "Weighted graph degree after symmetrizing the adjacency matrix."
+                "Weighted degree in the final undirected pulse graph."
+            ),
+            "graph_component_label": (
+                "Connected-component label in the final undirected pulse graph; "
+                "-1 for pulses excluded from graph construction."
             ),
             "mean_abs_change": (
                 "Mean absolute pointwise change between the original pulse and "
                 "the graph-Laplacian denoised pulse."
             ),
+            "reference_corr": (
+                "Best signed circular-lag cross-correlation between each pulse "
+                "and the pointwise median arterial reference before graph "
+                "construction."
+            ),
+            "reference_lag_samples": (
+                "Circular lag, in samples, giving reference_corr for the "
+                "preprocessing reference-correlation gate."
+            ),
+            "reference_keep_mask": (
+                "Boolean mask indicating pulses retained by the preprocessing "
+                "reference-correlation gate."
+            ),
         }
 
         for name, definition in per_segment_defs.items():
-            dtype = np.int32 if name == "neighbor_count" else float
+            if name in {"neighbor_count", "graph_component_label"}:
+                dtype = np.int32
+            elif name == "reference_keep_mask":
+                dtype = bool
+            else:
+                dtype = float
             metrics[f"{base}/{name}"] = with_attrs(
                 np.asarray(diag[name], dtype=dtype),
                 {**attrs, "definition": definition},
@@ -610,8 +756,19 @@ class WaveformShapeMetricsDenoisedLaplace(WaveformShapeMetricsDenoisedCorrel):
             "graph_edge_count": (
                 "Number of undirected positive-weight edges in the pulse graph."
             ),
+            "graph_component_count": (
+                "Number of connected components among valid pulse-graph vertices."
+            ),
             "valid_pulse_count": (
                 "Number of valid pulse realizations included in the graph solve."
+            ),
+            "reference_kept_count": (
+                "Number of valid pulse realizations retained by the preprocessing "
+                "reference-correlation gate."
+            ),
+            "reference_rejected_count": (
+                "Number of otherwise valid pulse realizations rejected by the "
+                "preprocessing reference-correlation gate."
             ),
             "system_condition_number": (
                 "Dense condition number of I + gamma L used for the graph solve."
@@ -627,13 +784,11 @@ class WaveformShapeMetricsDenoisedLaplace(WaveformShapeMetricsDenoisedCorrel):
             "method": "graph_laplacian_tikhonov",
             "use_bandlimited_input": int(bool(self.laplacian_use_bandlimited_input)),
             "gamma": float(self.laplacian_gamma),
-            "top_k_neighbors": int(self.laplacian_top_k_neighbors),
             "min_corr": float(self.laplacian_min_corr),
+            "reference_min_corr": float(self.laplacian_reference_min_corr),
             "corr_power": float(self.laplacian_corr_power),
-            "self_jitter": float(self.laplacian_self_jitter),
             "max_lag_fraction": float(self.laplacian_max_lag_fraction),
             "lag_sigma_fraction": float(self.laplacian_lag_sigma_fraction),
-            "blend_alpha": float(self.laplacian_blend_alpha),
             "preserve_nan_mask": int(bool(self.laplacian_preserve_nan_mask)),
             "restore_pulse_scale": int(bool(self.laplacian_restore_pulse_scale)),
             "clip_output": int(bool(self.laplacian_clip_output)),
