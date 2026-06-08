@@ -1,4 +1,5 @@
 import h5py
+import matplotlib.pyplot as plt
 
 # import matplotlib.pyplot as plt
 import numpy as np
@@ -26,7 +27,7 @@ def preprocess_v_profile_meas(num_interp_points_x, v_profile):
 
     if valid_count <= 8:
         # print(f"Warning: Only {valid_count} valid points found. Skipping...")
-        return np.zeros(num_interp_points_x)
+        return np.zeros(num_interp_points_x), 0.0
 
     min_idx = valid_indices[0]
     max_idx = valid_indices[-1]
@@ -174,11 +175,11 @@ def _abel_cell_integral(x_abs, r_left, r_right):
     upper = r_right
     lower_term = np.sqrt(max(lower**2 - x_abs**2, 0.0))
     upper_term = np.sqrt(max(upper**2 - x_abs**2, 0.0))
-    return 2.0 * (upper_term - lower_term)
+    return 1.0 * (upper_term - lower_term)
 
 
 def apply_abel_projection(L):
-    x_grid = np.linspace(1 / L, 1, L // 2)
+    x_grid = np.linspace(1 / ((L - 1) * 2), 1, L // 2)
 
     r_edges = np.linspace(0, 1.1, L // 2 + 1)
 
@@ -194,8 +195,8 @@ def apply_abel_projection(L):
                 r_edges[j + 1],
             )
     A = np.fliplr(np.flipud(K_block))
-    B = np.zeros_like(K_block)
-    C = np.zeros_like(K_block)
+    B = np.fliplr(A)
+    C = np.fliplr(K_block)
     D = K_block
     K = np.block([[A, B], [C, D]])
 
@@ -319,6 +320,7 @@ def generate_harmonic_flow_profile(V, segment_data, ratio_map):
 
             L = len(x)
             K = apply_abel_projection(L)
+            print(f"K: {K}")
 
             threshold = 0
             model_0 = projected_parabola_model(x, A, x0, y0, K)
@@ -344,13 +346,185 @@ def generate_harmonic_flow_profile(V, segment_data, ratio_map):
                     Bn = womersley_Bn(L, R0, nu, omega_n, x0, r0)
                     KBn = K @ Bn
                     Cn[n] = compute_Cn(Vn, KBn)
-                    model = Cn[n] * Bn
+                    model = Cn[n] * KBn
 
                 v_model_fft[n, :, branch_index, circle_index] = model
 
     v_model = np.fft.irfft(v_model_fft, axis=0)
 
     return v_model, v_model_fft
+
+
+def evaluate_womersley_model(
+    metrics,
+    branch_index,
+    circle_index,
+    harmonic_n,
+    position_index,
+    save_prefix=None,
+):
+    """
+    Parameters
+    ----------
+    metrics : dict
+        Output metrics from pipeline.
+
+    branch_index : int
+    circle_index : int
+
+    harmonic_n : int
+        Frequency component to compare.
+
+    position_index : int
+        Spatial position for waveform comparison.
+
+    save_prefix : str or None
+        If provided, save figures.
+    """
+
+    v_pulse_fft = metrics["v_pulse_fft"]
+    v_model_fft = metrics["v_model_fft"]
+
+    dataset_x = metrics["dataset_x"]
+    v_model = metrics["v_model"]
+
+    # ==========================================================
+    # Figure 1
+    # Harmonic profile comparison
+    # ==========================================================
+
+    raw_profile = v_pulse_fft[
+        harmonic_n,
+        :,
+        branch_index,
+        circle_index,
+    ]
+
+    model_profile = v_model_fft[
+        harmonic_n,
+        :,
+        branch_index,
+        circle_index,
+    ]
+
+    x = np.arange(len(raw_profile))
+
+    amp_raw = np.abs(raw_profile)
+    amp_model = np.abs(model_profile)
+
+    phase_raw = np.angle(raw_profile)
+    phase_model = np.angle(model_profile)
+
+    fig1, axes = plt.subplots(
+        2,
+        1,
+        figsize=(8, 6),
+        sharex=True,
+    )
+
+    axes[0].plot(
+        x,
+        amp_raw,
+        "o-",
+        label="Raw",
+    )
+    axes[0].plot(
+        x,
+        amp_model,
+        "s-",
+        label="Model",
+    )
+
+    axes[0].set_ylabel("Amplitude")
+    axes[0].set_title(
+        f"Branch={branch_index}, Circle={circle_index}, Harmonic n={harmonic_n}"
+    )
+    axes[0].legend()
+    axes[0].grid(True)
+
+    axes[1].plot(
+        x,
+        phase_raw,
+        "o-",
+        label="Raw",
+    )
+    axes[1].plot(
+        x,
+        phase_model,
+        "s-",
+        label="Model",
+    )
+
+    axes[1].set_xlabel("Spatial Position")
+    axes[1].set_ylabel("Phase (rad)")
+    axes[1].legend()
+    axes[1].grid(True)
+
+    plt.tight_layout()
+
+    if save_prefix is not None:
+        fig1.savefig(
+            f"{save_prefix}_harmonic_profile_n{harmonic_n}.png",
+            dpi=300,
+            bbox_inches="tight",
+        )
+
+    # ==========================================================
+    # Figure 2
+    # Cardiac waveform comparison
+    # ==========================================================
+
+    raw_waveform = dataset_x[
+        :,
+        position_index,
+        branch_index,
+        circle_index,
+    ]
+
+    model_waveform = v_model[
+        :,
+        position_index,
+        branch_index,
+        circle_index,
+    ]
+
+    t = np.arange(len(raw_waveform))
+
+    fig2, ax = plt.subplots(figsize=(8, 4))
+
+    ax.plot(
+        t,
+        raw_waveform,
+        label="Raw",
+        linewidth=2,
+    )
+
+    ax.plot(
+        t,
+        model_waveform,
+        label="Model",
+        linewidth=2,
+    )
+
+    ax.set_xlabel("Cardiac Phase")
+    ax.set_ylabel("Velocity")
+    ax.set_title(
+        f"Branch={branch_index}, Circle={circle_index}, Position={position_index}"
+    )
+
+    ax.legend()
+    ax.grid(True)
+
+    plt.tight_layout()
+
+    if save_prefix is not None:
+        fig2.savefig(
+            f"{save_prefix}_waveform_x{position_index}.png",
+            dpi=300,
+            bbox_inches="tight",
+        )
+
+    plt.show()
 
 
 @registerPipeline(name="WomersleyModeling")
@@ -407,5 +581,14 @@ class WomersleyModeling(ProcessPipeline):
         metrics["v_pulse_meas_dc"] = np.asarray(v_pulse_meas_dc)
         metrics["v_model"] = np.asarray(v_model)
         metrics["v_model_fft"] = np.asarray(v_model_fft)
+
+        evaluate_womersley_model(
+            metrics,
+            branch_index=3,
+            circle_index=2,
+            harmonic_n=1,
+            position_index=8,
+            save_prefix=None,  # "segment_3_2",
+        )
 
         return ProcessResult(metrics=metrics)
