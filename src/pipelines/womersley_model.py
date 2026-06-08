@@ -207,7 +207,7 @@ def projected_parabola_model(x, A, x0, y0, K):
     return K @ (A * (x - x0) ** 2 + y0)
 
 
-def parabola_fit(V):
+def projected_parabola_fit(V):
     segment_data = {}
 
     L = V.shape[1]
@@ -241,6 +241,66 @@ def parabola_fit(V):
                 A_fit, x0_fit, y0_fit = popt
 
                 r0_fit = np.sqrt(-y0_fit / A_fit)
+
+                segment_data[(branch_index, circle_index)] = {
+                    "r0": r0_fit,
+                    "y0": y0_fit,
+                    "x0": x0_fit,
+                    "A": A_fit,
+                }
+
+                print(
+                    f"branch={branch_index}, "
+                    f"circle={circle_index}, "
+                    f"r0={r0_fit:.4f}, "
+                    f"x0={x0_fit:.4f}, "
+                    f"y0={y0_fit:.4f}, "
+                    f"A={A_fit:.4f}"
+                )
+
+            except Exception as e:
+                print(f"Fit failed for branch={branch_index}, circle={circle_index}")
+                print(e)
+
+    return segment_data
+
+
+def parabola_model(x, A, x0, y0):
+    return A * (x - x0) ** 2 + y0
+
+
+def parabola_fit(V):
+    segment_data = {}
+
+    L = V.shape[1]
+    x = np.arange(L)
+
+    for branch_index in range(V.shape[2]):
+        for circle_index in range(V.shape[3]):
+            profile_complex = V[0, :, branch_index, circle_index]
+            profile = np.real(profile_complex)
+
+            if np.all(profile == 0):
+                continue
+
+            try:
+                A_guess = -0.1
+                x0_guess = np.argmax(profile)
+                y0_guess = np.max(profile)
+
+                def fit_func(x_dummy, A, x0, y0):
+                    return A * (x - x0) ** 2 + y0
+
+                popt, pcov = curve_fit(
+                    fit_func,
+                    x,
+                    profile,
+                    p0=[A_guess, x0_guess, y0_guess],
+                )
+
+                A_fit, x0_fit, y0_fit = popt
+
+                r0_fit = np.sqrt(-y0_fit / A_fit) if A_fit != 0 else np.nan
 
                 segment_data[(branch_index, circle_index)] = {
                     "r0": r0_fit,
@@ -565,8 +625,7 @@ class WomersleyModeling(ProcessPipeline):
             num_interp_points_t=num_interp_points_t,
         )
 
-        # v_pulse_fft_filtered, r0_std = profile_analysis()
-        segment_data = parabola_fit(v_pulse_fft)
+        segment_data = projected_parabola_fit(v_pulse_fft)
         v_model, v_model_fft = generate_harmonic_flow_profile(
             v_pulse_fft, segment_data, ratio_map
         )
