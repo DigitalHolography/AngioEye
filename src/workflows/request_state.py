@@ -81,10 +81,7 @@ def build_workflow_request(
         selected_pipeline_names=work_selection.pipeline_names,
         reusable_h5_paths=reusable_h5_paths,
         defer_when_no_reusable_paths=bool(input_plan and input_plan.is_zip)
-        or (
-            input_selection.convention == "holo"
-            and not work_selection.pipelines
-        ),
+        or (input_selection.convention == "holo" and not work_selection.pipelines),
     )
     if requirement_errors:
         raise WorkflowInputError(
