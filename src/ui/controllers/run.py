@@ -24,6 +24,7 @@ from workflows import (
     make_zip_progress_callback,
     output_dir as holo_output_dir,
     output_filename as holo_output_filename,
+    read_stem_list,
     reset_output_dir as reset_holo_output_dir,
     resolve_context as resolve_holo_context,
 )
@@ -84,9 +85,10 @@ class RunTabController(ViewController):
     def choose_file(self) -> None:
         selected_paths = services_for(self.app).file_dialogs.askopenfilenames(
             filetypes=[
-                ("AngioEye inputs", "*.h5 *.hdf5 *.holo *.zip"),
+                ("AngioEye inputs", "*.h5 *.hdf5 *.holo *.txt *.zip"),
                 ("HDF5 files", "*.h5 *.hdf5"),
                 ("Holo files", "*.holo"),
+                ("Stem lists", "*.txt"),
                 ("Zip archives", "*.zip"),
                 ("All files", "*.*"),
             ],
@@ -113,6 +115,8 @@ class RunTabController(ViewController):
 
         input_path = input_paths[0]
         if input_path.suffix.lower() == ".holo":
+            self.apply_holo_inputs([input_path])
+        elif input_path.suffix.lower() == ".txt":
             self.apply_holo_inputs([input_path])
         else:
             self.app.batch_input_var.set(str(input_path))
@@ -241,7 +245,12 @@ class RunTabController(ViewController):
             return
 
         self.app._set_progress_units(self.app._progress_total_units)
-        self.app._log_batch(f"Completed. {workflow_result.summary_message}")
+        completion = (
+            "Completed with errors."
+            if workflow_result.failures or workflow_result.zip_failed
+            else "Completed."
+        )
+        self.app._log_batch(f"{completion} {workflow_result.summary_message}")
 
         if workflow_result.failures:
             self.app._set_minimal_status("Completed with errors.")
@@ -325,7 +334,11 @@ class RunTabController(ViewController):
         self.app.batch_input_paths = []
         self.app.holo_input_paths = paths
         self.app.holo_input_var.set(os.pathsep.join(str(path) for path in paths))
-        if len(paths) == 1:
+        if len(paths) == 1 and paths[0].suffix.lower() == ".txt":
+            self.app.batch_input_var.set(str(paths[0]))
+            self.app.batch_output_var.set("Auto: one *_AE folder per listed stem")
+            self.app.batch_zip_name_var.set(self.default_archive_name(paths[0]))
+        elif len(paths) == 1:
             self.app.batch_input_var.set(str(paths[0]))
             self.app.batch_output_var.set(str(holo_output_dir(paths[0])))
             self.app.batch_zip_name_var.set(self.default_archive_name(paths[0]))
@@ -390,6 +403,9 @@ class RunTabController(ViewController):
             return
 
         self.set_holo_status_visible(True)
+        if len(holo_paths) == 1 and holo_paths[0].suffix.lower() == ".txt":
+            self.update_stem_list_status_labels(holo_paths[0])
+            return
         if len(holo_paths) == 1:
             output_text = f"Output path: {holo_output_dir(holo_paths[0])}"
         else:
@@ -406,12 +422,35 @@ class RunTabController(ViewController):
         self.app.holo_status_var.set(status)
         self.set_holo_status_color(not missing_stems)
 
+    def update_stem_list_status_labels(self, path: Path) -> None:
+        self.set_holo_status_visible(True)
+        try:
+            stems = read_stem_list(path)
+        except Exception as exc:  # noqa: BLE001
+            self.app.holo_status_var.set(f"Stem list error: {exc}")
+            self.app.holo_output_path_var.set("Output paths: -")
+            self.set_holo_status_color(False)
+            return
+        self.app.holo_status_var.set(f"{len(stems)} stem(s) listed")
+        self.app.holo_output_path_var.set(
+            "Output paths: one *_AE folder per listed stem"
+        )
+        self.set_holo_status_color(True)
+
     def update_minimal_path_labels(self) -> None:
         holo_mode = self.uses_holo_input_convention()
         holo_paths = self.selected_holo_paths() if holo_mode else []
         raw_value = "" if holo_mode else (self.app.batch_input_var.get() or "").strip()
         if not raw_value:
-            if holo_paths:
+            if (
+                len(holo_paths) == 1
+                and holo_paths[0].suffix.lower() == ".txt"
+            ):
+                self.app.minimal_input_path_var.set(str(holo_paths[0]))
+                self.app.minimal_output_name_var.set(
+                    "Output names: one *_AE.h5 per listed stem"
+                )
+            elif holo_paths:
                 if len(holo_paths) == 1:
                     self.app.minimal_input_path_var.set(str(holo_paths[0]))
                     self.app.minimal_output_name_var.set(
