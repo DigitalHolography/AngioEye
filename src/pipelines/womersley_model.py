@@ -13,6 +13,7 @@ num_interp_points_t = 128  # Number of temporal points for interpolation
 num_interp_points_x = 16  # Number of spatial points for interpolation
 pixel_size = 10e-6  # in m
 nu = 3.5 * 1e-6  # Viscosity in m^2/s
+rho = 1060  # Density in kg/m^3
 f0 = 1.2
 omega_0 = 2 * np.pi * f0
 
@@ -249,14 +250,14 @@ def projected_parabola_fit(V):
                     "A": A_fit,
                 }
 
-                print(
-                    f"branch={branch_index}, "
-                    f"circle={circle_index}, "
-                    f"r0={r0_fit:.4f}, "
-                    f"x0={x0_fit:.4f}, "
-                    f"y0={y0_fit:.4f}, "
-                    f"A={A_fit:.4f}"
-                )
+                # print(
+                #     f"branch={branch_index}, "
+                #     f"circle={circle_index}, "
+                #     f"r0={r0_fit:.4f}, "
+                #     f"x0={x0_fit:.4f}, "
+                #     f"y0={y0_fit:.4f}, "
+                #     f"A={A_fit:.4f}"
+                # )
 
             except Exception as e:
                 print(f"Fit failed for branch={branch_index}, circle={circle_index}")
@@ -360,10 +361,37 @@ def compute_Cn(Vn, KBn):
     return numerator / denominator
 
 
+def compute_Qn(R0, nu, omega_n, Cn_n):
+    alpha_n = R0 * np.sqrt(omega_n / nu)
+
+    lam = np.exp(1j * 3 * np.pi / 4) * alpha_n
+
+    Tn = 1 - 2 * jv(1, lam) / (lam * jv(0, lam))
+
+    Qn = np.pi * (R0**2) * Cn_n * Tn
+
+    return Qn
+
+
+def compute_tau_n(R0, nu, omega_n, Cn_n, rho):
+    alpha_n = R0 * np.sqrt(omega_n / nu)
+
+    lam = np.exp(1j * 3 * np.pi / 4) * alpha_n
+
+    Sn = lam * jv(1, lam) / jv(0, lam)
+
+    tau_n = rho * nu * Cn_n * Sn / R0
+
+    return tau_n
+
+
 def generate_harmonic_flow_profile(V, segment_data, ratio_map):
     v_model_fft = np.zeros(
         (V.shape[0], V.shape[1], V.shape[2], V.shape[3]), dtype=complex
     )
+    Cn_model_fft = np.zeros((V.shape[0], V.shape[2], V.shape[3]), dtype=complex)
+    Qn_model_fft = np.zeros((V.shape[0], V.shape[2], V.shape[3]), dtype=complex)
+    tau_n_model_fft = np.zeros((V.shape[0], V.shape[2], V.shape[3]), dtype=complex)
     for branch_index in range(V.shape[2]):
         for circle_index in range(V.shape[3]):
             if (branch_index, circle_index) not in segment_data:
@@ -380,17 +408,19 @@ def generate_harmonic_flow_profile(V, segment_data, ratio_map):
 
             L = len(x)
             K = apply_abel_projection(L)
-            print(f"K: {K}")
 
-            threshold = 0
+            threshold = -1
             model_0 = projected_parabola_model(x, A, x0, y0, K)
             skip_segment = model_0[0] < threshold or model_0[-1] < threshold
             # if model_0[0] < threshold or model_0[-1] < threshold:
             #     print(f"Skip branch={branch_index}, circle={circle_index} for Womersley modeling.")
 
             Cn = np.zeros(V.shape[0], dtype=complex)
+            Cn[0] = 1
+            Qn = np.zeros(V.shape[0], dtype=complex)
+            tau_n = np.zeros(V.shape[0], dtype=complex)
 
-            for n in range(4):
+            for n in range(10):
                 Vn = np.array(matrix[n], dtype=complex)
 
                 R0 = r0 * pixel_size / dx
@@ -406,13 +436,30 @@ def generate_harmonic_flow_profile(V, segment_data, ratio_map):
                     Bn = womersley_Bn(L, R0, nu, omega_n, x0, r0)
                     KBn = K @ Bn
                     Cn[n] = compute_Cn(Vn, KBn)
+                    Qn[n] = compute_Qn(R0, nu, omega_n, Cn[n])
+                    tau_n[n] = compute_tau_n(R0, nu, omega_n, Cn[n], rho)
                     model = Cn[n] * KBn
 
                 v_model_fft[n, :, branch_index, circle_index] = model
+                Cn_model_fft[n, branch_index, circle_index] = Cn[n]
+                Qn_model_fft[n, branch_index, circle_index] = Qn[n]
+                tau_n_model_fft[n, branch_index, circle_index] = tau_n[n]
 
     v_model = np.fft.irfft(v_model_fft, axis=0)
+    Cn_model = np.fft.irfft(Cn_model_fft, axis=0)
+    Qn_model = np.fft.irfft(Qn_model_fft, axis=0)
+    tau_n_model = np.fft.irfft(tau_n_model_fft, axis=0)
 
-    return v_model, v_model_fft
+    return (
+        v_model,
+        v_model_fft,
+        Cn_model_fft,
+        Qn_model_fft,
+        tau_n_model_fft,
+        Cn_model,
+        Qn_model,
+        tau_n_model,
+    )
 
 
 def evaluate_womersley_model(
@@ -626,9 +673,16 @@ class WomersleyModeling(ProcessPipeline):
         )
 
         segment_data = projected_parabola_fit(v_pulse_fft)
-        v_model, v_model_fft = generate_harmonic_flow_profile(
-            v_pulse_fft, segment_data, ratio_map
-        )
+        (
+            v_model,
+            v_model_fft,
+            Cn_model_fft,
+            Qn_model_fft,
+            tau_n_model_fft,
+            Cn_model,
+            Qn_model,
+            tau_n_model,
+        ) = generate_harmonic_flow_profile(v_pulse_fft, segment_data, ratio_map)
 
         metrics: dict = {}
         metrics["dataset_x"] = np.asarray(dataset_x)
@@ -640,6 +694,12 @@ class WomersleyModeling(ProcessPipeline):
         metrics["v_pulse_meas_dc"] = np.asarray(v_pulse_meas_dc)
         metrics["v_model"] = np.asarray(v_model)
         metrics["v_model_fft"] = np.asarray(v_model_fft)
+        metrics["Cn_model_fft"] = np.asarray(Cn_model_fft)
+        metrics["Qn_model_fft"] = np.asarray(Qn_model_fft)
+        metrics["tau_n_model_fft"] = np.asarray(tau_n_model_fft)
+        metrics["Cn_model"] = np.asarray(Cn_model)
+        metrics["Qn_model"] = np.asarray(Qn_model)
+        metrics["tau_n_model"] = np.asarray(tau_n_model)
 
         evaluate_womersley_model(
             metrics,
