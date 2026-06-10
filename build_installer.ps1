@@ -449,6 +449,7 @@ AppPublisher={#MyAppPublisher}
 AppVerName={#MyAppName} {#MyAppVersion}
 DefaultDirName={localappdata}\Programs\{#MyAppName}\{#MyAppVersion}
 DefaultGroupName={#MyAppName} {#MyAppVersion}
+UsePreviousAppDir=no
 DisableProgramGroupPage=yes
 LicenseFile={#MyLicensePath}
 OutputDir={#MyOutputDir}
