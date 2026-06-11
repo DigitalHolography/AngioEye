@@ -40,6 +40,7 @@ CONTROL_GROUP_PATTERNS = [
     r"^controls$",
     r"^ctrl$",
     r"^ctl$",
+    r"^BL$",
     r"^healthy$",
     r"^healthy_control$",
     r"^healthy_controls$",
