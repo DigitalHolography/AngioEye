@@ -9,14 +9,13 @@ from typing import Any, Literal
 from input_output import relative_hdf5_parent
 from pipeline_engine import run_pipeline_file, run_postprocesses
 
-from ._holo import HoloInputContext
 from ._holo import find_ae_h5 as find_holo_ae_h5
 from ._holo import output_dir as holo_output_dir
 from ._holo import reset_output_dir as reset_holo_output_dir
-from ._holo import resolve_context as resolve_holo_context
 from ._postprocess_requirements import (
     compatible_postprocess_files,
 )
+from ._stem_inputs import resolve_selected_holo_contexts
 from ._zip_batches import ZipBatchSettings
 from .inputs import RunInputPlan
 from .runs import (
@@ -103,15 +102,23 @@ def _dispatch_holo_workflow(
     if not request.holo_paths:
         raise WorkflowInputError(
             "Missing input",
-            "Select one or more .holo files to process.",
+            "Select one or more .holo files, or a .txt stem list, to process.",
             status="Ready.",
         )
 
     if not request.pipelines and request.postprocesses:
         return _dispatch_holo_postprocess_workflow(request, callbacks)
 
-    contexts, skipped_holo_stems = _resolve_holo_contexts(request.holo_paths)
+    try:
+        resolved_inputs = resolve_selected_holo_contexts(request.holo_paths)
+    except ValueError as exc:
+        raise WorkflowInputError("Invalid input", str(exc)) from exc
+    contexts = resolved_inputs.contexts
+    skipped_holo_stems = resolved_inputs.skipped_stems
+    input_failures = resolved_inputs.failures
     if not contexts:
+        for failure in input_failures:
+            callbacks.log(f"[INPUT SKIP] {failure}")
         return WorkflowDispatchResult(
             workflow_result=None,
             skipped_holo_stems=tuple(skipped_holo_stems),
@@ -140,6 +147,15 @@ def _dispatch_holo_workflow(
         settings=request.zip_batch_settings,
         idle_callback=callbacks.idle_callback,
     )
+    if input_failures:
+        for failure in input_failures:
+            callbacks.log(f"[INPUT SKIP] {failure}")
+        workflow_result.failures.extend(input_failures)
+        total_inputs = len(contexts) + len(input_failures)
+        workflow_result.summary_message = (
+            f"Processed {len(workflow_result.processed_outputs)}/{total_inputs} "
+            f"holo file(s); {len(workflow_result.failures)} failed/skipped."
+        )
     return WorkflowDispatchResult(
         workflow_result=workflow_result,
         skipped_holo_stems=tuple(skipped_holo_stems),
@@ -165,7 +181,6 @@ def _dispatch_holo_postprocess_workflow(
             )
             continue
         ae_records.append((holo_path, ae_h5))
-
     callbacks.start_final_progress(
         len(ae_records) * len(request.postprocesses),
         "Running postprocess...",
@@ -204,20 +219,6 @@ def _dispatch_holo_postprocess_workflow(
         ),
         skipped_holo_stems=tuple(skipped_stems),
     )
-
-
-def _resolve_holo_contexts(
-    holo_paths: Sequence[Path],
-) -> tuple[list[HoloInputContext], list[str]]:
-    contexts: list[HoloInputContext] = []
-    skipped_holo_stems: list[str] = []
-    for holo_path in holo_paths:
-        try:
-            contexts.append(resolve_holo_context(holo_path))
-        except Exception:  # noqa: BLE001
-            skipped_holo_stems.append(holo_path.stem)
-    return contexts, skipped_holo_stems
-
 
 def _dispatch_file_workflow(
     request: WorkflowRunRequest,

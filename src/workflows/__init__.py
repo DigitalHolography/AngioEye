@@ -10,6 +10,7 @@ from ._holo import (
     resolve_context,
 )
 from ._postprocess_requirements import missing_required_pipeline_errors
+from ._stem_inputs import read_stem_list, resolve_stem_context
 from ._zip_batches import ZipBatchSettings
 from .dispatch import (
     WorkflowCallbacks,
@@ -70,8 +71,10 @@ __all__ = [
     "prepare_run_inputs",
     "missing_required_pipeline_errors",
     "reset_output_dir",
+    "read_stem_list",
     "resolve_base_output_dir",
     "resolve_context",
+    "resolve_stem_context",
     "run_filesystem_workflow",
     "run_holo_workflow",
     "run_zip_workflow",
