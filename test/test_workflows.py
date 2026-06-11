@@ -738,7 +738,7 @@ class WorkflowDispatchTests(unittest.TestCase):
             tmp_path = Path(tmp_dir)
             holo_path = tmp_path / "sample.holo"
             holo_path.write_text("holo", encoding="utf-8")
-            ef_h5_dir = tmp_path / "sample" / "sample_EF" / "h5"
+            ef_h5_dir = tmp_path / "sample" / "sample_EF"
             ef_h5_dir.mkdir(parents=True)
             (ef_h5_dir / "sample.h5").write_text("h5", encoding="utf-8")
             request = self._request(

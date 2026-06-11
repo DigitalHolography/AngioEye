@@ -39,13 +39,13 @@ class MinimalView(ttk.Frame):
             minimal_logo_label.grid(row=1, column=0, pady=(0, 18))
             controller.set_widget("minimal_logo_label", minimal_logo_label)
 
-        minimal_browse_button = ttk.Button(
+        minimal_select_button = ttk.Button(
             content,
-            text="Browse .h5, .holo, or zip archive",
+            text="Select .h5, .holo, or zip archive",
             command=controller.choose_input,
         )
-        minimal_browse_button.grid(row=2, column=0, pady=(0, 10))
-        controller.set_widget("minimal_browse_button", minimal_browse_button)
+        minimal_select_button.grid(row=2, column=0, pady=(0, 10))
+        controller.set_widget("minimal_select_button", minimal_select_button)
         minimal_input_path_label = tk.Label(
             content,
             textvariable=controller.input_path_var,
@@ -57,36 +57,6 @@ class MinimalView(ttk.Frame):
         minimal_input_path_label.grid(row=3, column=0, pady=(0, 8), sticky="ew")
         controller.set_widget("minimal_input_path_label", minimal_input_path_label)
 
-        minimal_holo_status_label = tk.Label(
-            content,
-            textvariable=controller.holo_status_var,
-            bg=controller.bg_color,
-            fg="#d65f5f",
-            justify="center",
-            wraplength=420,
-        )
-        minimal_holo_status_label.grid(row=4, column=0, pady=(0, 8), sticky="ew")
-        minimal_holo_status_label.grid_remove()
-        controller.set_widget("minimal_holo_status_label", minimal_holo_status_label)
-        minimal_holo_output_label = tk.Label(
-            content,
-            textvariable=controller.holo_output_path_var,
-            bg=controller.bg_color,
-            fg=controller.text_fg,
-            justify="center",
-            wraplength=420,
-        )
-        minimal_holo_output_label.grid(row=5, column=0, pady=(0, 8), sticky="ew")
-        minimal_holo_output_label.grid_remove()
-        controller.set_widget("minimal_holo_output_label", minimal_holo_output_label)
-
-        minimal_output_button = ttk.Button(
-            content,
-            text="Select output folder",
-            command=controller.choose_output,
-        )
-        minimal_output_button.grid(row=6, column=0, pady=(0, 10))
-        controller.set_widget("minimal_output_button", minimal_output_button)
         minimal_output_path_label = tk.Label(
             content,
             textvariable=controller.output_path_var,
@@ -95,23 +65,13 @@ class MinimalView(ttk.Frame):
             justify="center",
             wraplength=420,
         )
-        minimal_output_path_label.grid(row=7, column=0, pady=(0, 6), sticky="ew")
+        minimal_output_path_label.grid(row=4, column=0, pady=(0, 18), sticky="ew")
         controller.set_widget("minimal_output_path_label", minimal_output_path_label)
-        minimal_output_name_label = tk.Label(
-            content,
-            textvariable=controller.output_name_var,
-            bg=controller.bg_color,
-            fg=controller.text_fg,
-            justify="center",
-            wraplength=420,
-        )
-        minimal_output_name_label.grid(row=8, column=0, pady=(0, 18), sticky="ew")
-        controller.set_widget("minimal_output_name_label", minimal_output_name_label)
 
         minimal_run_button = ttk.Button(
             content, text="Run", command=controller.run
         )
-        minimal_run_button.grid(row=9, column=0, pady=(0, 18))
+        minimal_run_button.grid(row=5, column=0, pady=(0, 18))
         controller.set_widget("minimal_run_button", minimal_run_button)
 
         minimal_progress = ttk.Progressbar(
@@ -123,7 +83,7 @@ class MinimalView(ttk.Frame):
             length=340,
             style=controller.progress_style,
         )
-        minimal_progress.grid(row=10, column=0, sticky="ew")
+        minimal_progress.grid(row=6, column=0, sticky="ew")
         controller.set_widget("minimal_progress", minimal_progress)
         minimal_status_label = tk.Label(
             content,
@@ -133,7 +93,7 @@ class MinimalView(ttk.Frame):
             justify="center",
             wraplength=420,
         )
-        minimal_status_label.grid(row=11, column=0, pady=(8, 0), sticky="ew")
+        minimal_status_label.grid(row=7, column=0, pady=(8, 0), sticky="ew")
         controller.set_widget("minimal_status_label", minimal_status_label)
 
 

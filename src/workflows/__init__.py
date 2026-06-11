@@ -1,3 +1,10 @@
+from input_output import (
+    InputKind as RunInputKind,
+    InputPlan as RunInputPlan,
+    prepare_run_input,
+    prepare_run_inputs,
+)
+
 from ._holo import (
     HoloInputContext,
     dataset_dir,
@@ -20,7 +27,6 @@ from .dispatch import (
     dispatch_workflow,
     make_zip_progress_callback,
 )
-from .inputs import RunInputKind, RunInputPlan, prepare_run_input, prepare_run_inputs
 from .request_state import (
     WorkflowInputSelection,
     WorkflowOutputOptions,

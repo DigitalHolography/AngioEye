@@ -16,10 +16,6 @@ class MinimalViewController(ViewController):
         return self.app.minimal_output_path_var
 
     @property
-    def output_name_var(self):
-        return self.app.minimal_output_name_var
-
-    @property
     def holo_status_var(self):
         return self.app.holo_status_var
 
@@ -62,9 +58,6 @@ class MinimalViewController(ViewController):
 
     def choose_input(self) -> None:
         self.app.run_controller.choose_file()
-
-    def choose_output(self) -> None:
-        self.app.run_controller.choose_output()
 
     def run(self) -> None:
         self.app.run_controller.run()

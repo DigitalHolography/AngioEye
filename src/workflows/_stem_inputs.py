@@ -4,6 +4,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from input_output import read_stem_list
+
 from ._holo import (
     HoloInputContext,
     ef_dir,
@@ -18,19 +20,6 @@ class ResolvedInputContexts:
     contexts: list[HoloInputContext]
     skipped_stems: list[str]
     failures: list[str]
-
-
-def read_stem_list(path: Path) -> tuple[str, ...]:
-    path = path.expanduser()
-    if path.suffix.lower() != ".txt":
-        raise ValueError(f"File is not a .txt stem list: {path}")
-    if not path.is_file():
-        raise FileNotFoundError(f"Stem list does not exist: {path}")
-    return tuple(
-        line.strip()
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    )
 
 
 def resolve_stem_context(root_dir: Path, stem: str) -> HoloInputContext:
