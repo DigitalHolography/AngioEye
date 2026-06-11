@@ -738,7 +738,7 @@ class WorkflowDispatchTests(unittest.TestCase):
             tmp_path = Path(tmp_dir)
             holo_path = tmp_path / "sample.holo"
             holo_path.write_text("holo", encoding="utf-8")
-            ef_h5_dir = tmp_path / "sample" / "sample_EF" / "h5"
+            ef_h5_dir = tmp_path / "sample" / "sample_EF"
             ef_h5_dir.mkdir(parents=True)
             (ef_h5_dir / "sample.h5").write_text("h5", encoding="utf-8")
             request = self._request(
@@ -756,6 +756,41 @@ class WorkflowDispatchTests(unittest.TestCase):
             self.assertIsNotNone(result.workflow_result)
             self.assertEqual(1, len(run_holo.call_args.kwargs["contexts"]))
             self.assertTrue((tmp_path / "sample" / "sample_AE").is_dir())
+
+    def test_dispatch_routes_holo_path_list_inputs(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            holo_paths = []
+            for stem in ("first", "second"):
+                holo_path = tmp_path / f"{stem}.holo"
+                holo_path.write_text("holo", encoding="utf-8")
+                ef_h5_dir = tmp_path / stem / f"{stem}_EF"
+                ef_h5_dir.mkdir(parents=True)
+                (ef_h5_dir / f"{stem}.h5").write_text("h5", encoding="utf-8")
+                holo_paths.append(holo_path)
+            list_path = tmp_path / "list.txt"
+            list_path.write_text(
+                "\n".join(str(path) for path in holo_paths),
+                encoding="utf-8",
+            )
+            request = self._request(
+                tmp_path,
+                mode="holo",
+                holo_paths=[list_path],
+            )
+
+            with mock.patch(
+                "workflows.dispatch.run_holo_workflow",
+                return_value=self._result(tmp_path),
+            ) as run_holo:
+                result = dispatch_workflow(request, self._callbacks())
+
+            self.assertIsNotNone(result.workflow_result)
+            contexts = run_holo.call_args.kwargs["contexts"]
+            self.assertEqual(2, len(contexts))
+            self.assertEqual(holo_paths, [context.holo_path for context in contexts])
+            self.assertTrue((tmp_path / "first" / "first_AE").is_dir())
+            self.assertTrue((tmp_path / "second" / "second_AE").is_dir())
 
     def test_dispatch_rejects_empty_zip_without_tk(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

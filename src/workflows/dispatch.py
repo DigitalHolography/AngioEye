@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from input_output import relative_hdf5_parent
+from input_output import InputPlan, relative_hdf5_parent
 from pipeline_engine import run_pipeline_file, run_postprocesses
 
 from ._holo import find_ae_h5 as find_holo_ae_h5
@@ -17,7 +17,6 @@ from ._postprocess_requirements import (
 )
 from ._stem_inputs import resolve_selected_holo_contexts
 from ._zip_batches import ZipBatchSettings
-from .inputs import RunInputPlan
 from .runs import (
     RunWorkflowResult,
     ZipOutputDir,
@@ -43,7 +42,7 @@ class WorkflowRunRequest:
     zip_name: str
     trim_source: bool
     zip_output_dir: ZipOutputDir
-    input_plan: RunInputPlan | None = None
+    input_plan: InputPlan | None = None
     holo_paths: Sequence[Path] = ()
     zip_batch_settings: ZipBatchSettings = field(
         default_factory=ZipBatchSettings.from_app_settings
@@ -102,7 +101,7 @@ def _dispatch_holo_workflow(
     if not request.holo_paths:
         raise WorkflowInputError(
             "Missing input",
-            "Select one or more .holo files, or a .txt stem list, to process.",
+            "Select one or more .holo files, or a .txt holo path list, to process.",
             status="Ready.",
         )
 
@@ -291,7 +290,7 @@ def _dispatch_zip_workflow(
 def _input_plan_for_mode(
     request: WorkflowRunRequest,
     expected_kind: Literal["file", "folder", "zip"],
-) -> RunInputPlan:
+) -> InputPlan:
     if request.input_plan is None:
         raise WorkflowInputError(
             "Missing input",
