@@ -101,7 +101,7 @@ def _dispatch_holo_workflow(
     if not request.holo_paths:
         raise WorkflowInputError(
             "Missing input",
-            "Select one or more .holo files, or a .txt stem list, to process.",
+            "Select one or more .holo files, or a .txt holo path list, to process.",
             status="Ready.",
         )
 

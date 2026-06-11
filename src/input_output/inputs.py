@@ -42,6 +42,13 @@ class HoloInputStatus:
     ef: bool
 
 
+@dataclass(frozen=True)
+class HoloPathList:
+    root_dir: Path
+    stems: tuple[str, ...]
+    holo_paths: tuple[Path, ...]
+
+
 def prepare_run_input(input_path: str | Path) -> InputPlan:
     path = Path(input_path).expanduser()
     if _is_zip_file(path):
@@ -95,7 +102,9 @@ def find_ef_h5(holo_path: Path) -> Path | None:
     if not ef_dir_path.is_dir():
         return None
     candidates = sorted(
-        path for path in ef_dir_path.iterdir() if path.is_file() and is_hdf5_path(path)
+        path
+        for path in ef_dir_path.rglob("*")
+        if path.is_file() and is_hdf5_path(path)
     )
     if not candidates:
         return None
@@ -103,7 +112,8 @@ def find_ef_h5(holo_path: Path) -> Path | None:
     return min(
         candidates,
         key=lambda path: (
-            path.stem != holo_path.stem,
+            path.stem not in {holo_path.stem, f"{holo_path.stem}_EF"},
+            path.parent.name.lower() != "h5",
             str(path).lower(),
         ),
     )
@@ -160,16 +170,42 @@ def stem_input_status(stem: str, root_dir: Path) -> HoloInputStatus:
     return HoloInputStatus(ef=find_ef_h5(root_dir / stem) is not None)
 
 
-def read_stem_list(path: Path) -> tuple[str, ...]:
+def read_holo_path_list(path: Path) -> HoloPathList:
     path = path.expanduser()
     if path.suffix.lower() != INPUT_LIST_SUFFIX:
-        raise ValueError(f"File is not a {INPUT_LIST_SUFFIX} stem list: {path}")
+        raise ValueError(f"File is not a {INPUT_LIST_SUFFIX} holo path list: {path}")
     if not path.is_file():
-        raise FileNotFoundError(f"Stem list does not exist: {path}")
-    return tuple(
-        line.strip()
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
+        raise FileNotFoundError(f"Holo path list does not exist: {path}")
+
+    holo_paths: list[Path] = []
+    stems: list[str] = []
+    root_dir: Path | None = None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        raw_value = line.strip()
+        if not raw_value:
+            continue
+        holo_path = Path(raw_value).expanduser()
+        if not holo_path.is_absolute():
+            holo_path = path.parent / holo_path
+        if holo_path.suffix.lower() != HOLO_SUFFIX:
+            raise ValueError(f"Listed input is not a {HOLO_SUFFIX} file: {raw_value}")
+
+        parent = holo_path.parent
+        if root_dir is None:
+            root_dir = parent
+        elif parent != root_dir:
+            raise ValueError(
+                "All .holo paths in the input list must share the same parent folder."
+            )
+        holo_paths.append(holo_path)
+        stems.append(holo_path.stem)
+
+    if root_dir is None:
+        raise ValueError(f"Holo path list is empty: {path}")
+    return HoloPathList(
+        root_dir=root_dir,
+        stems=tuple(stems),
+        holo_paths=tuple(holo_paths),
     )
 
 

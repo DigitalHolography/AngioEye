@@ -53,6 +53,7 @@ from .hdf5_schema import (
 from .inputs import (
     HOLO_SUFFIX,
     INPUT_LIST_SUFFIX,
+    HoloPathList,
     HoloInputStatus,
     InputKind,
     InputPlan,
@@ -65,7 +66,7 @@ from .inputs import (
     iter_hdf5_inputs,
     prepare_run_input,
     prepare_run_inputs,
-    read_stem_list,
+    read_holo_path_list,
     relative_hdf5_parent,
     stem_input_status,
 )
@@ -104,6 +105,7 @@ __all__ = [
     "relative_hdf5_parent",
     "HOLO_SUFFIX",
     "INPUT_LIST_SUFFIX",
+    "HoloPathList",
     "HoloInputStatus",
     "InputKind",
     "InputPlan",
@@ -114,7 +116,7 @@ __all__ = [
     "holo_input_status",
     "prepare_run_input",
     "prepare_run_inputs",
-    "read_stem_list",
+    "read_holo_path_list",
     "stem_input_status",
     "ZipH5Member",
     "ExtractedH5Member",
