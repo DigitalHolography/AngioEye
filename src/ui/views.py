@@ -9,7 +9,7 @@ from .postprocess_library import PostprocessLibraryTab
 
 class MinimalView(ttk.Frame):
     def __init__(self, parent: tk.Misc, controller) -> None:
-        super().__init__(parent, padding=10)
+        super().__init__(parent, padding=(6, 18))
         self.controller = controller
         self._build()
 
@@ -20,7 +20,7 @@ class MinimalView(ttk.Frame):
         self.grid_anchor("center")
 
         content = ttk.Frame(self, padding=(24, 24))
-        content.grid(row=0, column=0)
+        content.grid(row=0, column=0, sticky="nsew")
         content.columnconfigure(0, minsize=420)
         controller.set_widget("minimal_content", content)
 
@@ -148,22 +148,9 @@ class RunTab(ttk.Frame):
         )
         advanced_holo_status_label.grid_remove()
         controller.set_widget("advanced_holo_status_label", advanced_holo_status_label)
-        advanced_holo_output_label = tk.Label(
-            advanced_input_frame,
-            textvariable=controller.holo_output_path_var,
-            bg=controller.bg_color,
-            fg=controller.text_fg,
-            justify="left",
-            anchor="w",
-        )
-        advanced_holo_output_label.grid(
-            row=2, column=1, columnspan=2, sticky="ew", pady=(4, 10)
-        )
-        advanced_holo_output_label.grid_remove()
-        controller.set_widget("advanced_holo_output_label", advanced_holo_output_label)
 
         ttk.Label(advanced_input_frame, text="Output").grid(
-            row=3,
+            row=2,
             column=0,
             sticky="w",
             padx=(0, 16),
@@ -173,19 +160,19 @@ class RunTab(ttk.Frame):
             advanced_input_frame, textvariable=controller.output_var
         )
         batch_output_entry.grid(
-            row=3, column=1, sticky="ew", padx=(0, 4), pady=(10, 0)
+            row=2, column=1, sticky="ew", padx=(0, 4), pady=(10, 0)
         )
         ttk.Button(
             advanced_input_frame,
             text="Browse",
             command=controller.choose_output,
-        ).grid(row=3, column=2, sticky="w", pady=(10, 0))
+        ).grid(row=2, column=2, sticky="w", pady=(10, 0))
 
         run_btn = ttk.Button(
             advanced_input_frame, text="Run", command=controller.run
         )
         run_btn.grid(
-            row=4,
+            row=3,
             column=0,
             sticky="w",
             padx=(0, 16),
@@ -198,7 +185,7 @@ class RunTab(ttk.Frame):
             variable=controller.persist_eyeflow_data_var,
             command=controller.persist_trim_h5source,
         )
-        persist_eyeflow_data_btn.grid(row=4, column=1, sticky="w", pady=(12, 0))
+        persist_eyeflow_data_btn.grid(row=3, column=1, sticky="w", pady=(12, 0))
 
         ttk.Label(self, text="BatchLog").grid(
             row=1, column=0, sticky="w", pady=(16, 4)

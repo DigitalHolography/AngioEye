@@ -47,9 +47,9 @@ class SettingsMixin:
             min_height = min(520, height)
         else:
             width = max(560, min(660, screen_width - 260))
-            height = max(420, min(520, screen_height - 260))
+            height = max(480, min(440, screen_height - 260))
             min_width = min(500, width)
-            min_height = min(520, height)
+            min_height = min(460, height)
         return width, height, min_width, min_height
 
     def _ensure_window_size_for_mode(

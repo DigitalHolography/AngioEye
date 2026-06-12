@@ -52,10 +52,6 @@ class RunTabController(ViewController):
         return self.app.holo_status_var
 
     @property
-    def holo_output_path_var(self):
-        return self.app.holo_output_path_var
-
-    @property
     def persist_eyeflow_data_var(self):
         return self.app._persist_eyeflow_data
 
@@ -358,7 +354,10 @@ class RunTabController(ViewController):
         self.app.batch_zip_var.set(False)
 
         self.update_holo_status_labels()
+        self.update_minimal_path_labels()
         self.app._reset_progress()
+        self.set_minimal_status_color(None)
+        self.app._set_minimal_status("Ready.")
 
     def selected_holo_paths(self) -> list[Path]:
         paths = getattr(self.app, "holo_input_paths", [])
@@ -374,10 +373,7 @@ class RunTabController(ViewController):
         return self.app.input_convention_var.get() == "holo"
 
     def set_holo_status_visible(self, visible: bool) -> None:
-        label_names = (
-            "advanced_holo_status_label",
-            "advanced_holo_output_label",
-        )
+        label_names = ("advanced_holo_status_label",)
         for label_name in label_names:
             label = getattr(self.app, label_name, None)
             if label is not None:
@@ -402,21 +398,29 @@ class RunTabController(ViewController):
         if label is not None:
             label.configure(fg=color)
 
+    def set_minimal_output_status_color(self, found: bool | None = None) -> None:
+        if found is None:
+            color = self.app._muted_fg
+        else:
+            color = "#3fb37f" if found else "#d65f5f"
+        label = getattr(self.app, "minimal_output_path_label", None)
+        if label is not None:
+            label.configure(fg=color)
+
     def set_minimal_holo_status(self, text: str, found: bool) -> None:
-        self.app._set_minimal_status(text)
-        self.set_minimal_status_color(found)
+        self.app.minimal_output_path_var.set(text)
+        self._set_minimal_output_path_visible(True)
+        self.set_minimal_output_status_color(found)
 
     def update_holo_status_labels(self) -> None:
         if not self.uses_holo_input_convention():
             self.app.holo_status_var.set("")
-            self.app.holo_output_path_var.set("Output path: -")
             self.set_holo_status_visible(False)
             return
 
         holo_paths = self.selected_holo_paths()
         if not holo_paths:
             self.app.holo_status_var.set("")
-            self.app.holo_output_path_var.set("Output path: -")
             self.set_holo_status_visible(False)
             return
 
@@ -424,11 +428,6 @@ class RunTabController(ViewController):
         if len(holo_paths) == 1 and holo_paths[0].suffix.lower() == ".txt":
             self.update_holo_path_list_status_labels(holo_paths[0])
             return
-        if len(holo_paths) == 1:
-            output_text = f"Output path: {holo_output_dir(holo_paths[0])}"
-        else:
-            output_text = "Output paths: one *_AE folder per selected .holo"
-        self.app.holo_output_path_var.set(output_text)
 
         statuses = [
             holo_input_status(path, require_holo_file=True) for path in holo_paths
@@ -450,7 +449,6 @@ class RunTabController(ViewController):
         except Exception as exc:  # noqa: BLE001
             status = f"Holo path list error: {exc}"
             self.app.holo_status_var.set(status)
-            self.app.holo_output_path_var.set("Output paths: -")
             self.set_holo_status_color(False)
             self.set_minimal_holo_status(status, False)
             return
@@ -463,9 +461,6 @@ class RunTabController(ViewController):
         status = found_status_text("EF", found_count, len(stems), missing_stems)
         found_all = not missing_stems
         self.app.holo_status_var.set(status)
-        self.app.holo_output_path_var.set(
-            "Output paths: one *_AE folder per listed .holo"
-        )
         self.set_holo_status_color(found_all)
         self.set_minimal_holo_status(status, found_all)
 
@@ -473,6 +468,7 @@ class RunTabController(ViewController):
         holo_mode = self.uses_holo_input_convention()
         holo_paths = self.selected_holo_paths() if holo_mode else []
         raw_value = "" if holo_mode else (self.app.batch_input_var.get() or "").strip()
+        output_is_status = False
         if raw_value:
             batch_paths = self.selected_batch_input_paths()
             if batch_paths:
@@ -486,24 +482,39 @@ class RunTabController(ViewController):
             len(holo_paths) == 1
             and holo_paths[0].suffix.lower() == ".txt"
         ):
-            input_text = str(holo_paths[0])
-            output_path = "one *_AE.h5 per listed .holo"
+            input_text = self._selected_holo_path_list_summary(holo_paths[0])
+            output_path = self._minimal_holo_status_text(
+                "one *_AE.h5 per listed .holo"
+            )
+            output_is_status = output_path == self.app.holo_status_var.get()
         elif len(holo_paths) == 1:
             input_text = str(holo_paths[0])
-            output_path = str(
-                holo_output_dir(holo_paths[0]) / holo_output_filename(holo_paths[0])
+            output_path = self._minimal_holo_status_text(
+                str(
+                    holo_output_dir(holo_paths[0])
+                    / holo_output_filename(holo_paths[0])
+                )
             )
+            output_is_status = output_path == self.app.holo_status_var.get()
         elif holo_paths:
             input_text = self._selected_holo_summary(holo_paths)
-            output_path = "one *_AE.h5 per selected .holo"
+            output_path = self._minimal_holo_status_text(
+                "one *_AE.h5 per selected .holo"
+            )
+            output_is_status = output_path == self.app.holo_status_var.get()
         else:
             self.app.minimal_input_path_var.set("No input")
             self.app.minimal_output_path_var.set("")
+            self.set_minimal_output_status_color(None)
             self._set_minimal_output_path_visible(False)
             return
 
         self.app.minimal_input_path_var.set(f"Input: {input_text}")
-        self.app.minimal_output_path_var.set(f"Output Path: {output_path}")
+        if output_is_status:
+            self.app.minimal_output_path_var.set(str(output_path))
+        else:
+            self.app.minimal_output_path_var.set(f"Output Path: {output_path}")
+            self.set_minimal_output_status_color(None)
         self._set_minimal_output_path_visible(True)
 
     def _set_minimal_output_path_visible(self, visible: bool) -> None:
@@ -544,8 +555,27 @@ class RunTabController(ViewController):
         return f"{len(input_paths)} HDF5 files selected: {names}"
 
     def _selected_holo_summary(self, holo_paths: Sequence[Path]) -> str:
-        stems = ", ".join(path.stem for path in holo_paths)
-        return f"{len(holo_paths)} .holo files selected: {stems}"
+        return self._first_path_with_more_summary(holo_paths)
+
+    def _selected_holo_path_list_summary(self, path: Path) -> str:
+        try:
+            input_list = read_holo_path_list(path)
+        except Exception:  # noqa: BLE001
+            return str(path)
+        return self._first_path_with_more_summary(input_list.holo_paths)
+
+    def _first_path_with_more_summary(self, paths: Sequence[Path]) -> str:
+        if not paths:
+            return ""
+        text = str(paths[0])
+        remaining_count = len(paths) - 1
+        if remaining_count:
+            text = f"{text} (+{remaining_count} more)"
+        return text
+
+    def _minimal_holo_status_text(self, fallback: str) -> str:
+        status = (self.app.holo_status_var.get() or "").strip()
+        return status or fallback
 
     def minimal_output_filename_for_run(
         self,
