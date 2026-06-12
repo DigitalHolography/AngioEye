@@ -59,7 +59,6 @@ class ProcessApp(
         self.holo_input_paths: list[Path] = []
         self.holo_input_var = tk.StringVar()
         self.holo_status_var = tk.StringVar()
-        self.holo_output_path_var = tk.StringVar(value="Output path: -")
         self.minimal_status_var = tk.StringVar(value="Ready.")
         self.pipeline_library_summary_var = tk.StringVar(value="")
         self.postprocess_library_summary_var = tk.StringVar(value="")

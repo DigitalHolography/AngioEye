@@ -20,10 +20,6 @@ class MinimalViewController(ViewController):
         return self.app.holo_status_var
 
     @property
-    def holo_output_path_var(self):
-        return self.app.holo_output_path_var
-
-    @property
     def status_var(self):
         return self.app.minimal_status_var
 
