@@ -4,11 +4,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from input_output import read_holo_path_list
+
 from ._holo import (
     HoloInputContext,
-    ef_dir,
-    find_ef_h5,
-    output_dir,
     resolve_context,
 )
 
@@ -20,54 +19,32 @@ class ResolvedInputContexts:
     failures: list[str]
 
 
-def read_stem_list(path: Path) -> tuple[str, ...]:
-    path = path.expanduser()
-    if path.suffix.lower() != ".txt":
-        raise ValueError(f"File is not a .txt stem list: {path}")
-    if not path.is_file():
-        raise FileNotFoundError(f"Stem list does not exist: {path}")
-    return tuple(
-        line.strip()
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    )
-
-
 def resolve_stem_context(root_dir: Path, stem: str) -> HoloInputContext:
     stem = stem.strip()
     if not stem or Path(stem).name != stem:
         raise ValueError(f"Invalid input stem: {stem!r}")
 
-    stem_path = root_dir.expanduser() / stem
-    h5_path = find_ef_h5(stem_path)
-    if h5_path is None:
-        raise FileNotFoundError(f"No .h5/.hdf5 file found under {ef_dir(stem_path)}")
-    return HoloInputContext(
-        holo_path=stem_path,
-        ef_dir=ef_dir(stem_path),
-        h5_path=h5_path,
-        output_dir=output_dir(stem_path),
-    )
+    return resolve_context(root_dir.expanduser() / f"{stem}.holo")
 
 
 def resolve_selected_holo_contexts(paths: Sequence[Path]) -> ResolvedInputContexts:
     if len(paths) == 1 and paths[0].suffix.lower() == ".txt":
-        return _resolve_stem_list_contexts(paths[0])
+        return _resolve_holo_path_list_contexts(paths[0])
     if any(path.suffix.lower() == ".txt" for path in paths):
         raise ValueError(
-            "Select either one .txt stem list or one or more .holo files."
+            "Select either one .txt holo path list or one or more .holo files."
         )
     return _resolve_holo_contexts(paths)
 
 
-def _resolve_stem_list_contexts(path: Path) -> ResolvedInputContexts:
+def _resolve_holo_path_list_contexts(path: Path) -> ResolvedInputContexts:
     contexts: list[HoloInputContext] = []
     skipped: list[str] = []
     failures: list[str] = []
-    input_list = path.expanduser()
-    for stem in read_stem_list(input_list):
+    input_list = read_holo_path_list(path.expanduser())
+    for stem in input_list.stems:
         try:
-            contexts.append(resolve_stem_context(input_list.parent, stem))
+            contexts.append(resolve_stem_context(input_list.root_dir, stem))
         except Exception as exc:  # noqa: BLE001
             skipped.append(stem)
             failures.append(f"{stem}: {exc}")
