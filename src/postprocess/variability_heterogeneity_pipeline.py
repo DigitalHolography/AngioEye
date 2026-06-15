@@ -49,7 +49,7 @@ class VariabilityHeterogeneityPostprocess(BatchPostprocess):
             blocks = (
                 variability_heterogeneity_dashboard.compute_file_higher_metric_blocks(
                     file_path,
-                    mode="raw_segment",
+                    mode="bandlimited_segment",
                 )
             )
             tree = variability_heterogeneity_dashboard.variability_tree_from_blocks(
