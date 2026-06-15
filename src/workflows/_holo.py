@@ -4,7 +4,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from input_output import find_hdf5_inputs
+from input_output import dataset_dir, ef_dir, find_ef_h5
 
 
 @dataclass(frozen=True)
@@ -13,14 +13,6 @@ class HoloInputContext:
     ef_dir: Path
     h5_path: Path
     output_dir: Path
-
-
-def dataset_dir(holo_path: Path) -> Path:
-    return holo_path.parent / holo_path.stem
-
-
-def ef_dir(holo_path: Path) -> Path:
-    return dataset_dir(holo_path) / f"{holo_path.stem}_EF"
 
 
 def output_dir(holo_path: Path) -> Path:
@@ -51,30 +43,6 @@ def reset_output_dir(context: HoloInputContext) -> None:
             )
         shutil.rmtree(context_output_dir)
     context_output_dir.mkdir(parents=True, exist_ok=True)
-
-
-def find_ef_h5(holo_path: Path) -> Path | None:
-    ef_dir_path = ef_dir(holo_path)
-    if not ef_dir_path.is_dir():
-        return None
-    candidates = find_hdf5_inputs(ef_dir_path)
-    if not candidates:
-        return None
-
-    def candidate_rank(path: Path) -> tuple[int, str]:
-        has_h5_parent = any(parent.name.lower() == "h5" for parent in path.parents)
-        exact_stem = path.stem == holo_path.stem
-        if has_h5_parent and exact_stem:
-            rank = 0
-        elif exact_stem:
-            rank = 1
-        elif has_h5_parent:
-            rank = 2
-        else:
-            rank = 3
-        return rank, str(path).lower()
-
-    return min(candidates, key=candidate_rank)
 
 
 def find_ae_h5(holo_path: Path) -> Path | None:

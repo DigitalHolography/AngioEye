@@ -5,9 +5,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from input_output import prepare_run_input, prepare_run_inputs
+
 from ._postprocess_requirements import missing_required_pipeline_errors
 from .dispatch import OutputFilenameResolver, WorkflowInputError, WorkflowRunRequest
-from .inputs import prepare_run_input, prepare_run_inputs
 from .runs import ZipOutputDir
 
 InputConvention = Literal["legacy", "holo"]

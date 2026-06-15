@@ -22,7 +22,7 @@ from input_output import ZipH5Member
 from pipelines import load_pipeline_catalog
 
 from ._holo import HoloInputContext, output_filename
-from ._pipeline_runs import (
+from ._standard_pipeline_runs import (
     PipelineRunResult,
     RunPipelineFile,
     run_filesystem_pipeline_run,
