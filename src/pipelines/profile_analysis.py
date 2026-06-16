@@ -1,407 +1,292 @@
+import h5py
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy.optimize import curve_fit
+
+from .core.base import ProcessPipeline, ProcessResult, registerPipeline
+
+# fitting kit
+# ============================================================
 
 
-def main():
-    r0 = [
-        15.1,
-        15.4,
-        16.0,
-        13.6,
-        15.4,
-        12.5,
-        15.3,
-        13.0,
-        12.2,
-        13.1,
-        13.8,
-        11.7,
-        14.0,
-        11.0,
-        13.1,
-        14.6,
-        14.9,
-        16.4,
-        12.2,
-        10.8,
-        10.7,
-        10.7,
-        10.8,
-        11.8,
-        11.1,
-        10.6,
-        11.8,
-        9.7,
-        10.8,
-        9.5,
-        10.1,
-        7.7,
-        7.5,
-        10.2,
-        10.2,
-        8.0,
-        10.2,
-        11.5,
-        7.4,
-        10.4,
-        11.8,
-        12.3,
-        10.3,
-    ]
+def parabola(x, A, x0, y0):
+    return A * (x - x0) ** 2 + y0
 
-    A = [
-        -0.14,
-        -0.12,
-        -0.105,
-        -0.14,
-        -0.10,
-        -0.13,
-        -0.07,
-        -0.14,
-        -0.12,
-        -0.10,
-        -0.080,
-        -0.100,
-        -0.150,
-        -0.220,
-        -0.160,
-        -0.160,
-        -0.160,
-        -0.120,
-        -0.180,
-        -0.200,
-        -0.180,
-        -0.160,
-        -0.130,
-        -0.150,
-        -0.120,
-        -0.120,
-        -0.110,
-        -0.160,
-        -0.150,
-        -0.150,
-        -0.110,
-        -0.170,
-        -0.170,
-        -0.120,
-        -0.110,
-        -0.130,
-        -0.050,
-        -0.060,
-        -0.110,
-        -0.100,
-        -0.040,
-        -0.040,
-        -0.060,
-    ]
 
-    marque = [
-        "030",
-        "031",
-        "032",
-        "033",
-        "034",
-        "035",
-        "036",
-        "045",
-        "046",
-        "047",
-        "048",
-        "049",
-        "052",
-        "053",
-        "054",
-        "060",
-        "061",
-        "062",
-        "070",
-        "071",
-        "072",
-        "073",
-        "074",
-        "082",
-        "083",
-        "084",
-        "085",
-        "086",
-        "087",
-        "088",
-        "089",
-        "094",
-        "095",
-        "096",
-        "097",
-        "098",
-        "099",
-        "0104",
-        "0105",
-        "0106",
-        "0107",
-        "0108",
-        "0109",
-    ]
+def parabola_fit(V):
+    segment_data = {}
+    for branch_index in range(V.shape[2]):
+        for circle_index in range(V.shape[3]):
+            profile_complex = V[0, :, branch_index, circle_index]
+            profile = np.real(profile_complex)
 
-    x0 = [
-        7.0,
-        7.0,
-        8.0,
-        8.0,
-        7.5,
-        8.0,
-        10.0,
-        5.8,
-        5.2,
-        7.0,
-        7.2,
-        7.3,
-        8.7,
-        7.5,
-        7.5,
-        9.0,
-        8.0,
-        7.0,
-        8.0,
-        7.0,
-        6.5,
-        6.0,
-        7.7,
-        9.0,
-        8.2,
-        6.6,
-        8.0,
-        7.0,
-        8.0,
-        8.3,
-        8.6,
-        8.0,
-        6.2,
-        8.0,
-        8.0,
-        6.8,
-        9.0,
-        10.0,
-        8.0,
-        6.2,
-        7.5,
-        6.3,
-        7.4,
-    ]
+            if np.all(profile == 0):
+                continue
 
-    y0 = [
-        8.0,
-        7.1,
-        6.7,
-        6.45,
-        5.90,
-        5.05,
-        4.10,
-        5.90,
-        4.60,
-        4.30,
-        3.80,
-        3.45,
-        7.40,
-        6.70,
-        6.85,
-        8.50,
-        8.90,
-        8.10,
-        6.70,
-        5.80,
-        5.15,
-        4.55,
-        3.80,
-        5.20,
-        3.70,
-        3.35,
-        3.82,
-        3.80,
-        4.35,
-        3.38,
-        2.80,
-        2.52,
-        2.42,
-        3.10,
-        2.85,
-        2.08,
-        1.30,
-        2.00,
-        1.50,
-        2.70,
-        1.40,
-        1.52,
-        1.60,
-    ]
+            x = np.arange(len(profile))
 
-    def tri_fusion(liste):
-        if len(liste) <= 1:
-            return liste
+            try:
+                A_guess = -0.1
+                x0_guess = np.argmax(profile)
+                y0_guess = np.max(profile)
 
-        milieu = len(liste) // 2
-        gauche = tri_fusion(liste[:milieu])
-        droite = tri_fusion(liste[milieu:])
+                popt, pcov = curve_fit(
+                    parabola, x, profile, p0=[A_guess, x0_guess, y0_guess]
+                )
 
-        return fusion(gauche, droite)
+                A_fit, x0_fit, y0_fit = popt
 
-    def fusion(gauche, droite):
-        resultat = []
-        i = 0
-        j = 0
+                r0_fit = np.sqrt(-y0_fit / A_fit)
 
-        while i < len(gauche) and j < len(droite):
-            if gauche[i]["r0"] <= droite[j]["r0"]:
-                resultat.append(gauche[i])
-                i += 1
-            else:
-                resultat.append(droite[j])
-                j += 1
-
-        while i < len(gauche):
-            resultat.append(gauche[i])
-            i += 1
-
-        while j < len(droite):
-            resultat.append(droite[j])
-            j += 1
-
-        return resultat
-
-    def moyenne(liste):
-        if len(liste) == 0:
-            return None
-        return sum(liste) / len(liste)
-
-    def mediane(liste_triee):
-        n = len(liste_triee)
-
-        if n == 0:
-            return None
-
-        milieu = n // 2
-
-        if n % 2 == 1:
-            return liste_triee[milieu]
-        else:
-            return (liste_triee[milieu - 1] + liste_triee[milieu]) / 2
-
-    def tracer_histogramme(liste, largeur_bloc=1):
-        if len(liste) == 0:
-            print("La liste est vide.")
-            return
-
-        minimum = min(liste)
-        maximum = max(liste)
-
-        bornes = np.arange(minimum, maximum + largeur_bloc, largeur_bloc)
-
-        liste_triee = sorted(liste)
-        moy = moyenne(liste)
-        med = mediane(liste_triee)
-
-        plt.hist(liste, bins=bornes, edgecolor="black", zorder=1)
-
-        if moy is not None:
-            plt.axvline(
-                moy,
-                color="black",
-                linestyle="--",
-                linewidth=2,
-                label=f"Moyenne = {moy:.2f}",
-                zorder=10,
-            )
-
-        if med is not None:
-            plt.axvline(
-                med,
-                color="red",
-                linestyle="--",
-                linewidth=2,
-                label=f"Médiane = {med:.2f}",
-                zorder=10,
-            )
-
-        plt.xlabel("Valeurs")
-        plt.ylabel("Effectifs")
-        plt.title("Histogramme avec moyenne et médiane")
-        plt.legend()
-        plt.show()
-
-    def filtre_donnees(donnees, moyenne_r0, mediane_r0, n):
-        donnees_filtrees = []
-
-        if moyenne_r0 is None or mediane_r0 is None:
-            return donnees_filtrees
-
-        ecart = abs(moyenne_r0 - mediane_r0)
-
-        borne_min = moyenne_r0 - n * ecart
-        borne_max = moyenne_r0 + n * ecart
-
-        for d in donnees:
-            r = d["r0"]
-
-            if borne_min < r < borne_max:
-                donnees_filtrees.append(d)
-
-        return donnees_filtrees
-
-    def std(liste):
-        moy = moyenne(liste)
-
-        if moy is None:
-            return None
-
-        variance = sum((x - moy) ** 2 for x in liste) / len(liste)
-        return variance**0.5
-
-    def profile_analysis():
-        donnees = []
-
-        for m, a, x, y, r in zip(marque, A, x0, y0, r0, strict=True):
-            donnees.append(
-                {
-                    "marque": m,
-                    "A": a,
-                    "x0": x,
-                    "y0": y,
-                    "r0": r,
+                segment_data[(branch_index, circle_index)] = {
+                    "r0": r0_fit,
+                    "y0": y0_fit,
+                    "x0": x0_fit,
+                    "A": A_fit,
                 }
-            )
 
-        donnees = tri_fusion(donnees)
+            except Exception as e:
+                print(f"Fit failed for branch={branch_index}, circle={circle_index}")
 
-        r0_trie = [d["r0"] for d in donnees]
+                print(e)
+    return segment_data
 
-        moyenne_r0 = moyenne(r0_trie)
-        mediane_r0 = mediane(r0_trie)
 
-        donnees_filtrees = filtre_donnees(donnees, moyenne_r0, mediane_r0, 13)
+# Distribution of A, x0, y0, r0 over ALL segments
+# ============================================================
 
-        r0_filtre = [d["r0"] for d in donnees_filtrees]
-        r0_std = std(r0_filtre)
 
-        print("Moyenne r0 =", moyenne_r0)
-        print("Médiane r0 =", mediane_r0)
-        print("Nombre avant filtre =", len(donnees))
-        print("Nombre après filtre =", len(donnees_filtrees))
+def view_distribution(segment_data, bins=15):
+    A_values = []
+    x0_values = []
+    y0_values = []
+    r0_values = []
 
-        print("\nDonnées filtrées :")
-        for d in donnees_filtrees:
-            print(d)
+    for data in segment_data.values():
+        A_values.append(data["A"])
+        x0_values.append(data["x0"])
+        y0_values.append(data["y0"])
+        r0_values.append(data["r0"])
 
-        # tracer_histogramme(r0_trie, 1)
-        # tracer_histogramme(r0_filtre, 0.5)
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
 
-        values = np.array(
-            [[d["A"], d["x0"], d["y0"], d["r0"]] for d in donnees_filtrees]
+    axes[0, 0].hist(A_values, bins=bins, edgecolor="black")
+    axes[0, 0].set_title("Distribution of A")
+    axes[0, 0].set_xlabel("A")
+
+    axes[0, 1].hist(x0_values, bins=bins, edgecolor="black")
+    axes[0, 1].set_title("Distribution of x0")
+    axes[0, 1].set_xlabel("x0")
+
+    axes[1, 0].hist(y0_values, bins=bins, edgecolor="black")
+    axes[1, 0].set_title("Distribution of y0")
+    axes[1, 0].set_xlabel("y0")
+
+    axes[1, 1].hist(r0_values, bins=bins, edgecolor="black")
+    axes[1, 1].set_title("Distribution of r0")
+    axes[1, 1].set_xlabel("r0")
+
+    plt.tight_layout()
+    plt.show()
+
+
+# Variation along circles for one branch
+# ============================================================
+
+
+def view_branch_variation(segment_data, branch_index):
+    circles = []
+    A_values = []
+    x0_values = []
+    y0_values = []
+    r0_values = []
+
+    for (branch, circle), data in segment_data.items():
+        if branch != branch_index:
+            continue
+
+        circles.append(circle)
+        A_values.append(data["A"])
+        x0_values.append(data["x0"])
+        y0_values.append(data["y0"])
+        r0_values.append(data["r0"])
+
+    if len(circles) == 0:
+        print(f"No data for branch {branch_index}")
+        return
+
+    # sort by circle index
+    circles = np.array(circles)
+
+    sort_idx = np.argsort(circles)
+
+    circles = circles[sort_idx]
+
+    A_values = np.array(A_values)[sort_idx]
+    x0_values = np.array(x0_values)[sort_idx]
+    y0_values = np.array(y0_values)[sort_idx]
+    r0_values = np.array(r0_values)[sort_idx]
+
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+
+    axes[0, 0].plot(circles, A_values, marker="o")
+    axes[0, 0].set_title(f"A variation (branch {branch_index})")
+    axes[0, 0].set_xlabel("Circle index")
+    axes[0, 0].set_ylabel("A")
+
+    axes[0, 1].plot(circles, x0_values, marker="o")
+    axes[0, 1].set_title(f"x0 variation (branch {branch_index})")
+    axes[0, 1].set_xlabel("Circle index")
+    axes[0, 1].set_ylabel("x0")
+
+    axes[1, 0].plot(circles, y0_values, marker="o")
+    axes[1, 0].set_title(f"y0 variation (branch {branch_index})")
+    axes[1, 0].set_xlabel("Circle index")
+    axes[1, 0].set_ylabel("y0")
+
+    axes[1, 1].plot(circles, r0_values, marker="o")
+    axes[1, 1].set_title(f"r0 variation (branch {branch_index})")
+    axes[1, 1].set_xlabel("Circle index")
+    axes[1, 1].set_ylabel("r0")
+
+    plt.tight_layout()
+    plt.show()
+
+
+# Find and fit two branches whose y0 decreases linearly along the radius
+# ============================================================
+
+
+def find_linear_y0_branches(segment_data, min_circles=5, top_n=3):
+    pixel_size = 20 * 1e-06  # in m
+    branch_dict = {}
+
+    for (branch, circle), data in segment_data.items():
+        if branch not in branch_dict:
+            branch_dict[branch] = {"circles": [], "y0": []}
+
+        branch_dict[branch]["circles"].append(circle)
+        branch_dict[branch]["y0"].append(data["y0"])
+
+    fit_results = []
+
+    for branch, values in branch_dict.items():
+        circles = np.array(values["circles"])
+        y0 = np.array(values["y0"])
+
+        if len(circles) < min_circles:
+            continue
+
+        sort_idx = np.argsort(circles)
+
+        circles = circles[sort_idx]
+        y0 = y0[sort_idx]
+
+        slope, intercept = np.polyfit(circles, y0, 1)
+
+        y_fit = slope * circles + intercept
+
+        ss_res = np.sum((y0 - y_fit) ** 2)
+        ss_tot = np.sum((y0 - np.mean(y0)) ** 2)
+
+        r2 = 1 - ss_res / ss_tot if ss_tot != 0 else 0
+
+        relaxation_distance = intercept / (slope / (10 * pixel_size * 128))  # in m
+
+        fit_results.append(
+            {
+                "branch": branch,
+                "circles": circles,
+                "y0": y0,
+                "y_fit": y_fit,
+                "slope": slope,
+                "intercept": intercept,
+                "R2": r2,
+                "RD": relaxation_distance,
+            }
         )
 
-        return values, r0_std
+    fit_results.sort(key=lambda x: x["R2"], reverse=True)
 
-    # resultat = profile_analysis()
-    print(moyenne(x0))
-    print(mediane(x0))
+    best_results = fit_results[:top_n]
+
+    fig, axes = plt.subplots(1, len(best_results), figsize=(6 * len(best_results), 5))
+
+    if len(best_results) == 1:
+        axes = [axes]
+
+    for ax, res in zip(axes, best_results, strict=True):
+        ax.plot(res["circles"], res["y0"], "o", label="Raw data")
+
+        ax.plot(res["circles"], res["y_fit"], "-", label="Linear fit")
+
+        ax.set_title(f"Branch {res['branch']}\n$R^2$ = {res['R2']:.4f}")
+
+        ax.set_xlabel("Circle index")
+        ax.set_ylabel("y0")
+
+        ax.legend()
+        ax.grid(True)
+
+    plt.tight_layout()
+    plt.show()
+
+    return best_results
 
 
-if __name__ == "__main__":
-    main()
+def extract_RD_matrix(best_results):
+    rows = []
+
+    seen_branches = set()
+
+    for result in best_results:
+        branch = result["branch"]
+
+        if branch in seen_branches:
+            continue
+
+        seen_branches.add(branch)
+
+        RD = result["RD"]
+
+        rows.append([branch, RD])
+
+    matrix = np.array(rows)
+
+    return matrix
+
+
+@registerPipeline(name="ProfileAnalysis")
+class ProfileAnalysis(ProcessPipeline):
+    description = "Profile Analysis Pipeline"
+
+    v_profile_path = "/AngioEye/Processing/womersleymodeling/v_pulse_fft"
+
+    def run(self, h5file: h5py.File) -> ProcessResult:
+        obj = h5file[self.v_profile_path]
+        if not isinstance(obj, h5py.Dataset):
+            raise ValueError(
+                f"Expected a dataset at {self.v_profile_path}, but found {type(obj)}"
+            )
+        V = obj[:]
+
+        segment_data = parabola_fit(V)
+
+        # view_distribution(segment_data)
+
+        # for i in range(20):
+
+        #     branch_to_view = i
+        #     view_branch_variation(
+        #         segment_data,
+        #         branch_index=branch_to_view,
+        #     )
+
+        best_results = find_linear_y0_branches(segment_data)
+
+        RD_matrix = extract_RD_matrix(best_results)
+
+        metrics: dict = {}
+        metrics["fit_matrix"] = np.asarray(RD_matrix)
+
+        return ProcessResult(metrics=metrics)
