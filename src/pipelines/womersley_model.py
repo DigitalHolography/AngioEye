@@ -12,10 +12,12 @@ from .core.base import ProcessPipeline, ProcessResult, registerPipeline
 num_interp_points_t = 128  # Number of temporal points for interpolation
 num_interp_points_x = 16  # Number of spatial points for interpolation
 pixel_size = 10e-6  # in m
+len_seg = 10  # in pixels
 nu = 3.5 * 1e-6  # Viscosity in m^2/s
 rho = 1060  # Density in kg/m^3
 f0 = 1.2
 omega_0 = 2 * np.pi * f0
+num_harmonics = 10  # Number of harmonics to consider
 
 
 # v_profile_meas_extraction
@@ -232,11 +234,16 @@ def projected_parabola_fit(V):
                 def fit_func(x_dummy, A, x0, y0):
                     return np.real(K @ (A * (x - x0) ** 2 + y0))
 
+                bounds = (
+                    [-np.inf, 0, 0],  # A<0, x0>0, y0>0
+                    [0, L, np.inf],
+                )
                 popt, pcov = curve_fit(
                     fit_func,
                     x,
                     profile,
                     p0=[A_guess, x0_guess, y0_guess],
+                    bounds=bounds,
                 )
 
                 A_fit, x0_fit, y0_fit = popt
@@ -266,76 +273,17 @@ def projected_parabola_fit(V):
     return segment_data
 
 
-def parabola_model(x, A, x0, y0):
-    return A * (x - x0) ** 2 + y0
-
-
-def parabola_fit(V):
-    segment_data = {}
-
-    L = V.shape[1]
-    x = np.arange(L)
-
-    for branch_index in range(V.shape[2]):
-        for circle_index in range(V.shape[3]):
-            profile_complex = V[0, :, branch_index, circle_index]
-            profile = np.real(profile_complex)
-
-            if np.all(profile == 0):
-                continue
-
-            try:
-                A_guess = -0.1
-                x0_guess = np.argmax(profile)
-                y0_guess = np.max(profile)
-
-                def fit_func(x_dummy, A, x0, y0):
-                    return A * (x - x0) ** 2 + y0
-
-                popt, pcov = curve_fit(
-                    fit_func,
-                    x,
-                    profile,
-                    p0=[A_guess, x0_guess, y0_guess],
-                )
-
-                A_fit, x0_fit, y0_fit = popt
-
-                r0_fit = np.sqrt(-y0_fit / A_fit) if A_fit != 0 else np.nan
-
-                segment_data[(branch_index, circle_index)] = {
-                    "r0": r0_fit,
-                    "y0": y0_fit,
-                    "x0": x0_fit,
-                    "A": A_fit,
-                }
-
-                print(
-                    f"branch={branch_index}, "
-                    f"circle={circle_index}, "
-                    f"r0={r0_fit:.4f}, "
-                    f"x0={x0_fit:.4f}, "
-                    f"y0={y0_fit:.4f}, "
-                    f"A={A_fit:.4f}"
-                )
-
-            except Exception as e:
-                print(f"Fit failed for branch={branch_index}, circle={circle_index}")
-                print(e)
-
-    return segment_data
-
-
 def womersley_Bn(L, R0, nu, omega_n, x0, r0):
     x = np.arange(L)
 
     x_norm = (x - x0) / r0
 
     alpha_n = R0 * np.sqrt(omega_n / nu)
-
+    # print(f"alpha_n: {alpha_n}")
     lam = np.exp(1j * 3 * np.pi / 4) * alpha_n
-
+    # print(f"lam: {lam}")
     Bn = 1 - jv(0, lam * np.abs(x_norm)) / jv(0, lam)
+    # print(f"Bn before masking: {Bn}")
 
     mask = np.abs(x_norm) > 1
     idx = np.where(mask)[0]
@@ -389,9 +337,9 @@ def generate_harmonic_flow_profile(V, segment_data, ratio_map):
     v_model_fft = np.zeros(
         (V.shape[0], V.shape[1], V.shape[2], V.shape[3]), dtype=complex
     )
-    Cn_model_fft = np.zeros((V.shape[0], V.shape[2], V.shape[3]), dtype=complex)
-    Qn_model_fft = np.zeros((V.shape[0], V.shape[2], V.shape[3]), dtype=complex)
-    tau_n_model_fft = np.zeros((V.shape[0], V.shape[2], V.shape[3]), dtype=complex)
+    C_n = np.zeros((V.shape[0], V.shape[2], V.shape[3]), dtype=complex)
+    Q_n = np.zeros((V.shape[0], V.shape[2], V.shape[3]), dtype=complex)
+    Tau_n = np.zeros((V.shape[0], V.shape[2], V.shape[3]), dtype=complex)
     for branch_index in range(V.shape[2]):
         for circle_index in range(V.shape[3]):
             if (branch_index, circle_index) not in segment_data:
@@ -408,25 +356,36 @@ def generate_harmonic_flow_profile(V, segment_data, ratio_map):
 
             L = len(x)
             K = apply_abel_projection(L)
+            R0 = r0 * pixel_size / dx
 
             threshold = -1
             model_0 = projected_parabola_model(x, A, x0, y0, K)
             skip_segment = model_0[0] < threshold or model_0[-1] < threshold
-            # if model_0[0] < threshold or model_0[-1] < threshold:
-            #     print(f"Skip branch={branch_index}, circle={circle_index} for Womersley modeling.")
+            if model_0[0] < threshold or model_0[-1] < threshold:
+                print(
+                    f"Skip branch={branch_index}, circle={circle_index} for Womersley modeling."
+                )
+
+            if (
+                not np.isfinite(R0) or R0 <= 0 or R0 > 2e-4  # 200 μm radius
+            ):
+                print(
+                    f"Reject branch={branch_index}, circle={circle_index}, R0={R0} for Womersley modeling."
+                )
+                continue
 
             Cn = np.zeros(V.shape[0], dtype=complex)
             Cn[0] = 1
             Qn = np.zeros(V.shape[0], dtype=complex)
-            tau_n = np.zeros(V.shape[0], dtype=complex)
+            taun = np.zeros(V.shape[0], dtype=complex)
 
-            for n in range(10):
-                Vn = np.array(matrix[n], dtype=complex)
-
-                R0 = r0 * pixel_size / dx
+            for n in range(num_harmonics):
+                Vn = np.array(matrix[n], dtype=complex) / num_interp_points_t
 
                 if n == 0:
-                    model = projected_parabola_model(x, A, x0, y0, K)
+                    model = (
+                        projected_parabola_model(x, A, x0, y0, K) / num_interp_points_t
+                    )
 
                 else:
                     if skip_segment:
@@ -437,147 +396,419 @@ def generate_harmonic_flow_profile(V, segment_data, ratio_map):
                     KBn = K @ Bn
                     Cn[n] = compute_Cn(Vn, KBn)
                     Qn[n] = compute_Qn(R0, nu, omega_n, Cn[n])
-                    tau_n[n] = compute_tau_n(R0, nu, omega_n, Cn[n], rho)
+                    taun[n] = compute_tau_n(R0, nu, omega_n, Cn[n], rho)
                     model = Cn[n] * KBn
 
                 v_model_fft[n, :, branch_index, circle_index] = model
-                Cn_model_fft[n, branch_index, circle_index] = Cn[n]
-                Qn_model_fft[n, branch_index, circle_index] = Qn[n]
-                tau_n_model_fft[n, branch_index, circle_index] = tau_n[n]
+                C_n[n, branch_index, circle_index] = Cn[n]
+                Q_n[n, branch_index, circle_index] = Qn[n]
+                Tau_n[n, branch_index, circle_index] = taun[n]
 
-    v_model = np.fft.irfft(v_model_fft, axis=0)
-    Cn_model = np.fft.irfft(Cn_model_fft, axis=0)
-    Qn_model = np.fft.irfft(Qn_model_fft, axis=0)
-    tau_n_model = np.fft.irfft(tau_n_model_fft, axis=0)
+    v_model = np.fft.irfft(v_model_fft * num_interp_points_t, axis=0)
 
     return (
         v_model,
         v_model_fft,
-        Cn_model_fft,
-        Qn_model_fft,
-        tau_n_model_fft,
-        Cn_model,
-        Qn_model,
-        tau_n_model,
+        C_n,
+        Q_n,
+        Tau_n,
     )
+
+
+def calculate_cn(
+    Qn,
+    omega_0,
+    len_seg,
+    pixel_size,
+    min_valid_segments=5,
+):
+    n_freq, n_branch, n_circle = Qn.shape
+
+    delta_z = len_seg * pixel_size
+    c_n = np.full((n_freq, n_branch, n_circle - 1), np.nan)
+    c_n_branch = np.full((n_freq, n_branch), np.nan)
+    tau_g = np.full_like(c_n, np.nan)
+    dphi = np.full_like(c_n, np.nan)
+
+    for n in range(1, n_freq):
+        omega_n = n * omega_0
+
+        for branch in range(n_branch):
+            Q_branch = Qn[n, branch]
+
+            valid_mask = np.abs(Q_branch) > 0
+
+            if np.count_nonzero(valid_mask) < min_valid_segments:
+                continue
+
+            for circle in range(n_circle - 1):
+                q1 = Q_branch[circle]
+                q2 = Q_branch[circle + 1]
+
+                if np.abs(q1) == 0 or np.abs(q2) == 0:
+                    continue
+
+                delta_phi = np.angle(q2 * np.conj(q1))
+
+                tau = -delta_phi / omega_n
+
+                if np.abs(tau) < 1e-12:
+                    continue
+
+                pwv_val = delta_z / tau
+
+                dphi[n, branch, circle] = delta_phi
+                tau_g[n, branch, circle] = tau
+                c_n[n, branch, circle] = pwv_val
+
+            if not np.all(np.isnan(c_n[n, branch, :])):
+                c_n_branch[n, branch] = np.nanmean(c_n[n, branch, :])
+
+    return c_n, c_n_branch
 
 
 def evaluate_womersley_model(
     metrics,
     branch_index,
     circle_index,
-    harmonic_n,
     position_index,
     save_prefix=None,
 ):
-    """
-    Parameters
-    ----------
-    metrics : dict
-        Output metrics from pipeline.
-
-    branch_index : int
-    circle_index : int
-
-    harmonic_n : int
-        Frequency component to compare.
-
-    position_index : int
-        Spatial position for waveform comparison.
-
-    save_prefix : str or None
-        If provided, save figures.
-    """
-
-    v_pulse_fft = metrics["v_pulse_fft"]
-    v_model_fft = metrics["v_model_fft"]
-
     dataset_x = metrics["dataset_x"]
     v_model = metrics["v_model"]
 
     # ==========================================================
     # Figure 1
-    # Harmonic profile comparison
+    # Velocity profile comparison at selected cardiac phase
     # ==========================================================
 
-    raw_profile = v_pulse_fft[
-        harmonic_n,
+    center_idx = dataset_x.shape[1] // 2
+
+    center_waveform = dataset_x[
         :,
+        center_idx,
         branch_index,
         circle_index,
     ]
 
-    model_profile = v_model_fft[
-        harmonic_n,
-        :,
-        branch_index,
-        circle_index,
+    t_peak = np.argmax(center_waveform)
+    t_min = np.argmin(center_waveform)
+
+    t_mid = (t_peak + t_min) // 2
+
+    time_indices = [
+        t_peak,
+        t_mid,
+        t_min,
     ]
 
-    x = np.arange(len(raw_profile))
-
-    amp_raw = np.abs(raw_profile)
-    amp_model = np.abs(model_profile)
-
-    phase_raw = np.angle(raw_profile)
-    phase_model = np.angle(model_profile)
+    phase_names = [
+        "Peak Systole",
+        "Mid Cycle",
+        "End Diastole",
+    ]
 
     fig1, axes = plt.subplots(
-        2,
         1,
-        figsize=(8, 6),
-        sharex=True,
+        3,
+        figsize=(15, 4),
+        sharey=True,
     )
 
-    axes[0].plot(
-        x,
-        amp_raw,
-        "o-",
-        label="Raw",
-    )
-    axes[0].plot(
-        x,
-        amp_model,
-        "s-",
-        label="Model",
-    )
+    for ax, t_idx, phase_name in zip(
+        axes,
+        time_indices,
+        phase_names,
+        strict=True,
+    ):
+        raw_profile = dataset_x[
+            t_idx,
+            :,
+            branch_index,
+            circle_index,
+        ]
 
-    axes[0].set_ylabel("Amplitude")
-    axes[0].set_title(
-        f"Branch={branch_index}, Circle={circle_index}, Harmonic n={harmonic_n}"
-    )
+        model_profile = v_model[
+            t_idx,
+            :,
+            branch_index,
+            circle_index,
+        ]
+
+        x = np.arange(len(raw_profile))
+
+        ax.plot(
+            x,
+            raw_profile,
+            "o-",
+            label="Measured",
+        )
+
+        ax.plot(
+            x,
+            model_profile,
+            "s-",
+            label="Model",
+        )
+
+        rmse = np.sqrt(np.nanmean((raw_profile - model_profile) ** 2))
+
+        ax.set_title(f"{phase_name}\nt={t_idx}, RMSE={rmse:.3f}")
+
+        ax.grid(True)
+
+        ax.set_xlabel("Radial Position")
+
+    axes[0].set_ylabel("Velocity")
+
     axes[0].legend()
-    axes[0].grid(True)
 
-    axes[1].plot(
-        x,
-        phase_raw,
-        "o-",
-        label="Raw",
+    fig1.suptitle(
+        f"Velocity Profile Validation\nBranch={branch_index}, Circle={circle_index}"
     )
-    axes[1].plot(
-        x,
-        phase_model,
-        "s-",
-        label="Model",
-    )
-
-    axes[1].set_xlabel("Spatial Position")
-    axes[1].set_ylabel("Phase (rad)")
-    axes[1].legend()
-    axes[1].grid(True)
 
     plt.tight_layout()
 
     if save_prefix is not None:
         fig1.savefig(
-            f"{save_prefix}_harmonic_profile_n{harmonic_n}.png",
+            f"{save_prefix}_profile_validation.png",
             dpi=300,
             bbox_inches="tight",
         )
 
     # ==========================================================
     # Figure 2
+    # Symmetric / antisymmetric residual decomposition
+    # ==========================================================
+
+    fig2, axes = plt.subplots(
+        2,
+        1,
+        figsize=(8, 8),
+        sharex=True,
+        sharey=True,
+    )
+
+    colors = [
+        "tab:blue",
+        "tab:orange",
+        "tab:green",
+    ]
+
+    sym_all = []
+    asym_all = []
+
+    for phase_name, t_idx, color in zip(
+        phase_names,
+        time_indices,
+        colors,
+        strict=True,
+    ):
+        raw_profile = dataset_x[
+            t_idx,
+            :,
+            branch_index,
+            circle_index,
+        ]
+
+        model_profile = v_model[
+            t_idx,
+            :,
+            branch_index,
+            circle_index,
+        ]
+
+        residual = (raw_profile - model_profile) / (np.abs(raw_profile) + 1e-12)
+
+        residual_flip = residual[::-1]
+
+        residual_sym = 0.5 * (residual + residual_flip)
+
+        residual_asym = 0.5 * (residual - residual_flip)
+
+        sym_all.append(residual_sym)
+        asym_all.append(residual_asym)
+
+        x = np.arange(len(residual))
+
+        axes[0].plot(
+            x,
+            residual_sym,
+            "o-",
+            color=color,
+            label=phase_name,
+        )
+
+        axes[1].plot(
+            x,
+            residual_asym,
+            "o-",
+            color=color,
+            label=phase_name,
+        )
+
+    all_values = np.concatenate(sym_all + asym_all)
+
+    ymax = np.nanmax(np.abs(all_values))
+
+    axes[0].set_ylim(
+        -ymax - 0.25,
+        ymax + 0.25,
+    )
+
+    axes[1].set_ylim(
+        -ymax - 0.25,
+        ymax + 0.25,
+    )
+
+    axes[0].axhline(
+        0,
+        linestyle="--",
+        linewidth=1,
+    )
+
+    axes[1].axhline(
+        0,
+        linestyle="--",
+        linewidth=1,
+    )
+
+    axes[0].set_ylabel("Symmetric Residual")
+
+    axes[1].set_ylabel("Antisymmetric Residual")
+
+    axes[1].set_xlabel("Radial Position")
+
+    axes[0].legend()
+    axes[1].legend()
+
+    axes[0].grid(True)
+    axes[1].grid(True)
+
+    fig2.suptitle(
+        f"Residual Symmetry Analysis\nBranch={branch_index}, Circle={circle_index}"
+    )
+
+    plt.tight_layout()
+
+    if save_prefix is not None:
+        fig2.savefig(
+            f"{save_prefix}_residual_symmetry.png",
+            dpi=300,
+            bbox_inches="tight",
+        )
+
+    # ==========================================================
+    # Figure 3
+    # residual_energy_fraction
+    # ==========================================================
+
+    from scipy.ndimage import gaussian_filter1d
+
+    n_time = dataset_x.shape[0]
+
+    SymEnergy = np.zeros(n_time)
+    AsymEnergy = np.zeros(n_time)
+    TotalEnergy = np.zeros(n_time)
+
+    for t in range(n_time):
+        raw_profile = dataset_x[
+            t,
+            :,
+            branch_index,
+            circle_index,
+        ]
+
+        model_profile = v_model[
+            t,
+            :,
+            branch_index,
+            circle_index,
+        ]
+
+        residual = raw_profile - model_profile
+
+        residual_flip = residual[::-1]
+
+        sym = 0.5 * (residual + residual_flip)
+
+        asym = 0.5 * (residual - residual_flip)
+
+        SymEnergy[t] = np.sum(sym**2)
+
+        AsymEnergy[t] = np.sum(asym**2)
+
+        TotalEnergy[t] = np.sum(residual**2)
+
+    sigma = 2
+
+    SymEnergy_s = gaussian_filter1d(
+        SymEnergy,
+        sigma=sigma,
+    )
+
+    AsymEnergy_s = gaussian_filter1d(
+        AsymEnergy,
+        sigma=sigma,
+    )
+
+    TotalEnergy_s = gaussian_filter1d(
+        TotalEnergy,
+        sigma=sigma,
+    )
+
+    phase = np.linspace(
+        0,
+        100,
+        n_time,
+    )
+
+    fig3, ax = plt.subplots(figsize=(8, 4))
+
+    ax.plot(
+        phase,
+        TotalEnergy_s,
+        linewidth=3,
+        label="Total Residual",
+    )
+
+    ax.plot(
+        phase,
+        SymEnergy_s,
+        linewidth=2,
+        label="Symmetric",
+    )
+
+    ax.plot(
+        phase,
+        AsymEnergy_s,
+        linewidth=2,
+        label="Antisymmetric",
+    )
+
+    ax.set_xlabel("Cardiac Phase (%)")
+
+    ax.set_ylabel("Residual Energy")
+
+    ax.set_title(
+        f"Residual Energy Evolution\nBranch={branch_index}, Circle={circle_index}"
+    )
+
+    ax.legend()
+
+    ax.grid(True)
+
+    plt.tight_layout()
+
+    if save_prefix is not None:
+        fig3.savefig(
+            f"{save_prefix}_residual_energy.png",
+            dpi=300,
+            bbox_inches="tight",
+        )
+
+    # ==========================================================
+    # Figure 4
     # Cardiac waveform comparison
     # ==========================================================
 
@@ -597,7 +828,7 @@ def evaluate_womersley_model(
 
     t = np.arange(len(raw_waveform))
 
-    fig2, ax = plt.subplots(figsize=(8, 4))
+    fig4, ax = plt.subplots(figsize=(8, 4))
 
     ax.plot(
         t,
@@ -625,8 +856,106 @@ def evaluate_womersley_model(
     plt.tight_layout()
 
     if save_prefix is not None:
-        fig2.savefig(
+        fig4.savefig(
             f"{save_prefix}_waveform_x{position_index}.png",
+            dpi=300,
+            bbox_inches="tight",
+        )
+
+    # Figure 5
+    # Harmonic spectrum
+    # ==========================================================
+
+    Qn = metrics["Q_n"]
+    Qn_seg = Qn[:num_harmonics, branch_index, circle_index]
+
+    n = np.arange(len(Qn_seg))
+
+    fig5, axes = plt.subplots(
+        2,
+        1,
+        figsize=(8, 6),
+        sharex=True,
+    )
+
+    axes[0].stem(
+        n,
+        np.abs(Qn_seg),
+        basefmt=" ",
+    )
+
+    axes[0].set_ylabel(r"$|Q_n|$")
+    axes[0].set_title(
+        f"Harmonic Spectrum (Branch={branch_index}, Circle={circle_index})"
+    )
+    axes[0].grid(True)
+
+    axes[1].stem(
+        n,
+        np.angle(Qn_seg),
+        basefmt=" ",
+    )
+
+    axes[1].set_ylabel(r"$\angle Q_n$ (rad)")
+    axes[1].set_xlabel("Harmonic order n")
+    axes[1].grid(True)
+
+    plt.tight_layout()
+
+    if save_prefix is not None:
+        fig5.savefig(
+            f"{save_prefix}_harmonic_spectrum.png",
+            dpi=300,
+            bbox_inches="tight",
+        )
+
+    # ==========================================================
+    # Figure 6
+    # Wall shear stress spectrum
+    # ==========================================================
+
+    tau_n = metrics["Tau_n"]
+
+    tau_seg = tau_n[
+        :num_harmonics,
+        branch_index,
+        circle_index,
+    ]
+
+    n = np.arange(len(tau_seg))
+
+    fig6, axes = plt.subplots(
+        2,
+        1,
+        figsize=(8, 6),
+        sharex=True,
+    )
+
+    axes[0].stem(
+        n,
+        np.abs(tau_seg),
+        basefmt=" ",
+    )
+
+    axes[0].set_ylabel(r"$|\tau_n|$ (Pa)")
+    axes[0].set_title("Wall Shear Stress Spectrum")
+    axes[0].grid(True)
+
+    axes[1].stem(
+        n,
+        np.angle(tau_seg),
+        basefmt=" ",
+    )
+
+    axes[1].set_ylabel(r"$\angle \tau_n$ (rad)")
+    axes[1].set_xlabel("Harmonic order n")
+    axes[1].grid(True)
+
+    plt.tight_layout()
+
+    if save_prefix is not None:
+        fig6.savefig(
+            f"{save_prefix}_wall_shear_spectrum.png",
             dpi=300,
             bbox_inches="tight",
         )
@@ -676,13 +1005,14 @@ class WomersleyModeling(ProcessPipeline):
         (
             v_model,
             v_model_fft,
-            Cn_model_fft,
-            Qn_model_fft,
-            tau_n_model_fft,
-            Cn_model,
-            Qn_model,
-            tau_n_model,
+            C_n,
+            Q_n,
+            Tau_n,
         ) = generate_harmonic_flow_profile(v_pulse_fft, segment_data, ratio_map)
+
+        c_n, c_n_branch = calculate_cn(
+            Qn=Q_n, omega_0=omega_0, len_seg=len_seg, pixel_size=pixel_size
+        )
 
         metrics: dict = {}
         metrics["dataset_x"] = np.asarray(dataset_x)
@@ -694,20 +1024,18 @@ class WomersleyModeling(ProcessPipeline):
         metrics["v_pulse_meas_dc"] = np.asarray(v_pulse_meas_dc)
         metrics["v_model"] = np.asarray(v_model)
         metrics["v_model_fft"] = np.asarray(v_model_fft)
-        metrics["Cn_model_fft"] = np.asarray(Cn_model_fft)
-        metrics["Qn_model_fft"] = np.asarray(Qn_model_fft)
-        metrics["tau_n_model_fft"] = np.asarray(tau_n_model_fft)
-        metrics["Cn_model"] = np.asarray(Cn_model)
-        metrics["Qn_model"] = np.asarray(Qn_model)
-        metrics["tau_n_model"] = np.asarray(tau_n_model)
+        metrics["C_n"] = np.asarray(C_n)
+        metrics["Q_n"] = np.asarray(Q_n)
+        metrics["Tau_n"] = np.asarray(Tau_n)
+        metrics["c_n"] = np.asarray(c_n)
+        metrics["c_n_branch"] = np.asarray(c_n_branch)
 
-        evaluate_womersley_model(
-            metrics,
-            branch_index=3,
-            circle_index=2,
-            harmonic_n=1,
-            position_index=8,
-            save_prefix=None,  # "segment_3_2",
-        )
+        # evaluate_womersley_model(
+        #     metrics,
+        #     branch_index=4,
+        #     circle_index=6,
+        #     position_index=8,
+        #     save_prefix=None,  # "segment_3_2",
+        # )
 
         return ProcessResult(metrics=metrics)
