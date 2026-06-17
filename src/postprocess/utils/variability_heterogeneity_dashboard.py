@@ -3,11 +3,11 @@ import shutil
 from collections import defaultdict
 from pathlib import Path
 from tkinter import Tk, filedialog
+
 import h5py
+import matplotlib
 import numpy as np
 import pandas as pd
-
-import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -19,17 +19,17 @@ except ImportError as exc:
         "This script requires scipy for Mann-Whitney tests. Install it with: pip install scipy"
     ) from exc
 
-from input_output.hdf5_io import find_first_existing_path
 from input_output.archive_io import replace_folder_in_zip
-from ..core.grouped_batch import extract_group_name, iter_grouped_h5_files_in_zip
-from input_output.hdf5_io import MetricsTree
+from input_output.hdf5_io import MetricsTree, find_first_existing_path
 
+from ..core.grouped_batch import extract_group_name, iter_grouped_h5_files_in_zip
 
 SEGMENT_METRIC_FOLDERS = (
     "/AngioEye/Processing/waveform_shape_metrics_denoised_correl/artery/by_segment/",
     "/AngioEye/Processing/waveform_shape_metrics_denoised_laplace/artery/by_segment/",
     "/AngioEye/Processing/waveform_shape_metrics_denoised_joint/artery/by_segment/",
     "/AngioEye/Processing/waveform_shape_metrics_denoised/artery/by_segment/",
+    "/AngioEye/Processing/waveform_shape_metrics_dn/artery/by_segment/",
     "/AngioEye/Processing/waveform_shape_metrics/artery/by_segment/",
 )
 SEGMENT_MODE = "raw_segment"
@@ -83,30 +83,30 @@ METRIC_LABELS = {
     "RI": r"$\rm RI$",
     "CF": r"$\rm CF$",
     "t50_over_T": r"$t_{50}/T$",
-    "R_VTI": r"$R_{\mathrm{VTI}}$",    
+    "R_VTI": r"$R_{\mathrm{VTI}}$",
     "mu_t_over_T": r"$\mu_t/T$",
     "PI": r"$\rm PI$",
     "SF_VTI": r"$SF_{\mathrm{VTI}}$",
-    "sigma_t_over_T": r"$\sigma_t/T$",    
+    "sigma_t_over_T": r"$\sigma_t/T$",
     "t_max_over_T": r"$t_{\mathrm{max}}/T$",
-    "t_min_over_T": r"$t_{\mathrm{min}}/T$",   
+    "t_min_over_T": r"$t_{\mathrm{min}}/T$",
     "t_rise_over_T": r"$t_{\mathrm{rise}}/T$",
-    "t_fall_over_T": r"$t_{\mathrm{fall}}/T$",    
+    "t_fall_over_T": r"$t_{\mathrm{fall}}/T$",
     "Delta_DTI": r"$\Delta_{\mathrm{DTI}}$",
     "E_LF_over_E_HF": r"$E_{\mathrm{LF}}/E_{\mathrm{HF}}$",
     "S_fall": r"$S_{\mathrm{fall}}$",
     "S_rise": r"$S_{\mathrm{rise}}$",
-    "gamma_t": r"$\gamma_t$",    
-    "N_eff_over_T": r"$N_{\mathrm{eff}}/T$",    
+    "gamma_t": r"$\gamma_t$",
+    "N_eff_over_T": r"$N_{\mathrm{eff}}/T$",
     "Q_t_skew": r"$Q_{\mathrm{t,skew}}$",
     "Q_t_width": r"$Q_{\mathrm{t,width}}$",
     "Q_d_skew": r"$Q_{\mathrm{d,skew}}$",
     "Q_d_width": r"$Q_{\mathrm{d,width}}$",
     "v_end_over_vbar": r"$\bar{\mathrm{v}}_{\mathrm{end}}/\bar{\mathrm{v}}$",
-    "E_slope": r"$E_{\mathrm{slope}}$",   
+    "E_slope": r"$E_{\mathrm{slope}}$",
     "W50_over_T": r"$W_{50}/T$",
     "W80_over_T": r"$W_{80}/T$",
-    "N_t_over_T": r"$N_t/T$",    
+    "N_t_over_T": r"$N_t/T$",
     "eta_h": r"$\eta_h$",
 }
 
@@ -1322,12 +1322,12 @@ def build_group_separation_metrics_table(
         ovl = overlap_from_cohen_d(d)
 
         more_variable_group = group_tex if sy["median"] > sx["median"] else control_tex
-        decision_rule = format_decision_rule(
-            threshold,
-            direction,
-            group_name=group_name,
-            digits=digits,
-        )
+        # decision_rule = format_decision_rule(
+        #     threshold,
+        #     direction,
+        #     group_name=group_name,
+        #     digits=digits,
+        # )
 
         metric_results[metric_label(metric_name)] = {
             n_control_label: str(sx["n"]),
@@ -1420,12 +1420,12 @@ def build_auc_separability_ranking_table(
         )
         ovl = overlap_from_cohen_d(d)
         more_variable_group = group_tex if sy["median"] > sx["median"] else control_tex
-        decision_rule = format_decision_rule(
-            threshold,
-            direction,
-            group_name=group_name,
-            digits=digits,
-        )
+        # decision_rule = format_decision_rule(
+        #     threshold,
+        #     direction,
+        #     group_name=group_name,
+        #     digits=digits,
+        # )
 
         rows.append(
             {
@@ -1582,7 +1582,7 @@ def export_variability_value_plots(
                 showfliers=False,
             )
 
-            for pos, values in zip(positions, group_values):
+            for pos, values in zip(positions, group_values, strict=True):
                 jitter = rng.normal(loc=0.0, scale=0.045, size=len(values))
                 ax.scatter(
                     np.full(len(values), pos) + jitter,
@@ -1592,8 +1592,10 @@ def export_variability_value_plots(
                 )
 
             xlabels = [
-                "{}\n(n={})".format(name, len(values))
-                for name, values in zip(non_empty_group_names, group_values)
+                f"{name}\n(n={len(values)})"
+                for name, values in zip(
+                    non_empty_group_names, group_values, strict=True
+                )
             ]
             ax.set_xticks(positions)
             ax.set_xticklabels(xlabels, rotation=0)
@@ -2145,9 +2147,7 @@ def export_group_tables_from_results(
         if idle_callback is not None:
             idle_callback()
 
-    print(
-        f"Generated {len(generated)} variability/heterogeneity file(s) in {out_dir}."
-    )
+    print(f"Generated {len(generated)} variability/heterogeneity file(s) in {out_dir}.")
     return generated
 
 
@@ -2186,4 +2186,3 @@ def export_group_tables(
 if __name__ == "__main__":
     zip_path = choose_zip()
     export_group_tables(zip_path, top_n=DEFAULT_TOP_N)
-
