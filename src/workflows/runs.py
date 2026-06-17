@@ -23,7 +23,7 @@ from input_output import ZipH5Member
 from pipelines import load_pipeline_catalog
 
 from ._holo import HoloInputContext, output_filename
-from ._pipeline_runs import (
+from ._standard_pipeline_runs import (
     PipelineRunResult,
     RunPipelineFile,
     run_filesystem_pipeline_run,
@@ -424,7 +424,11 @@ def run_holo_workflow(
         processed_outputs=result.processed_outputs,
         processed_input_paths=result.processed_input_paths,
         failures=result.failures,
-        summary_message=_holo_summary(result.processed_outputs),
+        summary_message=_holo_summary(
+            result.processed_outputs,
+            input_count=len(contexts),
+            failure_count=len(result.failures),
+        ),
     )
 
 
@@ -622,7 +626,17 @@ def _record_holo_task_result(
     advance_progress(pipeline_count)
 
 
-def _holo_summary(processed_outputs: Sequence[Path]) -> str:
+def _holo_summary(
+    processed_outputs: Sequence[Path],
+    *,
+    input_count: int | None = None,
+    failure_count: int = 0,
+) -> str:
+    if failure_count:
+        return (
+            f"Processed {len(processed_outputs)}/{input_count or 0} holo file(s); "
+            f"{failure_count} failed/skipped."
+        )
     if len(processed_outputs) == 1:
         return f"Output file: {processed_outputs[0]}"
     return f"Outputs generated for {len(processed_outputs)} holo file(s)."

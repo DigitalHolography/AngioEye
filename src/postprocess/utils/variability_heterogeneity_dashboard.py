@@ -32,7 +32,7 @@ SEGMENT_METRIC_FOLDERS = (
     "/AngioEye/Processing/waveform_shape_metrics_dn/artery/by_segment/",
     "/AngioEye/Processing/waveform_shape_metrics/artery/by_segment/",
 )
-SEGMENT_MODE = "raw_segment"
+SEGMENT_MODE = "bandlimited_segment"
 EPS = 1e-12
 
 DEFAULT_TOP_N = 10
@@ -43,6 +43,7 @@ CONTROL_GROUP_PATTERNS = [
     r"^controls$",
     r"^ctrl$",
     r"^ctl$",
+    r"^BL$",
     r"^healthy$",
     r"^healthy_control$",
     r"^healthy_controls$",

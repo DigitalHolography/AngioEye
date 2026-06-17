@@ -1,4 +1,5 @@
 import h5py
+import matplotlib.pyplot as plt
 
 # import matplotlib.pyplot as plt
 import numpy as np
@@ -26,7 +27,7 @@ def preprocess_v_profile_meas(num_interp_points_x, v_profile):
 
     if valid_count <= 8:
         # print(f"Warning: Only {valid_count} valid points found. Skipping...")
-        return np.zeros(num_interp_points_x)
+        return np.zeros(num_interp_points_x), 0.0
 
     min_idx = valid_indices[0]
     max_idx = valid_indices[-1]
@@ -174,11 +175,11 @@ def _abel_cell_integral(x_abs, r_left, r_right):
     upper = r_right
     lower_term = np.sqrt(max(lower**2 - x_abs**2, 0.0))
     upper_term = np.sqrt(max(upper**2 - x_abs**2, 0.0))
-    return 2.0 * (upper_term - lower_term)
+    return 1.0 * (upper_term - lower_term)
 
 
 def apply_abel_projection(L):
-    x_grid = np.linspace(1 / L, 1, L // 2)
+    x_grid = np.linspace(1 / ((L - 1) * 2), 1, L // 2)
 
     r_edges = np.linspace(0, 1.1, L // 2 + 1)
 
@@ -194,20 +195,26 @@ def apply_abel_projection(L):
                 r_edges[j + 1],
             )
     A = np.fliplr(np.flipud(K_block))
-    B = np.zeros_like(K_block)
-    C = np.zeros_like(K_block)
+    B = np.fliplr(A)
+    C = np.fliplr(K_block)
     D = K_block
     K = np.block([[A, B], [C, D]])
 
     return K
 
 
-def parabola(x, A, x0, y0):
-    return A * (x - x0) ** 2 + y0
+def projected_parabola_model(x, A, x0, y0, K):
+    return K @ (A * (x - x0) ** 2 + y0)
 
 
-def parabola_fit(V):
+def projected_parabola_fit(V):
     segment_data = {}
+
+    L = V.shape[1]
+    K = apply_abel_projection(L)
+
+    x = np.arange(L)
+
     for branch_index in range(V.shape[2]):
         for circle_index in range(V.shape[3]):
             profile_complex = V[0, :, branch_index, circle_index]
@@ -216,15 +223,19 @@ def parabola_fit(V):
             if np.all(profile == 0):
                 continue
 
-            x = np.arange(len(profile))
-
             try:
                 A_guess = -0.1
                 x0_guess = np.argmax(profile)
                 y0_guess = np.max(profile)
 
+                def fit_func(x_dummy, A, x0, y0):
+                    return np.real(K @ (A * (x - x0) ** 2 + y0))
+
                 popt, pcov = curve_fit(
-                    parabola, x, profile, p0=[A_guess, x0_guess, y0_guess]
+                    fit_func,
+                    x,
+                    profile,
+                    p0=[A_guess, x0_guess, y0_guess],
                 )
 
                 A_fit, x0_fit, y0_fit = popt
@@ -244,13 +255,73 @@ def parabola_fit(V):
                     f"r0={r0_fit:.4f}, "
                     f"x0={x0_fit:.4f}, "
                     f"y0={y0_fit:.4f}, "
-                    f"A={A_fit:.4f},"
+                    f"A={A_fit:.4f}"
                 )
 
             except Exception as e:
                 print(f"Fit failed for branch={branch_index}, circle={circle_index}")
-
                 print(e)
+
+    return segment_data
+
+
+def parabola_model(x, A, x0, y0):
+    return A * (x - x0) ** 2 + y0
+
+
+def parabola_fit(V):
+    segment_data = {}
+
+    L = V.shape[1]
+    x = np.arange(L)
+
+    for branch_index in range(V.shape[2]):
+        for circle_index in range(V.shape[3]):
+            profile_complex = V[0, :, branch_index, circle_index]
+            profile = np.real(profile_complex)
+
+            if np.all(profile == 0):
+                continue
+
+            try:
+                A_guess = -0.1
+                x0_guess = np.argmax(profile)
+                y0_guess = np.max(profile)
+
+                def fit_func(x_dummy, A, x0, y0):
+                    return A * (x - x0) ** 2 + y0
+
+                popt, pcov = curve_fit(
+                    fit_func,
+                    x,
+                    profile,
+                    p0=[A_guess, x0_guess, y0_guess],
+                )
+
+                A_fit, x0_fit, y0_fit = popt
+
+                r0_fit = np.sqrt(-y0_fit / A_fit) if A_fit != 0 else np.nan
+
+                segment_data[(branch_index, circle_index)] = {
+                    "r0": r0_fit,
+                    "y0": y0_fit,
+                    "x0": x0_fit,
+                    "A": A_fit,
+                }
+
+                print(
+                    f"branch={branch_index}, "
+                    f"circle={circle_index}, "
+                    f"r0={r0_fit:.4f}, "
+                    f"x0={x0_fit:.4f}, "
+                    f"y0={y0_fit:.4f}, "
+                    f"A={A_fit:.4f}"
+                )
+
+            except Exception as e:
+                print(f"Fit failed for branch={branch_index}, circle={circle_index}")
+                print(e)
+
     return segment_data
 
 
@@ -260,10 +331,6 @@ def womersley_Bn(L, R0, nu, omega_n, x0, r0):
     x_norm = (x - x0) / r0
 
     alpha_n = R0 * np.sqrt(omega_n / nu)
-
-    print("===================================================")
-    print(f"x_norm: {x_norm},")
-    print(f"alpha: {alpha_n}")
 
     lam = np.exp(1j * 3 * np.pi / 4) * alpha_n
 
@@ -311,16 +378,17 @@ def generate_harmonic_flow_profile(V, segment_data, ratio_map):
             matrix = V[:, :, branch_index, circle_index]
             x = np.arange(matrix.shape[1])
 
-            threshold = -2
-            model_0 = parabola(x, A, x0, y0)
+            L = len(x)
+            K = apply_abel_projection(L)
+            print(f"K: {K}")
+
+            threshold = 0
+            model_0 = projected_parabola_model(x, A, x0, y0, K)
             skip_segment = model_0[0] < threshold or model_0[-1] < threshold
             # if model_0[0] < threshold or model_0[-1] < threshold:
             #     print(f"Skip branch={branch_index}, circle={circle_index} for Womersley modeling.")
 
             Cn = np.zeros(V.shape[0], dtype=complex)
-
-            L = len(x)
-            K = apply_abel_projection(L)
 
             for n in range(4):
                 Vn = np.array(matrix[n], dtype=complex)
@@ -328,7 +396,7 @@ def generate_harmonic_flow_profile(V, segment_data, ratio_map):
                 R0 = r0 * pixel_size / dx
 
                 if n == 0:
-                    model = parabola(x, A, x0, y0)
+                    model = projected_parabola_model(x, A, x0, y0, K)
 
                 else:
                     if skip_segment:
@@ -338,13 +406,185 @@ def generate_harmonic_flow_profile(V, segment_data, ratio_map):
                     Bn = womersley_Bn(L, R0, nu, omega_n, x0, r0)
                     KBn = K @ Bn
                     Cn[n] = compute_Cn(Vn, KBn)
-                    model = Cn[n] * Bn
+                    model = Cn[n] * KBn
 
                 v_model_fft[n, :, branch_index, circle_index] = model
 
     v_model = np.fft.irfft(v_model_fft, axis=0)
 
     return v_model, v_model_fft
+
+
+def evaluate_womersley_model(
+    metrics,
+    branch_index,
+    circle_index,
+    harmonic_n,
+    position_index,
+    save_prefix=None,
+):
+    """
+    Parameters
+    ----------
+    metrics : dict
+        Output metrics from pipeline.
+
+    branch_index : int
+    circle_index : int
+
+    harmonic_n : int
+        Frequency component to compare.
+
+    position_index : int
+        Spatial position for waveform comparison.
+
+    save_prefix : str or None
+        If provided, save figures.
+    """
+
+    v_pulse_fft = metrics["v_pulse_fft"]
+    v_model_fft = metrics["v_model_fft"]
+
+    dataset_x = metrics["dataset_x"]
+    v_model = metrics["v_model"]
+
+    # ==========================================================
+    # Figure 1
+    # Harmonic profile comparison
+    # ==========================================================
+
+    raw_profile = v_pulse_fft[
+        harmonic_n,
+        :,
+        branch_index,
+        circle_index,
+    ]
+
+    model_profile = v_model_fft[
+        harmonic_n,
+        :,
+        branch_index,
+        circle_index,
+    ]
+
+    x = np.arange(len(raw_profile))
+
+    amp_raw = np.abs(raw_profile)
+    amp_model = np.abs(model_profile)
+
+    phase_raw = np.angle(raw_profile)
+    phase_model = np.angle(model_profile)
+
+    fig1, axes = plt.subplots(
+        2,
+        1,
+        figsize=(8, 6),
+        sharex=True,
+    )
+
+    axes[0].plot(
+        x,
+        amp_raw,
+        "o-",
+        label="Raw",
+    )
+    axes[0].plot(
+        x,
+        amp_model,
+        "s-",
+        label="Model",
+    )
+
+    axes[0].set_ylabel("Amplitude")
+    axes[0].set_title(
+        f"Branch={branch_index}, Circle={circle_index}, Harmonic n={harmonic_n}"
+    )
+    axes[0].legend()
+    axes[0].grid(True)
+
+    axes[1].plot(
+        x,
+        phase_raw,
+        "o-",
+        label="Raw",
+    )
+    axes[1].plot(
+        x,
+        phase_model,
+        "s-",
+        label="Model",
+    )
+
+    axes[1].set_xlabel("Spatial Position")
+    axes[1].set_ylabel("Phase (rad)")
+    axes[1].legend()
+    axes[1].grid(True)
+
+    plt.tight_layout()
+
+    if save_prefix is not None:
+        fig1.savefig(
+            f"{save_prefix}_harmonic_profile_n{harmonic_n}.png",
+            dpi=300,
+            bbox_inches="tight",
+        )
+
+    # ==========================================================
+    # Figure 2
+    # Cardiac waveform comparison
+    # ==========================================================
+
+    raw_waveform = dataset_x[
+        :,
+        position_index,
+        branch_index,
+        circle_index,
+    ]
+
+    model_waveform = v_model[
+        :,
+        position_index,
+        branch_index,
+        circle_index,
+    ]
+
+    t = np.arange(len(raw_waveform))
+
+    fig2, ax = plt.subplots(figsize=(8, 4))
+
+    ax.plot(
+        t,
+        raw_waveform,
+        label="Raw",
+        linewidth=2,
+    )
+
+    ax.plot(
+        t,
+        model_waveform,
+        label="Model",
+        linewidth=2,
+    )
+
+    ax.set_xlabel("Cardiac Phase")
+    ax.set_ylabel("Velocity")
+    ax.set_title(
+        f"Branch={branch_index}, Circle={circle_index}, Position={position_index}"
+    )
+
+    ax.legend()
+    ax.grid(True)
+
+    plt.tight_layout()
+
+    if save_prefix is not None:
+        fig2.savefig(
+            f"{save_prefix}_waveform_x{position_index}.png",
+            dpi=300,
+            bbox_inches="tight",
+        )
+
+    plt.show()
 
 
 @registerPipeline(name="WomersleyModeling")
@@ -385,8 +625,7 @@ class WomersleyModeling(ProcessPipeline):
             num_interp_points_t=num_interp_points_t,
         )
 
-        # v_pulse_fft_filtered, r0_std = profile_analysis()
-        segment_data = parabola_fit(v_pulse_fft)
+        segment_data = projected_parabola_fit(v_pulse_fft)
         v_model, v_model_fft = generate_harmonic_flow_profile(
             v_pulse_fft, segment_data, ratio_map
         )
@@ -401,5 +640,14 @@ class WomersleyModeling(ProcessPipeline):
         metrics["v_pulse_meas_dc"] = np.asarray(v_pulse_meas_dc)
         metrics["v_model"] = np.asarray(v_model)
         metrics["v_model_fft"] = np.asarray(v_model_fft)
+
+        evaluate_womersley_model(
+            metrics,
+            branch_index=3,
+            circle_index=2,
+            harmonic_n=1,
+            position_index=8,
+            save_prefix=None,  # "segment_3_2",
+        )
 
         return ProcessResult(metrics=metrics)
