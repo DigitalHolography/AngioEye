@@ -10,11 +10,13 @@ from postprocess import (
     load_postprocess_catalog,
 )
 
-from ..widgets import _Tooltip
+from ..widgets import _Tooltip, ellipsize_text
 from .library import LibraryController
 
 
 class PostprocessLibraryController(LibraryController):
+    _STATUS_MAX_CHARS = 40
+
     @property
     def summary_var(self):
         return self.app.postprocess_library_summary_var
@@ -122,12 +124,18 @@ class PostprocessLibraryController(LibraryController):
         for child in self.app.postprocess_library_inner.winfo_children():
             child.destroy()
         self.app.postprocess_visibility_vars = {}
-        self.app.postprocess_library_inner.columnconfigure(0, weight=1)
+        self.configure_library_columns(self.app.postprocess_library_inner)
 
         selected_header = ttk.Label(self.app.postprocess_library_inner, text="Selected")
         selected_header.grid(row=0, column=0, sticky="w", pady=(0, 6))
         status_header = ttk.Label(self.app.postprocess_library_inner, text="Status")
-        status_header.grid(row=0, column=1, sticky="w", padx=(12, 18), pady=(0, 6))
+        status_header.grid(
+            row=0,
+            column=1,
+            sticky="w",
+            padx=self._STATUS_COLUMN_PADDING,
+            pady=(0, 6),
+        )
         self.bind_mousewheel(selected_header, self.app.postprocess_library_canvas)
         self.bind_mousewheel(status_header, self.app.postprocess_library_canvas)
 
@@ -149,12 +157,24 @@ class PostprocessLibraryController(LibraryController):
             check.grid(row=idx, column=0, sticky="w", pady=(0, 6))
             self.bind_mousewheel(check, self.app.postprocess_library_canvas)
 
+            full_status_text = self.status_text(postprocess)
+            display_status_text = ellipsize_text(
+                full_status_text,
+                self._STATUS_MAX_CHARS,
+            )
             status = ttk.Label(
                 self.app.postprocess_library_inner,
-                text=self.status_text(postprocess),
+                text=display_status_text,
             )
-            status.grid(row=idx, column=1, sticky="w", padx=(12, 18), pady=(0, 6))
+            status.grid(
+                row=idx,
+                column=1,
+                sticky="w",
+                padx=self._STATUS_COLUMN_PADDING,
+                pady=(0, 6),
+            )
             self.bind_mousewheel(status, self.app.postprocess_library_canvas)
+            check.lift()
 
             tip_text = self.descriptor_tooltip_text(postprocess)
             if tip_text:
@@ -164,9 +184,15 @@ class PostprocessLibraryController(LibraryController):
                     bg=self.app._surface_color,
                     fg=self.app._text_fg,
                 )
+            status_tip_text = (
+                full_status_text
+                if display_status_text != full_status_text
+                else tip_text
+            )
+            if status_tip_text:
                 _Tooltip(
                     status,
-                    tip_text,
+                    status_tip_text,
                     bg=self.app._surface_color,
                     fg=self.app._text_fg,
                 )
