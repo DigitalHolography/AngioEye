@@ -59,13 +59,11 @@ class ProcessApp(
         self.holo_input_paths: list[Path] = []
         self.holo_input_var = tk.StringVar()
         self.holo_status_var = tk.StringVar()
-        self.holo_output_path_var = tk.StringVar(value="Output path: -")
         self.minimal_status_var = tk.StringVar(value="Ready.")
         self.pipeline_library_summary_var = tk.StringVar(value="")
         self.postprocess_library_summary_var = tk.StringVar(value="")
-        self.minimal_input_path_var = tk.StringVar(value="No input selected")
-        self.minimal_output_path_var = tk.StringVar(value=str(Path.cwd()))
-        self.minimal_output_name_var = tk.StringVar(value="Output name: -")
+        self.minimal_input_path_var = tk.StringVar(value="No input")
+        self.minimal_output_path_var = tk.StringVar(value="")
         self._progress_total_units = 1.0
         self._progress_completed_units = 0.0
         self._last_saved_batch_log_path: Path | None = None
