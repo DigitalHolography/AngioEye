@@ -6,7 +6,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from input_output.archive_io import ZipH5Member, iter_extracted_h5_members, list_h5_members
+from input_output.archive_io import (
+    ZipH5Member,
+    iter_extracted_h5_members,
+    list_h5_members,
+)
 from input_output.hdf5_schema import is_hdf5_path
 
 
@@ -49,11 +53,7 @@ def iter_grouped_h5_files(
     records: list[GroupedH5File] = []
 
     for root, _, files in batch_root_path.walk():
-        h5_files = sorted(
-            file_name
-            for file_name in files
-            if is_hdf5_path(file_name)
-        )
+        h5_files = sorted(file_name for file_name in files if is_hdf5_path(file_name))
         if not h5_files:
             continue
 
@@ -122,7 +122,7 @@ def find_control_group_name(groups: Iterable[object]) -> str | None:
         if group is None:
             continue
         group_lower = str(group).lower()
-        if "control" in group_lower or group_lower in {"ctrl", "ctl", "controls"}:
+        if "control" in group_lower or group_lower in {"ctrl", "ctl", "controls", "BL"}:
             return str(group)
     return None
 
@@ -145,4 +145,3 @@ __all__ = [
     "iter_grouped_h5_files",
     "iter_grouped_h5_files_in_zip",
 ]
-
