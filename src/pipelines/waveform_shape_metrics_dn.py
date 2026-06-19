@@ -3,7 +3,7 @@ import numpy as np
 from .core.base import ProcessPipeline, ProcessResult, registerPipeline, with_attrs
 
 
-@registerPipeline(name="waveform_shape_metrics_denoised")
+@registerPipeline(name="waveform_shape_metrics_dn")
 class ArterialSegExample(ProcessPipeline):
     """
     Manuscript-aligned waveform-shape metrics on per-beat, per-branch,
@@ -233,6 +233,7 @@ class ArterialSegExample(ProcessPipeline):
             return pulse
 
         spectrum = np.fft.rfft(np.asarray(pulse, dtype=float))
+        spectrum[max_frequency + 1 :] = 0.0
 
         return np.fft.irfft(
             spectrum,
@@ -1495,6 +1496,30 @@ class ArterialSegExample(ProcessPipeline):
             )
         )
 
+        metrics[f"{vessel_prefix}/by_segment/signals/bandlimited/value"] = with_attrs(
+            np.asarray(bandlimited_seg, dtype=float),
+            {
+                **common_attrs,
+                "definition": [
+                    "Bandlimited per-segment waveform passed to _compute_block_segment "
+                    "for bandlimited_segment metrics"
+                ],
+            },
+        )
+
+        metrics[f"{vessel_prefix}/by_segment/signals/bandlimited_rectified/value"] = (
+            with_attrs(
+                self._rectify_keep_nan(bandlimited_seg),
+                {
+                    **common_attrs,
+                    "definition": [
+                        "Rectified version of bandlimited signal; this is the effective "
+                        "waveform seen by _compute_metrics_1d"
+                    ],
+                },
+            )
+        )
+
     def _compute_block_segment(self, v_block: np.ndarray, T: np.ndarray):
         """
         v_block: (n_t, n_beats, n_branches, n_radii)
@@ -1678,10 +1703,21 @@ class ArterialSegExample(ProcessPipeline):
         latex_formulas: dict,
     ) -> None:
         out_raw = self._compute_block_global(v_raw_gl, T)
+        out_band = self._compute_block_global(v_band_gl, T)
 
         for k in self._metric_keys():
             metrics[f"{vessel_prefix}/global/raw/{k[0]}"] = with_attrs(
                 out_raw[k[0]],
+                {
+                    "unit": [k[2]],
+                    "definition": [k[1]],
+                    "metric_family": [k[3]],
+                    "latex_formula": [latex_formulas[k[0]]],
+                },
+            )
+
+            metrics[f"{vessel_prefix}/global/bandlimited/{k[0]}"] = with_attrs(
+                out_band[k[0]],
                 {
                     "unit": [k[2]],
                     "definition": [k[1]],
@@ -1719,6 +1755,7 @@ class ArterialSegExample(ProcessPipeline):
         )
 
         graphics_raw = self._compute_graphics_support_block(v_raw_gl, T)
+        graphics_band = self._compute_graphics_support_block(v_band_gl, T)
 
         diagnostic_graphics = {
             "A2_cumsum",
@@ -1743,6 +1780,12 @@ class ArterialSegExample(ProcessPipeline):
                 metrics[f"{vessel_prefix}/global/raw/diagnostics/{name}"] = arr
             else:
                 metrics[f"{vessel_prefix}/global/raw/{name}"] = arr
+
+        for name, arr in graphics_band.items():
+            if name in diagnostic_graphics:
+                metrics[f"{vessel_prefix}/global/bandlimited/diagnostics/{name}"] = arr
+            else:
+                metrics[f"{vessel_prefix}/global/bandlimited/{name}"] = arr
 
     def run(self, h5file) -> ProcessResult:
         latex_formulas = {
@@ -1821,18 +1864,6 @@ class ArterialSegExample(ProcessPipeline):
                 if vessel_prefix == "artery":
                     v_raw_seg_metric_input, denoise_diag = self._denoise_segment_block(
                         v_raw_seg
-                    )
-
-                    metrics["artery/by_segment/denoising/zero_segment_mask"] = (
-                        denoise_diag["zero_segment_mask"]
-                    )
-
-                    metrics["artery/by_segment/denoising/sparse_branch_mask"] = (
-                        denoise_diag["sparse_branch_mask"]
-                    )
-
-                    metrics["artery/by_segment/denoising/n_valid_segments"] = (
-                        denoise_diag["n_valid_segments"]
                     )
 
                 self._pack_segment_signal_outputs(
