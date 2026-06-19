@@ -11,6 +11,12 @@ from .base import ViewController
 
 
 class LibraryController(ViewController):
+    _STATUS_COLUMN_PADDING = (12, 40)
+
+    def configure_library_columns(self, inner) -> None:
+        inner.columnconfigure(0, weight=1, uniform="")
+        inner.columnconfigure(1, weight=0, uniform="")
+
     @staticmethod
     def mousewheel_scroll_units(event: tk.Event) -> int:
         delta = int(getattr(event, "delta", 0) or 0)
