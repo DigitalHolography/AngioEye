@@ -70,6 +70,13 @@ from .inputs import (
     relative_hdf5_parent,
     stem_input_status,
 )
+from .output_paths import (
+    H5_OUTPUT_DIRNAME,
+    PNG_OUTPUT_DIRNAME,
+    h5_output_dir,
+    h5_output_parent,
+    png_output_dir,
+)
 
 __all__ = [
     "MetricsTree",
@@ -118,6 +125,11 @@ __all__ = [
     "prepare_run_inputs",
     "read_holo_path_list",
     "stem_input_status",
+    "H5_OUTPUT_DIRNAME",
+    "PNG_OUTPUT_DIRNAME",
+    "h5_output_dir",
+    "h5_output_parent",
+    "png_output_dir",
     "ZipH5Member",
     "ExtractedH5Member",
     "batched",
