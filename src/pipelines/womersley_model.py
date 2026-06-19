@@ -420,9 +420,14 @@ def calculate_cn(
     omega_0,
     len_seg,
     pixel_size,
-    min_valid_segments=5,
+    min_valid_segments=4,
 ):
     n_freq, n_branch, n_circle = Qn.shape
+    Q_n_branch = np.full(
+        (n_freq, n_branch),
+        np.nan + 1j * np.nan,
+        dtype=complex,
+    )
 
     delta_z = len_seg * pixel_size
     c_n = np.full((n_freq, n_branch, n_circle - 1), np.nan)
@@ -434,16 +439,19 @@ def calculate_cn(
         omega_n = n * omega_0
 
         for branch in range(n_branch):
-            Q_branch = Qn[n, branch]
+            Qn_branch = Qn[n, branch]
 
-            valid_mask = np.abs(Q_branch) > 0
+            valid_mask = np.abs(Qn_branch) > 0
+
+            if np.any(valid_mask):
+                Q_n_branch[n, branch] = np.nanmean(Qn_branch[valid_mask])
 
             if np.count_nonzero(valid_mask) < min_valid_segments:
                 continue
 
             for circle in range(n_circle - 1):
-                q1 = Q_branch[circle]
-                q2 = Q_branch[circle + 1]
+                q1 = Qn_branch[circle]
+                q2 = Qn_branch[circle + 1]
 
                 if np.abs(q1) == 0 or np.abs(q2) == 0:
                     continue
@@ -464,7 +472,59 @@ def calculate_cn(
             if not np.all(np.isnan(c_n[n, branch, :])):
                 c_n_branch[n, branch] = np.nanmean(c_n[n, branch, :])
 
-    return c_n, c_n_branch
+    return c_n, c_n_branch, Q_n_branch
+
+
+def compute_R0_branch(segment_data, pixel_size, ratio_map):
+    n_branch = max(branch for branch, _ in segment_data.keys()) + 1
+    R0_branch = np.full(n_branch, np.nan)
+
+    for branch in range(n_branch):
+        r0_values = []
+        for circle in range(
+            max(circle for b, circle in segment_data.keys() if b == branch) + 1
+        ):
+            if (branch, circle) in segment_data:
+                r0 = segment_data[(branch, circle)]["r0"]
+                ratio = ratio_map[branch, circle]
+                R0 = r0 * pixel_size / ratio
+                r0_values.append(R0)
+
+        if r0_values:
+            R0_branch[branch] = np.nanmean(r0_values)
+
+    return R0_branch
+
+
+def compute_Eh_avg(
+    c_n_branch,
+    Q_n_branch,
+    R0_branch,
+    rho,
+):
+    n_freq, n_branch = c_n_branch.shape
+
+    Eh_n = 2 * rho * R0_branch[None, :] * c_n_branch**2
+    weights = np.abs(Q_n_branch) ** 2
+    Eh_avg = np.full(n_branch, np.nan)
+
+    for branch in range(n_branch):
+        idx = range(n_freq)
+
+        valid = (
+            np.isfinite(Eh_n[idx, branch])
+            & np.isfinite(weights[idx, branch])
+            & (weights[idx, branch] > 0)
+            & (c_n_branch[idx, branch] > 0)
+        )
+
+        if np.any(valid):
+            w = weights[idx, branch][valid]
+            eh = Eh_n[idx, branch][valid]
+
+            Eh_avg[branch] = np.sum(w * eh) / np.sum(w)
+
+    return Eh_n, Eh_avg
 
 
 def evaluate_womersley_model(
@@ -1010,8 +1070,15 @@ class WomersleyModeling(ProcessPipeline):
             Tau_n,
         ) = generate_harmonic_flow_profile(v_pulse_fft, segment_data, ratio_map)
 
-        c_n, c_n_branch = calculate_cn(
+        c_n, c_n_branch, Q_n_branch = calculate_cn(
             Qn=Q_n, omega_0=omega_0, len_seg=len_seg, pixel_size=pixel_size
+        )
+
+        Eh_n, Eh_avg = compute_Eh_avg(
+            c_n_branch=c_n_branch,
+            Q_n_branch=Q_n_branch,
+            R0_branch=compute_R0_branch(segment_data, pixel_size, ratio_map),
+            rho=rho,
         )
 
         metrics: dict = {}
@@ -1029,6 +1096,8 @@ class WomersleyModeling(ProcessPipeline):
         metrics["Tau_n"] = np.asarray(Tau_n)
         metrics["c_n"] = np.asarray(c_n)
         metrics["c_n_branch"] = np.asarray(c_n_branch)
+        metrics["Eh_n"] = np.asarray(Eh_n)
+        metrics["Eh_avg"] = np.asarray(Eh_avg)
 
         # evaluate_womersley_model(
         #     metrics,
