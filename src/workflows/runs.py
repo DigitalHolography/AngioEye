@@ -18,7 +18,7 @@ from batch_engine import (
     run_task_batch,
     run_threaded_batches_in_process_pool,
 )
-from input_output import ZipH5Member
+from input_output import PNG_OUTPUT_DIRNAME, ZipH5Member
 from pipelines import load_pipeline_catalog
 
 from ._holo import HoloInputContext, output_filename
@@ -91,7 +91,7 @@ class RunPostprocesses(Protocol):
 ZipProgressCallback = Callable[[int, int, Path], None]
 ZipOutputDir = Callable[[Path, Path | None, ZipProgressCallback | None], Path]
 IdleCallback = Callable[[], None]
-ZIP_COMPANION_OUTPUT_FOLDERS = ("png",)
+ZIP_COMPANION_OUTPUT_FOLDERS = (PNG_OUTPUT_DIRNAME,)
 
 
 @dataclass(frozen=True)

@@ -4,7 +4,13 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from input_output import dataset_dir, ef_dir, find_ef_h5
+from input_output import (
+    dataset_dir,
+    ef_dir,
+    find_ef_h5,
+    find_hdf5_inputs,
+    h5_output_dir,
+)
 
 
 @dataclass(frozen=True)
@@ -47,9 +53,12 @@ def reset_output_dir(context: HoloInputContext) -> None:
 
 def find_ae_h5(holo_path: Path) -> Path | None:
     output_dir_path = output_dir(holo_path)
-    expected = output_dir_path / output_filename(holo_path)
+    expected = h5_output_dir(output_dir_path) / output_filename(holo_path)
     if expected.is_file():
         return expected
+    legacy_expected = output_dir_path / output_filename(holo_path)
+    if legacy_expected.is_file():
+        return legacy_expected
     if not output_dir_path.is_dir():
         return None
     candidates = find_hdf5_inputs(output_dir_path)

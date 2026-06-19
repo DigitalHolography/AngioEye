@@ -9,6 +9,7 @@ from pathlib import Path
 from input_output import (
     create_zip_from_tree,
     found_status_text,
+    h5_output_dir,
     holo_input_status,
     is_hdf5_path,
     stem_input_status,
@@ -491,7 +492,7 @@ class RunTabController(ViewController):
             input_text = str(holo_paths[0])
             output_path = self._minimal_holo_status_text(
                 str(
-                    holo_output_dir(holo_paths[0])
+                    h5_output_dir(holo_output_dir(holo_paths[0]))
                     / holo_output_filename(holo_paths[0])
                 )
             )
