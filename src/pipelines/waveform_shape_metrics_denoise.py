@@ -3,33 +3,8 @@ import numpy as np
 from .core.base import ProcessPipeline, ProcessResult, registerPipeline, with_attrs
 
 
-@registerPipeline(name="waveform_shape_metrics_dn")
+@registerPipeline(name="waveform_shape_metrics_denoised")
 class ArterialSegExample(ProcessPipeline):
-    """
-    Manuscript-aligned waveform-shape metrics on per-beat, per-branch,
-    per-radius velocity waveforms.
-
-    Public endpoint set
-    -------------------
-    The canonical outputs follow the simplified manuscript structure:
-    timing and displacement distribution; near-peak crest width; excursion
-    and pulsatility; cumulative-distance geometry; temporal kinetics and
-    persistence; spectral ratio and harmonic-panel reconstruction fidelity;
-    temporal support; and slope energy.
-
-    All canonical metrics are gain-invariant or gain-robust under positive
-    multiplicative scaling of v(t), up to numerical precision. The same formal
-    definitions are applied to arterial and venous waveforms, although the
-    manuscript interpretation focuses on arterial waveforms.
-
-    Notes
-    -----
-    - The registered pipeline name is intentionally kept unchanged for backward
-      compatibility.
-    - Deprecated exploratory higher-harmonic rolloff/support and phase-organization
-      metrics are no longer part of the canonical public metric set.
-    """
-
     description = (
         "Manuscript-aligned waveform-shape metrics "
         "(artery + vein; segment + aggregates + global)."
@@ -107,6 +82,26 @@ class ArterialSegExample(ProcessPipeline):
         self,
         v_block: np.ndarray,
     ) -> tuple[np.ndarray, dict]:
+        """
+        Processing pipeline:
+
+        1. Interpolate NaNs in each pulse.
+        2. Replace all-zero segments by NaN.
+        3. FFT low-pass filter (keep frequencies 0..9).
+        4. Remove beat-branch groups having fewer than
+        5 valid radii.
+
+        Parameters
+        ----------
+        v_block : ndarray
+            Shape (n_time, n_beats, n_branches, n_radii)
+
+        Returns
+        -------
+        out : ndarray
+        diagnostics : dict
+        """
+
         if v_block.ndim != 4:
             raise ValueError(
                 f"Expected (n_t,n_beats,n_branches,n_radii), got {v_block.shape}"
@@ -116,6 +111,10 @@ class ArterialSegExample(ProcessPipeline):
 
         n_time, n_beats, n_branches, n_radii = out.shape
 
+        #
+        # Step 1
+        # Interpolate NaNs
+        #
         for beat_idx in range(n_beats):
             for branch_idx in range(n_branches):
                 for radius_idx in range(n_radii):
@@ -133,24 +132,33 @@ class ArterialSegExample(ProcessPipeline):
                         radius_idx,
                     ] = self._interpolate_nan_pulse(pulse)
 
+        #
+        # Step 2
+        # Remove all-zero segments
+        #
         out, zero_segment_mask = self._remove_zero_segments(out)
 
+        #
+        # Step 3
+        # FFT low-pass
+        #
         out = self._fft_lowpass_block(
             out,
             max_frequency=9,
         )
 
+        #
+        # Step 4
+        # Remove sparse branches
+        #
         out, sparse_branch_mask = self._remove_sparse_branches(
             out,
             min_circles=5,
         )
 
-        n_valid_segments = np.sum(~np.all(np.isnan(out), axis=0))
-
         diagnostics = {
             "zero_segment_mask": zero_segment_mask,
             "sparse_branch_mask": sparse_branch_mask,
-            "n_valid_segments": n_valid_segments,
         }
 
         return out, diagnostics
@@ -233,10 +241,18 @@ class ArterialSegExample(ProcessPipeline):
             return pulse
 
         spectrum = np.fft.rfft(np.asarray(pulse, dtype=float))
-        spectrum[max_frequency + 1 :] = 0.0
+
+        truncated = np.zeros_like(spectrum)
+
+        keep = min(
+            max_frequency + 1,
+            spectrum.size,
+        )
+
+        truncated[:keep] = spectrum[:keep]
 
         return np.fft.irfft(
-            spectrum,
+            truncated,
             n=pulse.size,
         )
 
@@ -1864,6 +1880,13 @@ class ArterialSegExample(ProcessPipeline):
                 if vessel_prefix == "artery":
                     v_raw_seg_metric_input, denoise_diag = self._denoise_segment_block(
                         v_raw_seg
+                    )
+                    metrics["artery/by_segment/denoising/zero_segment_mask"] = (
+                        denoise_diag["zero_segment_mask"]
+                    )
+
+                    metrics["artery/by_segment/denoising/sparse_branch_mask"] = (
+                        denoise_diag["sparse_branch_mask"]
                     )
 
                 self._pack_segment_signal_outputs(
