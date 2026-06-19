@@ -18,6 +18,7 @@ rho = 1060  # Density in kg/m^3
 f0 = 1.2
 omega_0 = 2 * np.pi * f0
 num_harmonics = 10  # Number of harmonics to consider
+min_valid_segments = 4  # Minimum number of valid segments in one branch
 
 
 # v_profile_meas_extraction
@@ -420,7 +421,7 @@ def calculate_cn(
     omega_0,
     len_seg,
     pixel_size,
-    min_valid_segments=4,
+    min_valid_segments,
 ):
     n_freq, n_branch, n_circle = Qn.shape
     Q_n_branch = np.full(
@@ -525,6 +526,81 @@ def compute_Eh_avg(
             Eh_avg[branch] = np.sum(w * eh) / np.sum(w)
 
     return Eh_n, Eh_avg
+
+
+def wave_separation(
+    Qn,
+    c_n_branch,
+    omega_0,
+    len_seg,
+    pixel_size,
+    min_valid_segments,
+):
+    n_freq, n_branch, n_circle = Qn.shape
+
+    z = np.arange(n_circle) * len_seg * pixel_size
+
+    F_n = np.full(
+        (n_freq, n_branch),
+        np.nan + 1j * np.nan,
+        dtype=complex,
+    )
+
+    G_n = np.full_like(F_n, np.nan)
+
+    reflection_coeff = np.full(
+        (n_freq, n_branch),
+        np.nan,
+    )
+
+    for n in range(1, n_freq):
+        omega_n = n * omega_0
+
+        for branch in range(n_branch):
+            c = c_n_branch[n, branch]
+
+            if not np.isfinite(c) or c <= 0:
+                continue
+
+            Q_branch = Qn[n, branch]
+
+            valid = np.isfinite(Q_branch)
+
+            if np.count_nonzero(valid) < min_valid_segments:
+                continue
+
+            z_valid = z[valid]
+            Q_valid = Q_branch[valid]
+
+            k = omega_n / c
+
+            A = np.column_stack(
+                [
+                    np.exp(-1j * k * z_valid),
+                    np.exp(1j * k * z_valid),
+                ]
+            )
+
+            try:
+                x, *_ = np.linalg.lstsq(
+                    A,
+                    Q_valid,
+                    rcond=None,
+                )
+
+                F = x[0]
+                G = x[1]
+
+                F_n[n, branch] = F
+                G_n[n, branch] = G
+
+                if np.abs(F) > 0:
+                    reflection_coeff[n, branch] = np.abs(G) / np.abs(F)
+
+            except np.linalg.LinAlgError:
+                continue
+
+    return F_n, G_n, reflection_coeff
 
 
 def evaluate_womersley_model(
@@ -1071,7 +1147,11 @@ class WomersleyModeling(ProcessPipeline):
         ) = generate_harmonic_flow_profile(v_pulse_fft, segment_data, ratio_map)
 
         c_n, c_n_branch, Q_n_branch = calculate_cn(
-            Qn=Q_n, omega_0=omega_0, len_seg=len_seg, pixel_size=pixel_size
+            Qn=Q_n,
+            omega_0=omega_0,
+            len_seg=len_seg,
+            pixel_size=pixel_size,
+            min_valid_segments=min_valid_segments,
         )
 
         Eh_n, Eh_avg = compute_Eh_avg(
@@ -1079,6 +1159,10 @@ class WomersleyModeling(ProcessPipeline):
             Q_n_branch=Q_n_branch,
             R0_branch=compute_R0_branch(segment_data, pixel_size, ratio_map),
             rho=rho,
+        )
+
+        _, _, reflection_coeff = wave_separation(
+            Q_n, c_n_branch, omega_0, len_seg, pixel_size, min_valid_segments
         )
 
         metrics: dict = {}
@@ -1098,7 +1182,7 @@ class WomersleyModeling(ProcessPipeline):
         metrics["c_n_branch"] = np.asarray(c_n_branch)
         metrics["Eh_n"] = np.asarray(Eh_n)
         metrics["Eh_avg"] = np.asarray(Eh_avg)
-
+        metrics["reflection_coeff"] = np.asarray(reflection_coeff)
         # evaluate_womersley_model(
         #     metrics,
         #     branch_index=4,
