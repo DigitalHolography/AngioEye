@@ -28,6 +28,10 @@ class FolderOpener(Protocol):
     def open_folder(self, folder: Path) -> None: ...
 
 
+class FileOpener(Protocol):
+    def open_file(self, file_path: Path) -> None: ...
+
+
 class TkDialogService:
     def showwarning(self, title: str, message: str) -> object:
         return messagebox.showwarning(title, message)
@@ -57,11 +61,22 @@ class SystemFolderOpener:
             subprocess.run(["xdg-open", str(folder)], check=False)
 
 
+class SystemFileOpener:
+    def open_file(self, file_path: Path) -> None:
+        if sys.platform.startswith("win"):
+            os.startfile(str(file_path))  # type: ignore[attr-defined]
+        elif sys.platform == "darwin":
+            subprocess.run(["open", str(file_path)], check=False)
+        else:
+            subprocess.run(["xdg-open", str(file_path)], check=False)
+
+
 @dataclass(frozen=True)
 class UiServices:
     dialogs: DialogService = field(default_factory=TkDialogService)
     file_dialogs: FileDialogService = field(default_factory=TkFileDialogService)
     folder_opener: FolderOpener = field(default_factory=SystemFolderOpener)
+    file_opener: FileOpener = field(default_factory=SystemFileOpener)
 
 
 def services_for(app) -> UiServices:
