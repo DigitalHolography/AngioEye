@@ -11,7 +11,7 @@ from .core.base import (
 
 
 @registerPostprocess(
-    name="waveform metric summary tables",
+    name="HTML summary", 
     description=(
         "Create an HTML report for each processed HDF5 file, including a summary table of waveform metrics and their corresponding visualizations."
     ),
@@ -29,26 +29,26 @@ class WaveformMetricSummaryTablesPostprocess(BatchPostprocess):
         if not output_dir.exists() or not output_dir.is_dir():
             raise FileNotFoundError(f"Output folder does not exist: {output_dir}")
 
-        from .utils import waveform_metric_summary_tables
+        from .utils import html_summary_dashboard
 
         with temporary_zip_from_tree(
             output_dir,
             source_paths=context.processed_files,
         ) as temp_zip:
             temp_root = temp_zip.parent
-            all_results = waveform_metric_summary_tables.analyze_zip(str(temp_zip))
+            all_results = html_summary_dashboard.analyze_zip(str(temp_zip))
             if not all_results:
                 raise ValueError(
                     "No compatible pipeline metrics were found for the dashboard."
                 )
-            waveform_metric_summary_tables.save_dashboard(
+            html_summary_dashboard.save_dashboard(
                 str(temp_zip),
-                output_dir=temp_root / "html_metric_tables",
+                output_dir=temp_root / "html",
             )
 
             table_paths = extract_folder_from_zip(
                 zip_path=temp_zip,
-                member_prefix="html_metric_tables/",
+                member_prefix="html",
                 output_dir=output_dir,
             )
 

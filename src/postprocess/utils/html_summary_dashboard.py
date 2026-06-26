@@ -518,7 +518,7 @@ def image_file_to_base64(image_path):
         encoded = base64.b64encode(f.read()).decode("utf-8")
     return f"data:image/png;base64,{encoded}"
 
-def generate_metric_tables_html(zip_path, output_dir="html_metric_tables"):
+def generate_metric_tables_html(zip_path, output_dir="html"):
     reset_output_dir(output_dir)
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -705,7 +705,7 @@ def save_dashboard(
     zip_path,
     export_png_dir="export_png",
     export_eps_dir="export_eps",
-    output_dir="html_metric_tables",
+    output_dir="html",
 ):
     del export_png_dir, export_eps_dir
     generate_metric_tables_html(
@@ -716,7 +716,7 @@ def save_dashboard(
     replace_folder_in_zip(
         zip_path,
         output_dir,
-        arc_folder="html_metric_tables",
+        arc_folder="html",
     )
 
     if os.path.isdir(output_dir):
