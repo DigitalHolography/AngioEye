@@ -23,11 +23,16 @@ from input_output.archive_io import (
     replace_folder_in_zip,
     reset_output_dir,
 )
-from input_output.output_paths import find_velocity_signal_png
+from input_output.output_paths import (
+    PNG_OUTPUT_DIRNAME,
+    dataset_stem_from_path,
+    find_companion_file,
+)
 
 WAVEFORM_SHAPE_METRICS_PIPELINE = "waveform_shape_metrics"
 VALID_METRIC_FOLDERS = ["raw", "bandlimited"]
 VALID_VESSELS = ["artery", "vein"]
+VALID_VESSEL_TYPES = ("artery", "vein")
 SELECTED_METRICS = {
     "mu_t_over_T",
     "RI",
@@ -356,6 +361,15 @@ def dataframe_to_html_table(
         font-weight: bold;
         cursor: pointer;
     }
+
+    .vessel-image-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-rows: repeat(2, auto);
+        gap: 20px;
+        margin-bottom: 30px;
+        align-items: start;
+    }
     </style>
 
     <script>
@@ -378,67 +392,27 @@ def dataframe_to_html_table(
     """)
 
     html_parts.append("""
-    <div style="
-        display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        grid-template-rows: repeat(2, auto);
-        gap: 20px;
-        margin-bottom: 30px;
-        align-items: start;
-    ">
+    <div class="vessel-image-grid">
     """)
 
-    if M_0_path is not None:
+    if mask_artery_path is not None:
         html_parts.append(f"""
         <div>
-            <h2>\\(M_0\\)</h2>
+            <h2>Artery Segmentation</h2>
             <img
-                src="{M_0_path}"
+                src="{mask_artery_path}"
                 class="image-thumbnail"
                 onclick="openImageModal(this.src)"
             >
         </div>
         """)
-
-    if mask_artery_path is not None:
-        html_parts.append(f"""
-        <div>
-            <h2>Mask Artery</h2>
-            <img
-                src="{mask_artery_path}"
-                class="image-thumbnail"
-                onclick="openImageModal(this.src)"
-            >        </div>
-        """)
-
-    if artery_velocity_signal_path is not None:
-            html_parts.append(f"""
-            <div>
-                <h2>Artery Velocity Signal</h2>
-            <img
-                src="{artery_velocity_signal_path}"
-                class="image-thumbnail"
-                onclick="openImageModal(this.src)"
-            >
-           </div>
-            """)
-
-    if f_AVG_mean_path is not None:
-            html_parts.append(f"""
-            <div>
-                <h2>f AVG mean</h2>
-            <img
-                src="{f_AVG_mean_path}"
-                class="image-thumbnail"
-                onclick="openImageModal(this.src)"
-            >                              
-            </div>
-            """)
+    else:
+        html_parts.append("<div></div>")
 
     if mask_vein_path is not None:
         html_parts.append(f"""
         <div>
-            <h2>Mask Vein</h2>
+            <h2>Vein Segmentation</h2>
             <img
                 src="{mask_vein_path}"
                 class="image-thumbnail"
@@ -446,6 +420,22 @@ def dataframe_to_html_table(
             >
         </div>
         """)
+    else:
+        html_parts.append("<div></div>")
+
+    if artery_velocity_signal_path is not None:
+        html_parts.append(f"""
+        <div>
+            <h2>Artery Velocity Signal</h2>
+            <img
+                src="{artery_velocity_signal_path}"
+                class="image-thumbnail"
+                onclick="openImageModal(this.src)"
+            >
+        </div>
+        """)
+    else:
+        html_parts.append("<div></div>")
 
     if vein_velocity_signal_path is not None:
         html_parts.append(f"""
@@ -458,6 +448,8 @@ def dataframe_to_html_table(
             >
         </div>
         """)
+    else:
+        html_parts.append("<div></div>")
 
     html_parts.append("</div>")
 
@@ -521,11 +513,81 @@ def image_file_to_base64(image_path):
     return f"data:image/png;base64,{encoded}"
 
 
+def normalize_vessel_type(vessel_type):
+    vessel = vessel_type.strip().lower()
+    if vessel not in VALID_VESSEL_TYPES:
+        raise ValueError(
+            f"Unknown vessel type: {vessel_type!r}. "
+            f"Expected one of {', '.join(VALID_VESSEL_TYPES)}."
+        )
+    return vessel
+
+
+def _stem_for_source_path(path, stem=None):
+    if stem is not None:
+        return stem
+    try:
+        return dataset_stem_from_path(path)
+    except ValueError:
+        return Path(path).stem
+
+
+def velocity_signal_png_filename(*, stem, vessel_type):
+    vessel = normalize_vessel_type(vessel_type)
+    return f"{stem}_RI_v_{vessel}.png"
+
+
+def segmentation_map_png_filename(*, stem, vessel_type):
+    vessel = normalize_vessel_type(vessel_type)
+    return f"{stem}_{vessel}_seg_map_bkg.png"
+
+
+def find_velocity_signal_png(path, *, vessel_type, stem=None):
+    filename = velocity_signal_png_filename(
+        stem=_stem_for_source_path(path, stem),
+        vessel_type=vessel_type,
+    )
+    return find_companion_file(
+        path,
+        app_suffix="EF",
+        query_type=PNG_OUTPUT_DIRNAME,
+        filename=filename,
+    )
+
+
+def find_segmentation_map_png(path, *, vessel_type, stem=None):
+    filename = segmentation_map_png_filename(
+        stem=_stem_for_source_path(path, stem),
+        vessel_type=vessel_type,
+    )
+    return find_companion_file(
+        path,
+        app_suffix="EF",
+        query_type=PNG_OUTPUT_DIRNAME,
+        filename=filename,
+    )
+
+
 def _velocity_signal_image_to_base64(source_path, *, vessel_type):
     if source_path is None:
         return None
     try:
         image_path = find_velocity_signal_png(
+            source_path,
+            vessel_type=vessel_type,
+        )
+    except ValueError:
+        return None
+    if image_path is None:
+        return None
+    return image_file_to_base64(image_path)
+
+
+def _segmentation_map_image_to_base64(source_path, *, vessel_type):
+    if source_path is None:
+        return None
+    try:
+        image_path = find_segmentation_map_png(
             source_path,
             vessel_type=vessel_type,
         )
@@ -576,8 +638,14 @@ def _build_single_file_html(filepath, *, image_dir, source_path=None):
     base_name = filepath.stem
 
     M_0_rel_path = None
-    mask_rel_path_vein = None
-    mask_rel_path_artery = None
+    mask_rel_path_vein = _segmentation_map_image_to_base64(
+        source_path,
+        vessel_type="vein",
+    )
+    mask_rel_path_artery = _segmentation_map_image_to_base64(
+        source_path,
+        vessel_type="artery",
+    )
     f_AVG_mean_rel_path = None
     artery_velocity_signal_path = _velocity_signal_image_to_base64(
         source_path,

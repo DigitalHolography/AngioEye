@@ -4,7 +4,6 @@ H5_OUTPUT_DIRNAME = "h5"
 PNG_OUTPUT_DIRNAME = "png"
 HTML_OUTPUT_DIRNAME = "html"
 APP_SUFFIXES = ("HD", "DV", "EF", "AE")
-VALID_VESSEL_TYPES = ("artery", "vein")
 
 
 def h5_output_dir(output_root: str | Path) -> Path:
@@ -152,41 +151,3 @@ def find_companion_file(
             if legacy_path.is_file():
                 return legacy_path
     return None
-
-
-def normalize_vessel_type(vessel_type: str) -> str:
-    vessel = vessel_type.strip().lower()
-    if vessel not in VALID_VESSEL_TYPES:
-        raise ValueError(
-            f"Unknown vessel type: {vessel_type!r}. "
-            f"Expected one of {', '.join(VALID_VESSEL_TYPES)}."
-        )
-    return vessel
-
-
-def velocity_signal_png_filename(*, stem: str, vessel_type: str) -> str:
-    vessel = normalize_vessel_type(vessel_type)
-    return f"{stem}_RI_v_{vessel}.png"
-
-
-def find_velocity_signal_png(
-    path: str | Path,
-    *,
-    vessel_type: str,
-    stem: str | None = None,
-) -> Path | None:
-    """Find <stem>_EF/png/<stem>_RI_v_<vessel>.png, then legacy equivalents."""
-    try:
-        resolved_stem = stem or dataset_stem_from_path(path)
-    except ValueError:
-        resolved_stem = stem or Path(path).stem
-    filename = velocity_signal_png_filename(
-        stem=resolved_stem,
-        vessel_type=vessel_type,
-    )
-    return find_companion_file(
-        path,
-        app_suffix="EF",
-        query_type=PNG_OUTPUT_DIRNAME,
-        filename=filename,
-    )

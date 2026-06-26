@@ -10,9 +10,13 @@ SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from input_output.output_paths import companion_output_dir, find_velocity_signal_png
+from input_output.output_paths import companion_output_dir
 from postprocess.core.base import PostprocessContext
 from postprocess.html_summary import WaveformMetricSummaryTablesPostprocess
+from postprocess.utils.html_summary_dashboard import (
+    find_segmentation_map_png,
+    find_velocity_signal_png,
+)
 from workflows import HoloInputContext, ZipBatchSettings, find_ae_h5, run_holo_workflow
 
 
@@ -25,9 +29,13 @@ class HtmlSummaryPathTests(unittest.TestCase):
             ae_h5.write_text("h5", encoding="utf-8")
             artery_signal = root / "sample_EF" / "png" / "sample_RI_v_artery.png"
             vein_signal = root / "sample_EF" / "png" / "sample_RI_v_vein.png"
+            artery_seg = root / "sample_EF" / "png" / "sample_artery_seg_map_bkg.png"
+            vein_seg = root / "sample_EF" / "png" / "sample_vein_seg_map_bkg.png"
             artery_signal.parent.mkdir(parents=True)
             artery_signal.write_text("png", encoding="utf-8")
             vein_signal.write_text("png", encoding="utf-8")
+            artery_seg.write_text("png", encoding="utf-8")
+            vein_seg.write_text("png", encoding="utf-8")
 
             self.assertEqual(
                 root / "sample_AE" / "html",
@@ -38,6 +46,20 @@ class HtmlSummaryPathTests(unittest.TestCase):
                 find_velocity_signal_png(
                     ae_h5,
                     vessel_type="artery",
+                ),
+            )
+            self.assertEqual(
+                artery_seg,
+                find_segmentation_map_png(
+                    ae_h5,
+                    vessel_type="artery",
+                ),
+            )
+            self.assertEqual(
+                vein_seg,
+                find_segmentation_map_png(
+                    ae_h5,
+                    vessel_type="vein",
                 ),
             )
             self.assertEqual(
