@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 from input_output.archive_io import extract_folder_from_zip, temporary_zip_from_tree
+from input_output.output_paths import companion_output_dir, html_output_dir
 
 from .core.base import (
     BatchPostprocess,
@@ -8,6 +9,31 @@ from .core.base import (
     PostprocessResult,
     registerPostprocess,
 )
+
+
+def _is_zip_input(context: PostprocessContext) -> bool:
+    return context.input_path.suffix.lower() == ".zip"
+
+
+def _html_dir_for_path(path, fallback_output_dir):
+    for candidate in (path, fallback_output_dir):
+        try:
+            return companion_output_dir(
+                candidate,
+                app_suffix="AE",
+                query_type="html",
+            )
+        except ValueError:
+            continue
+    return html_output_dir(fallback_output_dir)
+
+
+def _source_path_for_file(context: PostprocessContext, index: int, processed_file):
+    if context.input_path.suffix.lower() == ".holo":
+        return context.input_path
+    if index < len(context.input_h5_paths):
+        return context.input_h5_paths[index]
+    return processed_file
 
 
 @registerPostprocess(
@@ -30,6 +56,24 @@ class WaveformMetricSummaryTablesPostprocess(BatchPostprocess):
             raise FileNotFoundError(f"Output folder does not exist: {output_dir}")
 
         from .utils import html_summary_dashboard
+
+        if not _is_zip_input(context):
+            table_paths = []
+            for index, processed_file in enumerate(context.processed_files):
+                source_path = _source_path_for_file(context, index, processed_file)
+                html_dir = _html_dir_for_path(source_path, output_dir)
+                html_path = html_dir / f"{processed_file.stem}.html"
+                table_paths.append(
+                    html_summary_dashboard.generate_metric_table_html_for_file(
+                        processed_file,
+                        html_path,
+                        source_path=source_path,
+                    )
+                )
+
+            created_paths = [str(path) for path in table_paths]
+            summary = f"Generated {len(table_paths)} tables."
+            return PostprocessResult(summary=summary, generated_paths=created_paths)
 
         with temporary_zip_from_tree(
             output_dir,

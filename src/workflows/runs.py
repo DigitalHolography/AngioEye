@@ -18,7 +18,7 @@ from batch_engine import (
     run_task_batch,
     run_threaded_batches_in_process_pool,
 )
-from input_output import ZipH5Member
+from input_output import H5_OUTPUT_DIRNAME, ZipH5Member
 from pipelines import load_pipeline_catalog
 
 from ._holo import HoloInputContext, output_filename
@@ -520,7 +520,7 @@ def _run_holo_pipeline_job(
         job.context.h5_path,
         pipelines,
         job.context.output_dir,
-        Path("."),
+        Path(H5_OUTPUT_DIRNAME),
         job.output_filename,
     )
 
