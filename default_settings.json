@@ -17,7 +17,8 @@
     "Postprocess Tutorial": false,
     "QC_Windkessel_RC": false,
     "Variability and heterogeneity tables": false,
-    "groups comparison dashboard": false
+    "groups comparison dashboard": false,
+    "HTML summary": true
   },
   "trim_h5source": true,
   "ui_mode": "minimal"
