@@ -1323,10 +1323,8 @@ def build_group_separation_metrics_table(
         )
 
         metric_results[metric_label(metric_name)] = {
-            n_control_label: str(sx["n"]),
-            n_group_label: str(sy["n"]),
-            f"Median {control_tex}": format_float(sx["median"], digits=digits),
-            f"Median {group_tex}": format_float(sy["median"], digits=digits),
+            f"variability Median {control_tex}": format_float(sx["median"], digits=digits),
+            f"variability Median {group_tex}": format_float(sy["median"], digits=digits),
             "More variable group": more_variable_group,
             "Mann--Whitney p-value": format_pvalue_latex(p, sig_digits=digits),
             "Cohen's $d$": format_float(d, digits=digits),
@@ -1337,12 +1335,9 @@ def build_group_separation_metrics_table(
             "AUC separability": format_float(auc_sep, digits=digits),
             "Sensitivity": format_float(sensitivity, digits=digits),
             "Specificity": format_float(specificity, digits=digits),
-            "Overlap OVL": format_float(ovl, digits=digits),
         }
 
     estimator_order = [
-        n_control_label,
-        n_group_label,
         f"Median {control_tex}",
         f"Median {group_tex}",
         "More variable group",
@@ -1352,7 +1347,6 @@ def build_group_separation_metrics_table(
         "AUC separability",
         "Sensitivity",
         "Specificity",
-        "Overlap OVL",
     ]
 
     rows = []
@@ -1423,17 +1417,14 @@ def build_auc_separability_ranking_table(
         rows.append(
             {
                 "Metric": metric_label(metric_name),
-                f"n {control_tex}": sx["n"],
-                f"n {group_tex}": sy["n"],
-                f"Median {control_tex}": sx["median"],
-                f"Median {group_tex}": sy["median"],
+                f"variability Median {control_tex}": sx["median"],
+                f"variability Median {group_tex}": sy["median"],
                 "More variable group": more_variable_group,
                 "AUC separability": auc_sep,
                 "Mann--Whitney p-value": p,
                 "Cohen's $d$": d,
                 "Sensitivity": sensitivity,
                 "Specificity": specificity,
-                "Overlap OVL": ovl,
             }
         )
 
@@ -1452,7 +1443,6 @@ def build_auc_separability_ranking_table(
         "Cohen's $d$",
         "Sensitivity",
         "Specificity",
-        "Overlap OVL",
     ]
     for col in numeric_cols:
         df[col] = df[col].apply(lambda v: format_float(v, digits=digits))
@@ -1465,8 +1455,6 @@ def build_auc_separability_ranking_table(
         [
             "Rank",
             "Metric",
-            f"n {control_tex}",
-            f"n {group_tex}",
             f"Median {control_tex}",
             f"Median {group_tex}",
             "More variable group",
@@ -1475,7 +1463,6 @@ def build_auc_separability_ranking_table(
             "Cohen's $d$",
             "Sensitivity",
             "Specificity",
-            "Overlap OVL",
         ]
     ]
 

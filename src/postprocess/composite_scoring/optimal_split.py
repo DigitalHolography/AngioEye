@@ -6,6 +6,7 @@ from typing import Any, Iterable
 
 import h5py
 import numpy as np
+from scipy.stats import mannwhitneyu
 
 from input_output.hdf5_io import read_dataset
 from input_output.hdf5_schema import find_pipeline_group
@@ -17,12 +18,14 @@ from .metrics import GREATER, LESS, METRIC_PANEL, REPRESENTATIONS, VESSEL_TYPES
 
 CONTROL_NAME_HINTS = (
     "control",
-    "bl",
+    "controle",
+    "contrôle",
     "ctrl",
     "healthy",
     "sain",
     "temoin",
     "témoin",
+    "after",
 )
 
 
@@ -43,6 +46,7 @@ class SplitStats:
     auc_greater: float
     auc_less: float
     separability_auc: float
+    p_value_mannwhitney: float
     selected_for_score: bool
     n_control: int
     n_pathology: int
@@ -130,6 +134,7 @@ def calibrate_metrics_from_processed_files(
         auc_greater = _roc_auc_greater(x0, x1)
         auc_less = 1.0 - auc_greater
         separability_auc = max(auc_greater, auc_less)
+        p_value_mannwhitney = _mannwhitney_p_value(x0, x1)
 
         # WAS uses sigma0 by vessel type. The threshold/direction are optimized
         # on one reference vessel/representation, but sigma0 is estimated from
@@ -160,9 +165,7 @@ def calibrate_metrics_from_processed_files(
                 representation=optimize_representation,
                 threshold=float(split["threshold"]),
                 direction=int(split["direction"]),
-                direction_label="GREATER"
-                if int(split["direction"]) == GREATER
-                else "LESS",
+                direction_label="GREATER" if int(split["direction"]) == GREATER else "LESS",
                 control_std=float(control_std),
                 sensitivity=float(split["sensitivity"]),
                 specificity=float(split["specificity"]),
@@ -171,6 +174,7 @@ def calibrate_metrics_from_processed_files(
                 auc_greater=float(auc_greater),
                 auc_less=float(auc_less),
                 separability_auc=float(separability_auc),
+                p_value_mannwhitney=float(p_value_mannwhitney),
                 selected_for_score=False,
                 n_control=int(x0.size),
                 n_pathology=int(x1.size),
@@ -180,6 +184,30 @@ def calibrate_metrics_from_processed_files(
         )
 
     return calibrated, stats
+
+
+def _mannwhitney_p_value(
+    control_values: np.ndarray,
+    pathology_values: np.ndarray,
+) -> float:
+    control_values = np.asarray(control_values, dtype=float)
+    pathology_values = np.asarray(pathology_values, dtype=float)
+    control_values = control_values[np.isfinite(control_values)]
+    pathology_values = pathology_values[np.isfinite(pathology_values)]
+
+    if control_values.size == 0 or pathology_values.size == 0:
+        return float("nan")
+
+    try:
+        result = mannwhitneyu(
+            control_values,
+            pathology_values,
+            alternative="two-sided",
+            method="auto",
+        )
+        return float(result.pvalue)
+    except ValueError:
+        return float("nan")
 
 
 def _infer_control_group(groups: list[str]) -> str:
@@ -271,9 +299,7 @@ def _best_one_dimensional_split(
     x0 = control_values[np.isfinite(control_values)]
     x1 = pathology_values[np.isfinite(pathology_values)]
     if x0.size == 0 or x1.size == 0:
-        raise ValueError(
-            "Cannot optimize split with an empty control or pathology group."
-        )
+        raise ValueError("Cannot optimize split with an empty control or pathology group.")
 
     all_values = np.sort(np.unique(np.concatenate([x0, x1])))
     if all_values.size == 1:

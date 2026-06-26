@@ -29,7 +29,7 @@ OPTIMIZE_REPRESENTATION = "bandlimited"
 AGGREGATION_FOR_SPLIT = "median"
 
 # Keep only the N metrics with the best threshold-independent separability AUC.
-N_METRICS_FOR_SCORE = 27
+N_METRICS_FOR_SCORE = 10
 
 
 def _select_top_auc_metrics(
@@ -56,7 +56,9 @@ def _select_top_auc_metrics(
     selected_keys = {stat.metric_key for stat in ranked[:n_metrics]}
 
     selected_specs = {
-        key: metric for key, metric in metric_specs.items() if key in selected_keys
+        key: metric
+        for key, metric in metric_specs.items()
+        if key in selected_keys
     }
 
     selected_stats = []
@@ -99,12 +101,10 @@ def run_composite_scoring(context: PostprocessContext) -> PostprocessResult:
             optimize_representation=OPTIMIZE_REPRESENTATION,
             aggregation=AGGREGATION_FOR_SPLIT,
         )
-        metric_specs, selected_split_stats, annotated_split_stats = (
-            _select_top_auc_metrics(
-                all_metric_specs,
-                all_split_stats,
-                n_metrics=N_METRICS_FOR_SCORE,
-            )
+        metric_specs, selected_split_stats, annotated_split_stats = _select_top_auc_metrics(
+            all_metric_specs,
+            all_split_stats,
+            n_metrics=N_METRICS_FOR_SCORE,
         )
         if not metric_specs:
             raise ValueError("No metrics were selected for WAS/WAS-c scoring.")
@@ -131,7 +131,8 @@ def run_composite_scoring(context: PostprocessContext) -> PostprocessResult:
             tree = append_scores_to_file(file_path, metric_specs=metric_specs)
         except Exception as exc:  # noqa: BLE001
             failures.append(
-                f"Composite Scoring skipped {file_path}: {type(exc).__name__}: {exc}"
+                f"Composite Scoring skipped {file_path}: "
+                f"{type(exc).__name__}: {exc}"
             )
             continue
         cohort = extract_group_name(file_path.parent, context.output_dir)
@@ -172,9 +173,6 @@ def run_composite_scoring(context: PostprocessContext) -> PostprocessResult:
         generated_paths=[*updated_paths, *png_paths, *report_paths],
         metadata={
             "failures": failures,
-            "optimal_split_all_metrics": [
-                stat.__dict__ for stat in annotated_split_stats
-            ],
             "selected_metric_panel": [stat.metric_key for stat in selected_split_stats],
             "n_metrics_for_score": len(metric_specs),
         },
