@@ -188,7 +188,7 @@ def _dispatch_holo_postprocess_workflow(
     for holo_path, ae_h5 in ae_records:
         run_postprocesses(
             request.postprocesses,
-            ae_h5.parent,
+            holo_output_dir(holo_path),
             (ae_h5,),
             (ae_h5,),
             holo_path,
@@ -210,7 +210,9 @@ def _dispatch_holo_postprocess_workflow(
     )
     return WorkflowDispatchResult(
         workflow_result=RunWorkflowResult(
-            output_dir=ae_records[0][1].parent if ae_records else Path("."),
+            output_dir=(
+                holo_output_dir(ae_records[0][0]) if ae_records else Path(".")
+            ),
             processed_outputs=[ae_h5 for _, ae_h5 in ae_records],
             processed_input_paths=[ae_h5 for _, ae_h5 in ae_records],
             failures=failures,
