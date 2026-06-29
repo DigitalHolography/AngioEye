@@ -1,7 +1,12 @@
 ﻿from __future__ import annotations
 
 from input_output.archive_io import extract_folder_from_zip, temporary_zip_from_tree
-from input_output.output_paths import companion_output_dir, html_output_dir
+from input_output.output_paths import (
+    H5_OUTPUT_DIRNAME,
+    companion_output_dir,
+    h5_output_dir,
+    html_output_dir,
+)
 
 from .core.base import (
     BatchPostprocess,
@@ -34,6 +39,25 @@ def _source_path_for_file(context: PostprocessContext, index: int, processed_fil
     if index < len(context.input_h5_paths):
         return context.input_h5_paths[index]
     return processed_file
+
+
+def _all_processed_files_under(root, processed_files):
+    if not root.is_dir():
+        return False
+    for processed_file in processed_files:
+        try:
+            processed_file.expanduser().resolve().relative_to(root)
+        except ValueError:
+            return False
+    return True
+
+
+def _zip_html_summary_source_root(output_dir, processed_files):
+    h5_dir = h5_output_dir(output_dir).expanduser().resolve()
+    for candidate in (h5_dir / H5_OUTPUT_DIRNAME, h5_dir):
+        if _all_processed_files_under(candidate, processed_files):
+            return candidate
+    return output_dir
 
 
 @registerPostprocess(
@@ -76,7 +100,7 @@ class WaveformMetricSummaryTablesPostprocess(BatchPostprocess):
             return PostprocessResult(summary=summary, generated_paths=created_paths)
 
         with temporary_zip_from_tree(
-            output_dir,
+            _zip_html_summary_source_root(output_dir, context.processed_files),
             source_paths=context.processed_files,
         ) as temp_zip:
             temp_root = temp_zip.parent

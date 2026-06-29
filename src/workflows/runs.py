@@ -18,7 +18,7 @@ from batch_engine import (
     run_task_batch,
     run_threaded_batches_in_process_pool,
 )
-from input_output import H5_OUTPUT_DIRNAME, ZipH5Member
+from input_output import H5_OUTPUT_DIRNAME, PNG_OUTPUT_DIRNAME, ZipH5Member
 from pipelines import load_pipeline_catalog
 
 from ._holo import HoloInputContext, output_filename

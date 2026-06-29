@@ -6,10 +6,13 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import h5py
+
 SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+from input_output.hdf5_schema import ANGIOEYE_PROCESSING_ROOT
 from input_output.output_paths import companion_output_dir
 from postprocess.core.base import PostprocessContext
 from postprocess.html_summary import WaveformMetricSummaryTablesPostprocess
@@ -18,6 +21,18 @@ from postprocess.utils.html_summary_dashboard import (
     find_velocity_signal_png,
 )
 from workflows import HoloInputContext, ZipBatchSettings, find_ae_h5, run_holo_workflow
+
+
+def _write_minimal_waveform_metrics_file(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with h5py.File(path, "w") as h5:
+        group = h5.require_group(
+            f"{ANGIOEYE_PROCESSING_ROOT}/waveform_shape_metrics"
+        )
+        group.attrs["pipeline"] = "waveform_shape_metrics"
+        for vessel_type in ("artery", "vein"):
+            metrics_group = group.require_group(f"{vessel_type}/global/bandlimited")
+            metrics_group.create_dataset("RI", data=[0.7])
 
 
 class HtmlSummaryPathTests(unittest.TestCase):
@@ -127,6 +142,28 @@ class HtmlSummaryPathTests(unittest.TestCase):
             self.assertEqual([str(expected)], result.generated_paths)
             self.assertTrue(expected.exists())
             self.assertFalse((ae_dir / "html" / "h5").exists())
+
+    def test_zip_html_summary_drops_h5_folders_from_archive_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_dir = Path(tmp_dir) / "outputs"
+            processed_h5 = output_dir / "h5" / "h5" / "CNTRL" / "sample_AE.h5"
+            _write_minimal_waveform_metrics_file(processed_h5)
+
+            context = PostprocessContext(
+                output_dir=output_dir,
+                processed_files=(processed_h5,),
+                selected_pipelines=("waveform_shape_metrics",),
+                input_path=Path(tmp_dir) / "batch.zip",
+                zip_outputs=True,
+                input_h5_paths=(),
+            )
+
+            result = WaveformMetricSummaryTablesPostprocess().run(context)
+
+            expected = output_dir / "html" / "CNTRL" / "sample_AE.html"
+            self.assertEqual([str(expected)], result.generated_paths)
+            self.assertTrue(expected.exists())
+            self.assertFalse((output_dir / "html" / "h5").exists())
 
     def test_holo_workflow_writes_h5_under_ae_h5_folder(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
