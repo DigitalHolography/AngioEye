@@ -15,6 +15,7 @@ DEFAULT_SETTINGS_FILENAME = "default_settings.json"
 LAST_BATCH_LOG_FILENAME = "last_batch_log.txt"
 VERSION_PATTERN = re.compile(r'^version\s*=\s*"([^"]+)"\s*$')
 INVALID_PATH_CHARS_PATTERN = re.compile(r'[<>:"/\\|?*]+')
+DEFAULT_SELECTED_PIPELINE = "waveform_shape_metrics"
 
 
 def _read_version_from_pyproject(pyproject_path: Path) -> str | None:
@@ -134,6 +135,15 @@ def normalize_named_visibility(
 def normalize_pipeline_visibility(
     pipeline_names: Iterable[str], stored_visibility: Mapping[str, bool] | None
 ) -> tuple[dict[str, bool], bool]:
+    if not stored_visibility:
+        ordered_names = list(dict.fromkeys(pipeline_names))
+        return (
+            {
+                name: name == DEFAULT_SELECTED_PIPELINE
+                for name in ordered_names
+            },
+            bool(ordered_names),
+        )
     return normalize_named_visibility(pipeline_names, stored_visibility)
 
 

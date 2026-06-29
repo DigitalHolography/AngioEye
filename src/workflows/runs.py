@@ -91,7 +91,7 @@ class RunPostprocesses(Protocol):
 ZipProgressCallback = Callable[[int, int, Path], None]
 ZipOutputDir = Callable[[Path, Path | None, ZipProgressCallback | None], Path]
 IdleCallback = Callable[[], None]
-ZIP_COMPANION_OUTPUT_FOLDERS = ("png",)
+ZIP_COMPANION_OUTPUT_FOLDERS = (PNG_OUTPUT_DIRNAME,)
 
 
 @dataclass(frozen=True)
