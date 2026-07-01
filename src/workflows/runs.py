@@ -18,11 +18,11 @@ from batch_engine import (
     run_task_batch,
     run_threaded_batches_in_process_pool,
 )
-from input_output import ZipH5Member
+from input_output import H5_OUTPUT_DIRNAME, PNG_OUTPUT_DIRNAME, ZipH5Member
 from pipelines import load_pipeline_catalog
 
 from ._holo import HoloInputContext, output_filename
-from ._pipeline_runs import (
+from ._standard_pipeline_runs import (
     PipelineRunResult,
     RunPipelineFile,
     run_filesystem_pipeline_run,
@@ -91,7 +91,7 @@ class RunPostprocesses(Protocol):
 ZipProgressCallback = Callable[[int, int, Path], None]
 ZipOutputDir = Callable[[Path, Path | None, ZipProgressCallback | None], Path]
 IdleCallback = Callable[[], None]
-ZIP_COMPANION_OUTPUT_FOLDERS = ("png",)
+ZIP_COMPANION_OUTPUT_FOLDERS = (PNG_OUTPUT_DIRNAME,)
 
 
 @dataclass(frozen=True)
@@ -423,7 +423,11 @@ def run_holo_workflow(
         processed_outputs=result.processed_outputs,
         processed_input_paths=result.processed_input_paths,
         failures=result.failures,
-        summary_message=_holo_summary(result.processed_outputs),
+        summary_message=_holo_summary(
+            result.processed_outputs,
+            input_count=len(contexts),
+            failure_count=len(result.failures),
+        ),
     )
 
 
@@ -516,7 +520,7 @@ def _run_holo_pipeline_job(
         job.context.h5_path,
         pipelines,
         job.context.output_dir,
-        Path("."),
+        Path(H5_OUTPUT_DIRNAME),
         job.output_filename,
     )
 
@@ -618,7 +622,17 @@ def _record_holo_task_result(
     advance_progress(pipeline_count)
 
 
-def _holo_summary(processed_outputs: Sequence[Path]) -> str:
+def _holo_summary(
+    processed_outputs: Sequence[Path],
+    *,
+    input_count: int | None = None,
+    failure_count: int = 0,
+) -> str:
+    if failure_count:
+        return (
+            f"Processed {len(processed_outputs)}/{input_count or 0} holo file(s); "
+            f"{failure_count} failed/skipped."
+        )
     if len(processed_outputs) == 1:
         return f"Output file: {processed_outputs[0]}"
     return f"Outputs generated for {len(processed_outputs)} holo file(s)."

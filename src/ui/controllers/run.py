@@ -6,7 +6,14 @@ import tkinter as tk
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from input_output import create_zip_from_tree, is_hdf5_path
+from input_output import (
+    create_zip_from_tree,
+    found_status_text,
+    h5_output_dir,
+    holo_input_status,
+    is_hdf5_path,
+    stem_input_status,
+)
 from workflows import (
     ZIP_COMPANION_OUTPUT_FOLDERS,
     HoloInputContext,
@@ -20,10 +27,10 @@ from workflows import (
     dataset_dir as holo_dataset_dir,
     dispatch_workflow,
     ef_dir as holo_ef_dir,
-    find_ef_h5 as find_holo_ef_h5,
     make_zip_progress_callback,
     output_dir as holo_output_dir,
     output_filename as holo_output_filename,
+    read_holo_path_list,
     reset_output_dir as reset_holo_output_dir,
     resolve_context as resolve_holo_context,
 )
@@ -44,10 +51,6 @@ class RunTabController(ViewController):
     @property
     def holo_status_var(self):
         return self.app.holo_status_var
-
-    @property
-    def holo_output_path_var(self):
-        return self.app.holo_output_path_var
 
     @property
     def persist_eyeflow_data_var(self):
@@ -84,14 +87,15 @@ class RunTabController(ViewController):
     def choose_file(self) -> None:
         selected_paths = services_for(self.app).file_dialogs.askopenfilenames(
             filetypes=[
-                ("AngioEye inputs", "*.h5 *.hdf5 *.holo *.zip"),
+                ("AngioEye inputs", "*.h5 *.hdf5 *.holo *.txt *.zip"),
                 ("HDF5 files", "*.h5 *.hdf5"),
                 ("Holo files", "*.holo"),
+                ("Holo path lists", "*.txt"),
                 ("Zip archives", "*.zip"),
                 ("All files", "*.*"),
             ],
             initialdir=self.app.batch_input_var.get() or os.path.abspath("h5_example"),
-            title="Select HDF5, .holo, or .zip input",
+            title="Select HDF5, .holo, .txt, or .zip input",
         )
         if not selected_paths:
             return
@@ -113,6 +117,8 @@ class RunTabController(ViewController):
 
         input_path = input_paths[0]
         if input_path.suffix.lower() == ".holo":
+            self.apply_holo_inputs([input_path])
+        elif input_path.suffix.lower() == ".txt":
             self.apply_holo_inputs([input_path])
         else:
             self.app.batch_input_var.set(str(input_path))
@@ -151,6 +157,7 @@ class RunTabController(ViewController):
             return
 
         self.app._reset_batch_output("Starting batch run...\n")
+        self.set_minimal_status_color(None)
         self.app._set_minimal_status("Preparing batch...")
 
         try:
@@ -241,7 +248,12 @@ class RunTabController(ViewController):
             return
 
         self.app._set_progress_units(self.app._progress_total_units)
-        self.app._log_batch(f"Completed. {workflow_result.summary_message}")
+        completion = (
+            "Completed with errors."
+            if workflow_result.failures or workflow_result.zip_failed
+            else "Completed."
+        )
+        self.app._log_batch(f"{completion} {workflow_result.summary_message}")
 
         if workflow_result.failures:
             self.app._set_minimal_status("Completed with errors.")
@@ -299,6 +311,7 @@ class RunTabController(ViewController):
         )
         self.update_holo_status_labels()
         self.app._reset_progress()
+        self.set_minimal_status_color(None)
         self.app._set_minimal_status("Ready.")
 
     def apply_batch_input_files(self, input_paths: Sequence[Path]) -> None:
@@ -317,6 +330,7 @@ class RunTabController(ViewController):
         self.app.batch_zip_var.set(False)
         self.update_holo_status_labels()
         self.app._reset_progress()
+        self.set_minimal_status_color(None)
         self.app._set_minimal_status("Ready.")
 
     def apply_holo_inputs(self, holo_paths: Sequence[Path]) -> None:
@@ -325,7 +339,11 @@ class RunTabController(ViewController):
         self.app.batch_input_paths = []
         self.app.holo_input_paths = paths
         self.app.holo_input_var.set(os.pathsep.join(str(path) for path in paths))
-        if len(paths) == 1:
+        if len(paths) == 1 and paths[0].suffix.lower() == ".txt":
+            self.app.batch_input_var.set(str(paths[0]))
+            self.app.batch_output_var.set("Auto: one *_AE folder per listed .holo")
+            self.app.batch_zip_name_var.set(self.default_archive_name(paths[0]))
+        elif len(paths) == 1:
             self.app.batch_input_var.set(str(paths[0]))
             self.app.batch_output_var.set(str(holo_output_dir(paths[0])))
             self.app.batch_zip_name_var.set(self.default_archive_name(paths[0]))
@@ -337,7 +355,9 @@ class RunTabController(ViewController):
         self.app.batch_zip_var.set(False)
 
         self.update_holo_status_labels()
+        self.update_minimal_path_labels()
         self.app._reset_progress()
+        self.set_minimal_status_color(None)
         self.app._set_minimal_status("Ready.")
 
     def selected_holo_paths(self) -> list[Path]:
@@ -354,12 +374,7 @@ class RunTabController(ViewController):
         return self.app.input_convention_var.get() == "holo"
 
     def set_holo_status_visible(self, visible: bool) -> None:
-        label_names = (
-            "minimal_holo_status_label",
-            "minimal_holo_output_label",
-            "advanced_holo_status_label",
-            "advanced_holo_output_label",
-        )
+        label_names = ("advanced_holo_status_label",)
         for label_name in label_names:
             label = getattr(self.app, label_name, None)
             if label is not None:
@@ -370,75 +385,198 @@ class RunTabController(ViewController):
 
     def set_holo_status_color(self, found: bool) -> None:
         color = "#3fb37f" if found else "#d65f5f"
-        for label_name in ("minimal_holo_status_label", "advanced_holo_status_label"):
+        for label_name in ("advanced_holo_status_label",):
             label = getattr(self.app, label_name, None)
             if label is not None:
                 label.configure(fg=color)
 
+    def set_minimal_status_color(self, found: bool | None = None) -> None:
+        if found is None:
+            color = self.app._text_fg
+        else:
+            color = "#3fb37f" if found else "#d65f5f"
+        label = getattr(self.app, "minimal_status_label", None)
+        if label is not None:
+            label.configure(fg=color)
+
+    def set_minimal_output_status_color(self, found: bool | None = None) -> None:
+        if found is None:
+            color = self.app._muted_fg
+        else:
+            color = "#3fb37f" if found else "#d65f5f"
+        label = getattr(self.app, "minimal_output_path_label", None)
+        if label is not None:
+            label.configure(fg=color)
+
+    def set_minimal_holo_status(self, text: str, found: bool) -> None:
+        self.app.minimal_output_path_var.set(text)
+        self._set_minimal_output_path_visible(True)
+        self.set_minimal_output_status_color(found)
+
     def update_holo_status_labels(self) -> None:
         if not self.uses_holo_input_convention():
             self.app.holo_status_var.set("")
-            self.app.holo_output_path_var.set("Output path: -")
             self.set_holo_status_visible(False)
             return
 
         holo_paths = self.selected_holo_paths()
         if not holo_paths:
             self.app.holo_status_var.set("")
-            self.app.holo_output_path_var.set("Output path: -")
             self.set_holo_status_visible(False)
             return
 
         self.set_holo_status_visible(True)
-        if len(holo_paths) == 1:
-            output_text = f"Output path: {holo_output_dir(holo_paths[0])}"
-        else:
-            output_text = "Output paths: one *_AE folder per selected .holo"
-        self.app.holo_output_path_var.set(output_text)
+        if len(holo_paths) == 1 and holo_paths[0].suffix.lower() == ".txt":
+            self.update_holo_path_list_status_labels(holo_paths[0])
+            return
 
+        statuses = [
+            holo_input_status(path, require_holo_file=True) for path in holo_paths
+        ]
         missing_stems = [
-            path.stem for path in holo_paths if find_holo_ef_h5(path) is None
+            path.stem for path, status in zip(holo_paths, statuses) if not status.ef
         ]
         found_count = len(holo_paths) - len(missing_stems)
-        status = f"{found_count}/{len(holo_paths)} EF found"
-        if missing_stems:
-            status += f" - missing: {', '.join(missing_stems)}"
+        status = found_status_text("EF", found_count, len(holo_paths), missing_stems)
+        found_all = not missing_stems
         self.app.holo_status_var.set(status)
-        self.set_holo_status_color(not missing_stems)
+        self.set_holo_status_color(found_all)
+        self.set_minimal_holo_status(status, found_all)
+
+    def update_holo_path_list_status_labels(self, path: Path) -> None:
+        self.set_holo_status_visible(True)
+        try:
+            input_list = read_holo_path_list(path)
+        except Exception as exc:  # noqa: BLE001
+            status = f"Holo path list error: {exc}"
+            self.app.holo_status_var.set(status)
+            self.set_holo_status_color(False)
+            self.set_minimal_holo_status(status, False)
+            return
+        stems = input_list.stems
+        statuses = [stem_input_status(stem, input_list.root_dir) for stem in stems]
+        missing_stems = [
+            stem for stem, status in zip(stems, statuses) if not status.ef
+        ]
+        found_count = len(stems) - len(missing_stems)
+        status = found_status_text("EF", found_count, len(stems), missing_stems)
+        found_all = not missing_stems
+        self.app.holo_status_var.set(status)
+        self.set_holo_status_color(found_all)
+        self.set_minimal_holo_status(status, found_all)
 
     def update_minimal_path_labels(self) -> None:
         holo_mode = self.uses_holo_input_convention()
         holo_paths = self.selected_holo_paths() if holo_mode else []
         raw_value = "" if holo_mode else (self.app.batch_input_var.get() or "").strip()
-        if not raw_value:
-            if holo_paths:
-                if len(holo_paths) == 1:
-                    self.app.minimal_input_path_var.set(str(holo_paths[0]))
-                    self.app.minimal_output_name_var.set(
-                        f"Output name: {holo_output_filename(holo_paths[0])}"
-                    )
-                else:
-                    stems = ", ".join(path.stem for path in holo_paths)
-                    self.app.minimal_input_path_var.set(
-                        f"{len(holo_paths)} .holo files selected: {stems}"
-                    )
-                    self.app.minimal_output_name_var.set(
-                        "Output names: one *_AE.h5 per selected .holo"
-                    )
+        output_is_status = False
+        if raw_value:
+            batch_paths = self.selected_batch_input_paths()
+            if batch_paths:
+                input_text = self._selected_files_summary(batch_paths)
+                output_path = self._minimal_base_output_path()
             else:
-                self.app.minimal_input_path_var.set("No input selected")
-                self.app.minimal_output_name_var.set("Output name: -")
-        else:
-            input_path = Path(raw_value)
-            self.app.minimal_input_path_var.set(str(input_path))
-            self.app.minimal_output_name_var.set(
-                f"Output name: {self.default_output_artifact_name(input_path)}"
+                input_path = Path(raw_value)
+                input_text = str(input_path)
+                output_path = self._minimal_legacy_output_path(input_path)
+        elif (
+            len(holo_paths) == 1
+            and holo_paths[0].suffix.lower() == ".txt"
+        ):
+            input_text = self._selected_holo_path_list_summary(holo_paths[0])
+            output_path = self._minimal_holo_status_text(
+                "one *_AE.h5 per listed .holo"
             )
+            output_is_status = output_path == self.app.holo_status_var.get()
+        elif len(holo_paths) == 1:
+            input_text = str(holo_paths[0])
+            output_path = self._minimal_holo_status_text(
+                str(
+                    h5_output_dir(holo_output_dir(holo_paths[0]))
+                    / holo_output_filename(holo_paths[0])
+                )
+            )
+            output_is_status = output_path == self.app.holo_status_var.get()
+        elif holo_paths:
+            input_text = self._selected_holo_summary(holo_paths)
+            output_path = self._minimal_holo_status_text(
+                "one *_AE.h5 per selected .holo"
+            )
+            output_is_status = output_path == self.app.holo_status_var.get()
+        else:
+            self.app.minimal_input_path_var.set("No input")
+            self.app.minimal_output_path_var.set("")
+            self.set_minimal_output_status_color(None)
+            self._set_minimal_output_path_visible(False)
+            return
 
+        self.app.minimal_input_path_var.set(f"Input: {input_text}")
+        if output_is_status:
+            self.app.minimal_output_path_var.set(str(output_path))
+        else:
+            self.app.minimal_output_path_var.set(f"Output Path: {output_path}")
+            self.set_minimal_output_status_color(None)
+        self._set_minimal_output_path_visible(True)
+
+    def _set_minimal_output_path_visible(self, visible: bool) -> None:
+        label = getattr(self.app, "minimal_output_path_label", None)
+        if label is None:
+            return
+        if visible:
+            label.grid()
+        else:
+            label.grid_remove()
+
+    def _minimal_base_output_path(self) -> Path:
         output_value = (self.app.batch_output_var.get() or "").strip()
-        self.app.minimal_output_path_var.set(
-            output_value or "No output folder selected"
+        output_path = Path(output_value).expanduser() if output_value else Path.cwd()
+        return output_path if output_path.is_absolute() else Path.cwd() / output_path
+
+    def _minimal_legacy_output_path(self, input_path: Path) -> Path:
+        output_dir = self._minimal_base_output_path()
+        if self.app.batch_zip_var.get():
+            return output_dir / self._minimal_zip_filename(input_path)
+        if input_path.is_file() and is_hdf5_path(input_path):
+            return output_dir / self.default_output_artifact_name(input_path)
+        return output_dir
+
+    def _minimal_zip_filename(self, input_path: Path) -> str:
+        zip_name = (
+            self.app.batch_zip_name_var.get().strip()
+            or self.default_archive_name(input_path)
         )
+        if not zip_name.lower().endswith(".zip"):
+            zip_name = f"{zip_name}.zip"
+        return zip_name
+
+    def _selected_files_summary(self, input_paths: Sequence[Path]) -> str:
+        names = ", ".join(path.name for path in input_paths[:3])
+        if len(input_paths) > 3:
+            names = f"{names}, ..."
+        return f"{len(input_paths)} HDF5 files selected: {names}"
+
+    def _selected_holo_summary(self, holo_paths: Sequence[Path]) -> str:
+        return self._first_path_with_more_summary(holo_paths)
+
+    def _selected_holo_path_list_summary(self, path: Path) -> str:
+        try:
+            input_list = read_holo_path_list(path)
+        except Exception:  # noqa: BLE001
+            return str(path)
+        return self._first_path_with_more_summary(input_list.holo_paths)
+
+    def _first_path_with_more_summary(self, paths: Sequence[Path]) -> str:
+        if not paths:
+            return ""
+        text = str(paths[0])
+        remaining_count = len(paths) - 1
+        if remaining_count:
+            text = f"{text} (+{remaining_count} more)"
+        return text
+
+    def _minimal_holo_status_text(self, fallback: str) -> str:
+        status = (self.app.holo_status_var.get() or "").strip()
+        return status or fallback
 
     def minimal_output_filename_for_run(
         self,

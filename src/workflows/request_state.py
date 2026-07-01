@@ -5,9 +5,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from input_output import prepare_run_input, prepare_run_inputs
+
 from ._postprocess_requirements import missing_required_pipeline_errors
 from .dispatch import OutputFilenameResolver, WorkflowInputError, WorkflowRunRequest
-from .inputs import prepare_run_input, prepare_run_inputs
 from .runs import ZipOutputDir
 
 InputConvention = Literal["legacy", "holo"]
@@ -81,10 +82,7 @@ def build_workflow_request(
         selected_pipeline_names=work_selection.pipeline_names,
         reusable_h5_paths=reusable_h5_paths,
         defer_when_no_reusable_paths=bool(input_plan and input_plan.is_zip)
-        or (
-            input_selection.convention == "holo"
-            and not work_selection.pipelines
-        ),
+        or (input_selection.convention == "holo" and not work_selection.pipelines),
     )
     if requirement_errors:
         raise WorkflowInputError(

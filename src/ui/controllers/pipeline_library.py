@@ -111,12 +111,18 @@ class PipelineLibraryController(LibraryController):
         for child in self.app.pipeline_library_inner.winfo_children():
             child.destroy()
         self.app.pipeline_visibility_vars = {}
-        self.app.pipeline_library_inner.columnconfigure(0, weight=1)
+        self.configure_library_columns(self.app.pipeline_library_inner)
 
         selected_header = ttk.Label(self.app.pipeline_library_inner, text="Selected")
         selected_header.grid(row=0, column=0, sticky="w", pady=(0, 6))
         status_header = ttk.Label(self.app.pipeline_library_inner, text="Status")
-        status_header.grid(row=0, column=1, sticky="w", padx=(12, 18), pady=(0, 6))
+        status_header.grid(
+            row=0,
+            column=1,
+            sticky="w",
+            padx=self._STATUS_COLUMN_PADDING,
+            pady=(0, 6),
+        )
         self.bind_mousewheel(selected_header, self.app.pipeline_library_canvas)
         self.bind_mousewheel(status_header, self.app.pipeline_library_canvas)
 
@@ -142,7 +148,13 @@ class PipelineLibraryController(LibraryController):
                 self.app.pipeline_library_inner,
                 text=self.status_text(pipeline),
             )
-            status.grid(row=idx, column=1, sticky="w", padx=(12, 18), pady=(0, 6))
+            status.grid(
+                row=idx,
+                column=1,
+                sticky="w",
+                padx=self._STATUS_COLUMN_PADDING,
+                pady=(0, 6),
+            )
             self.bind_mousewheel(status, self.app.pipeline_library_canvas)
 
             tip_text = self.descriptor_tooltip_text(pipeline)

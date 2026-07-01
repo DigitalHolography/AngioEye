@@ -59,6 +59,7 @@ class PipelineEngineTests(unittest.TestCase):
 
             self.assertEqual("sample_pipelines_result.h5", first_output.name)
             self.assertEqual("sample_1_pipelines_result.h5", second_output.name)
+            self.assertEqual(tmp_path / "outputs" / "h5", first_output.parent)
             self.assertTrue(first_output.exists())
             with h5py.File(first_output, "r") as h5:
                 self.assertIn(f"{ANGIOEYE_PROCESSING_ROOT}/demo/value", h5)
@@ -148,6 +149,30 @@ class PipelineEngineTests(unittest.TestCase):
             )
 
             self.assertTrue(output_path.exists())
+
+    def test_run_pipeline_file_preserves_relative_parent_under_h5_directory(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            input_path = tmp_path / "sample.h5"
+            with h5py.File(input_path, "w"):
+                pass
+
+            output_path = run_pipeline_file(
+                input_path,
+                [_PipelineDescriptor()],
+                tmp_path / "outputs",
+                Path("cohort") / "subject",
+            )
+
+            self.assertEqual(
+                tmp_path
+                / "outputs"
+                / "h5"
+                / "cohort"
+                / "subject"
+                / "sample_pipelines_result.h5",
+                output_path,
+            )
 
     def test_run_pipeline_file_records_detailed_timing_labels(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
