@@ -135,10 +135,10 @@ def registration_velocity_profile(dataset):
                         out[center_idx + 1 + k] = profile[peak_idx - k]
 
                 if out[0] > out[1]:
-                    out[0] = 0
+                    out[0] = 0.8 * out[1]
 
                 if out[-1] > out[-2]:
-                    out[-1] = 0
+                    out[-1] = 0.8 * out[-2]
 
                 for k in range(1, len(out) - 1):
                     if k < center_idx:
@@ -277,7 +277,7 @@ def projected_parabola_fit(V):
     for branch_index in range(V.shape[2]):
         for circle_index in range(V.shape[3]):
             profile_complex = V[0, :, branch_index, circle_index]
-            profile = np.abs(profile_complex) * 1.05
+            profile = np.abs(profile_complex) * 1.04
 
             if np.all(profile == 0):
                 continue
@@ -634,7 +634,7 @@ def evaluate_womersley_model(
     position_index,
     save_prefix=None,
 ):
-    dataset_x = metrics["dataset_x"]
+    dataset_x = metrics["dataset_x_aligned"]
     v_model = metrics["v_model"]
 
     # ==========================================================
@@ -1403,22 +1403,22 @@ class WomersleyModeling(ProcessPipeline):
         metrics["c_g"] = np.asarray(c_g)
         metrics["Eh"] = np.asarray(Eh)
 
-        # evaluate_womersley_model(
+        evaluate_womersley_model(
+            metrics,
+            branch_index=4,
+            circle_index=5,
+            position_index=8,
+            save_prefix=None,  # "segment_3_2",
+        )
+
+        # evaluate_1Dpulse_model(
         #     metrics,
         #     branch_index=3,
         #     circle_index=2,
         #     position_index=8,
-        #     save_prefix=None,  # "segment_3_2",
+        #     omega_0=omega_0,
+        #     harmonics_index=4,
+        #     save_prefix=None,  # "branch_3",
         # )
-
-        evaluate_1Dpulse_model(
-            metrics,
-            branch_index=3,
-            circle_index=2,
-            position_index=8,
-            omega_0=omega_0,
-            harmonics_index=4,
-            save_prefix=None,  # "branch_3",
-        )
 
         return ProcessResult(metrics=metrics)
