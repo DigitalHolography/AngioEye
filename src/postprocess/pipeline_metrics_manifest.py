@@ -21,6 +21,7 @@ from .core.base import (
         "Scan the generated HDF5 outputs and write a JSON manifest of pipeline "
         "groups and metric dataset paths for the batch."
     ),
+    visibility="hidden",
 )
 class PipelineMetricsManifestPostprocess(BatchPostprocess):
     def run(self, context: PostprocessContext) -> PostprocessResult:

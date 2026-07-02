@@ -95,6 +95,7 @@ def _discover_postprocesses() -> tuple[
                     else ""
                 )
             ),
+            visibility=getattr(cls, "visibility", "visible"),
         )
         if is_available:
             available.append(desc)
