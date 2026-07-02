@@ -34,6 +34,15 @@ class DragDropMixin:
             )
             return True
 
+        if (
+            len(dropped_paths) == 1
+            and dropped_paths[0].is_file()
+            and dropped_paths[0].suffix.lower() == ".txt"
+        ):
+            self.run_controller.apply_holo_inputs(dropped_paths)
+            self._log_batch(f"[INPUT] Drag and drop -> {dropped_paths[0]}")
+            return True
+
         for dropped_path in dropped_paths:
             if dropped_path.is_file() and self.run_controller.is_supported_file_input(
                 dropped_path
@@ -58,5 +67,6 @@ class DragDropMixin:
 
         services_for(self).dialogs.showwarning(
             "Unsupported drop",
-            "Drop .holo file(s), or a single .h5, .hdf5, or .zip file.",
+            "Drop .holo file(s), a .txt holo path list, "
+            "or a single .h5, .hdf5, or .zip file.",
         )

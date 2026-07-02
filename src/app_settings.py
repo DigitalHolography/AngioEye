@@ -48,6 +48,14 @@ def app_version() -> str | None:
     return None
 
 
+def app_display_name() -> str:
+    version = app_version()
+    if not version:
+        return APP_NAME
+    display_version = version if version.lower().startswith("v") else f"v{version}"
+    return f"{APP_NAME} {display_version}"
+
+
 def _settings_subdir_name() -> str:
     version = app_version()
     if not version:

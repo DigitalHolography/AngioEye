@@ -4,8 +4,9 @@
   #define AppVersion "0.1.0"
 #endif
 
+#define MyDisplayVersion "v" + AppVersion
 #define MyAppId MyAppName + "-" + AppVersion
-#define MyAppVersionedName MyAppName + " " + AppVersion
+#define MyAppVersionedName MyAppName + " " + MyDisplayVersion
 
 #ifndef PayloadDir
   #error PayloadDir must be provided on the ISCC command line.
@@ -27,7 +28,7 @@ LicenseFile={#PayloadDir}\LICENSE
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir={#OutputDir}
-OutputBaseFilename=AngioEye-setup-{#AppVersion}
+OutputBaseFilename=AngioEye-setup-{#MyDisplayVersion}
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern

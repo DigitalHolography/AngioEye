@@ -25,7 +25,7 @@ from workflows import (  # noqa: E402
     run_filesystem_workflow,
     run_holo_workflow,
 )
-from workflows._pipeline_runs import (  # noqa: E402
+from workflows._standard_pipeline_runs import (  # noqa: E402
     run_filesystem_pipeline_run,
     run_zip_pipeline_run,
 )

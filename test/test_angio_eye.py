@@ -254,7 +254,10 @@ class BatchZipCleanupTests(unittest.TestCase):
             app = SimpleNamespace(
                 input_convention_var=_Var("legacy"),
                 batch_input_var=_Var(""),
-                _apply_input_defaults=lambda path: applied_paths.append(path),
+                run_controller=SimpleNamespace(
+                    is_supported_file_input=lambda path: path.suffix == ".zip",
+                    apply_input_defaults=lambda path: applied_paths.append(path),
+                ),
                 _log_batch=logs.append,
             )
 
@@ -263,6 +266,26 @@ class BatchZipCleanupTests(unittest.TestCase):
             self.assertTrue(accepted)
             self.assertEqual(str(input_path), app.batch_input_var.get())
             self.assertEqual([input_path], applied_paths)
+            self.assertIn("Drag and drop", logs[0])
+
+    def test_handle_dropped_paths_accepts_holo_path_list(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            list_path = Path(tmp_dir) / "holo_inputs.txt"
+            list_path.write_text("sample.holo\n", encoding="utf-8")
+            applied_holo_paths: list[Path] = []
+            logs: list[str] = []
+
+            app = SimpleNamespace(
+                run_controller=SimpleNamespace(
+                    apply_holo_inputs=lambda paths: applied_holo_paths.extend(paths),
+                ),
+                _log_batch=logs.append,
+            )
+
+            accepted = ProcessApp._handle_dropped_paths(app, [list_path])
+
+            self.assertTrue(accepted)
+            self.assertEqual([list_path], applied_holo_paths)
             self.assertIn("Drag and drop", logs[0])
 
     @mock.patch("angio_eye.messagebox.showwarning")

@@ -423,7 +423,8 @@ function Write-InnoSetupScript {
     $outputDirInno = ConvertTo-InnoQuotedValue (Get-FullPath $InstallerOutputDir)
     $licensePathInno = ConvertTo-InnoQuotedValue (Get-FullPath (Join-Path $BundleDir "LICENSE"))
     $iconPathInno = ConvertTo-InnoQuotedValue (Get-FullPath (Join-Path $BundleDir "AngioEye.ico"))
-    $setupBaseNameInno = ConvertTo-InnoQuotedValue ("$AppName-setup-$AppVersion")
+    $setupBaseNameInno = ConvertTo-InnoQuotedValue ("$AppName-setup-v$AppVersion")
+    $appVersionedNameInno = ConvertTo-InnoQuotedValue ("$AppName v$AppVersion")
     $versionInfo = ConvertTo-InnoVersionInfo $AppVersion
     $versionInfoLine = ""
     if ($versionInfo) {
@@ -433,6 +434,7 @@ function Write-InnoSetupScript {
     @"
 #define MyAppName "$appNameInno"
 #define MyAppVersion "$appVersionInno"
+#define MyAppVersionedName "$appVersionedNameInno"
 #define MyAppPublisher "AngioEye"
 #define MyAppExeName "AngioEye.exe"
 #define MyBundleDir "$bundleDirInno"
@@ -476,12 +478,12 @@ Type: filesandordirs; Name: "{app}\*"
 Source: "{#MyBundleDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
-Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{group}\{#MyAppVersionedName}"; Filename: "{app}\{#MyAppExeName}"
+Name: "{group}\Uninstall {#MyAppVersionedName}"; Filename: "{uninstallexe}"
+Name: "{autodesktop}\{#MyAppVersionedName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppVersionedName}"; Flags: nowait postinstall skipifsilent
 "@ | Set-Content -LiteralPath $GeneratedInnoScript -Encoding UTF8
 }
 
@@ -526,7 +528,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "Inno Setup failed with exit code $LASTEXITCODE"
 }
 
-$installerPath = Join-Path $InstallerOutputDir "$appName-setup-$appVersion.exe"
+$installerPath = Join-Path $InstallerOutputDir "$appName-setup-v$appVersion.exe"
 if (-not (Test-Path -LiteralPath $installerPath -PathType Leaf)) {
     throw "Inno Setup did not produce the expected installer: $installerPath"
 }
