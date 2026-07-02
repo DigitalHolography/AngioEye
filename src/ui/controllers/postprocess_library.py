@@ -17,6 +17,10 @@ from .library import LibraryController
 class PostprocessLibraryController(LibraryController):
     _STATUS_MAX_CHARS = 40
 
+    @staticmethod
+    def is_hidden(postprocess: PostprocessDescriptor) -> bool:
+        return getattr(postprocess, "visibility", "visible") == "hidden"
+
     @property
     def summary_var(self):
         return self.app.postprocess_library_summary_var
@@ -35,11 +39,14 @@ class PostprocessLibraryController(LibraryController):
         rows = sorted(
             [*available, *missing], key=lambda postprocess: postprocess.name.lower()
         )
-        self.app.postprocess_registry = {p.name: p for p in available}
-        self.app.postprocess_catalog = {p.name: p for p in rows}
-        self.app.postprocess_rows = rows
-        self.sync_visibility(rows)
-        self.populate(rows)
+        visible_rows = [p for p in rows if not self.is_hidden(p)]
+        self.app.postprocess_registry = {
+            p.name: p for p in available if not self.is_hidden(p)
+        }
+        self.app.postprocess_catalog = {p.name: p for p in visible_rows}
+        self.app.postprocess_rows = visible_rows
+        self.sync_visibility(visible_rows)
+        self.populate(visible_rows)
         self.app._install_drop_targets()
 
     def sync_visibility(self, rows: list[PostprocessDescriptor]) -> None:

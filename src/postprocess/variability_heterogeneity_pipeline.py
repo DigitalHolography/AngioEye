@@ -16,7 +16,7 @@ from .core.base import (
 
 
 @registerPostprocess(
-    name="Variability and heterogeneity tables",
+    name="Variability and heterogeneity",
     description=(
         "Build group-level LaTeX and CSV tables for variability and heterogeneity "
         "metrics computed from by-segment arterial waveform shape metrics."

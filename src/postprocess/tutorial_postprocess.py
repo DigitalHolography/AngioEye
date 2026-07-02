@@ -16,6 +16,7 @@ from .core.base import (
         "Minimal tutorial showing the available PostprocessContext fields and "
         "the PostprocessResult output format."
     ),
+    visibility="hidden",
 )
 class PostprocessTutorial(BatchPostprocess):
     """

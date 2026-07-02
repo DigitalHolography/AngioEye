@@ -240,7 +240,7 @@ def main() -> None:
     _prepare_payload()
     _run_inno_setup(iscc_path, app_version)
 
-    installer_name = INSTALLER_OUTPUT_DIR / f"AngioEye-setup-{app_version}.exe"
+    installer_name = INSTALLER_OUTPUT_DIR / f"AngioEye-setup-v{app_version}.exe"
     print(f"Installer created at {installer_name}")
 
 
