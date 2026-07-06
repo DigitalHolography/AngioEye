@@ -526,10 +526,14 @@ def normalize_vessel_type(vessel_type):
 def _stem_for_source_path(path, stem=None):
     if stem is not None:
         return stem
+    path_obj = Path(path)
+    for parent in (path_obj.parent, *path_obj.parents):
+        if parent.name.endswith("_EF") and len(parent.name) > len("_EF"):
+            return parent.name.removesuffix("_EF")
     try:
         return dataset_stem_from_path(path)
     except ValueError:
-        return Path(path).stem
+        return path_obj.stem
 
 
 def velocity_signal_png_filename(*, stem, vessel_type):

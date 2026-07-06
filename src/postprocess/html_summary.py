@@ -1,10 +1,11 @@
 ﻿from __future__ import annotations
 
-from input_output.archive_io import extract_folder_from_zip, temporary_zip_from_tree
+from pathlib import Path
+
+from input_output.archive_io import extracted_zip_tree
 from input_output.output_paths import (
     H5_OUTPUT_DIRNAME,
     companion_output_dir,
-    h5_output_dir,
     html_output_dir,
 )
 
@@ -41,27 +42,50 @@ def _source_path_for_file(context: PostprocessContext, index: int, processed_fil
     return processed_file
 
 
-def _all_processed_files_under(root, processed_files):
-    if not root.is_dir():
-        return False
-    for processed_file in processed_files:
+def _zip_source_relative_path(input_h5_path) -> Path | None:
+    parts = Path(input_h5_path).parts
+    for index, part in enumerate(parts):
+        if part.lower().startswith("batch_"):
+            relative_parts = parts[index + 1 :]
+            return Path(*relative_parts) if relative_parts else None
+    return None
+
+
+def _strip_h5_path_parts(path: Path) -> Path:
+    kept_parts = [part for part in path.parts if part.lower() != H5_OUTPUT_DIRNAME]
+    return Path(*kept_parts) if kept_parts else Path(".")
+
+
+def _zip_html_relative_parent(output_dir, processed_file, source_relative_path):
+    if source_relative_path is not None:
+        return _strip_h5_path_parts(source_relative_path.parent)
+
+    output_root = Path(output_dir).expanduser().resolve()
+    output_h5_dir = output_root / H5_OUTPUT_DIRNAME
+    try:
+        relative_parent = (
+            Path(processed_file)
+            .expanduser()
+            .resolve()
+            .relative_to(output_h5_dir)
+            .parent
+        )
+    except ValueError:
         try:
-            processed_file.expanduser().resolve().relative_to(root)
+            relative_parent = (
+                Path(processed_file)
+                .expanduser()
+                .resolve()
+                .relative_to(output_root)
+                .parent
+            )
         except ValueError:
-            return False
-    return True
-
-
-def _zip_html_summary_source_root(output_dir, processed_files):
-    h5_dir = h5_output_dir(output_dir).expanduser().resolve()
-    for candidate in (h5_dir / H5_OUTPUT_DIRNAME, h5_dir):
-        if _all_processed_files_under(candidate, processed_files):
-            return candidate
-    return output_dir
+            relative_parent = Path(".")
+    return _strip_h5_path_parts(relative_parent)
 
 
 @registerPostprocess(
-    name="HTML summary", 
+    name="HTML summary",
     description=(
         "Create an HTML report for each processed HDF5 file, including a summary table of waveform metrics and their corresponding visualizations."
     ),
@@ -99,26 +123,32 @@ class WaveformMetricSummaryTablesPostprocess(BatchPostprocess):
             summary = f"Generated {len(table_paths)} tables."
             return PostprocessResult(summary=summary, generated_paths=created_paths)
 
-        with temporary_zip_from_tree(
-            _zip_html_summary_source_root(output_dir, context.processed_files),
-            source_paths=context.processed_files,
-        ) as temp_zip:
-            temp_root = temp_zip.parent
-            all_results = html_summary_dashboard.analyze_zip(str(temp_zip))
-            if not all_results:
-                raise ValueError(
-                    "No compatible pipeline metrics were found for the dashboard."
+        table_paths = []
+        with extracted_zip_tree(context.input_path) as source_root:
+            for index, processed_file in enumerate(context.processed_files):
+                source_relative_path = None
+                source_path = None
+                if index < len(context.input_h5_paths):
+                    source_relative_path = _zip_source_relative_path(
+                        context.input_h5_paths[index]
+                    )
+                    if source_relative_path is not None:
+                        source_path = source_root / source_relative_path
+                html_parent = _zip_html_relative_parent(
+                    output_dir,
+                    processed_file,
+                    source_relative_path,
                 )
-            html_summary_dashboard.save_dashboard(
-                str(temp_zip),
-                output_dir=temp_root / "html",
-            )
-
-            table_paths = extract_folder_from_zip(
-                zip_path=temp_zip,
-                member_prefix="html",
-                output_dir=output_dir,
-            )
+                html_path = (
+                    output_dir / "html" / html_parent / f"{processed_file.stem}.html"
+                )
+                table_paths.append(
+                    html_summary_dashboard.generate_metric_table_html_for_file(
+                        processed_file,
+                        html_path,
+                        source_path=source_path or processed_file,
+                    )
+                )
 
         created_paths = [*[str(path) for path in table_paths]]
         summary = f"Generated {len(table_paths)} tables."

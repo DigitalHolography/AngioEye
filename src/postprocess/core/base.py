@@ -13,6 +13,7 @@ def registerPostprocess(
     required_deps: list[str] | None = None,
     required_pipelines: list[str] | None = None,
     required_pipeline_options: list[list[str]] | None = None,
+    visibility: str = "visible",
 ):
     def decorator(target):
         requires = required_deps or []
@@ -31,6 +32,7 @@ def registerPostprocess(
             target.required_pipeline_options = pipeline_options
             target.missing_deps = missing
             target.available = len(missing) == 0
+            target.visibility = visibility
             POSTPROCESS_REGISTRY[name] = target
             return target
 
@@ -42,6 +44,7 @@ def registerPostprocess(
             missing_deps=missing,
             required_pipelines=pipelines,
             required_pipeline_options=pipeline_options,
+            visibility=visibility,
         )
         POSTPROCESS_REGISTRY[name] = postprocess_cls
         return target
@@ -100,6 +103,7 @@ def _build_function_postprocess(
     missing_deps: list[str],
     required_pipelines: list[str],
     required_pipeline_options: list[list[str]],
+    visibility: str,
 ) -> type["FunctionPostprocess"]:
     class RegisteredFunctionPostprocess(FunctionPostprocess):
         pass
@@ -116,6 +120,7 @@ def _build_function_postprocess(
     RegisteredFunctionPostprocess.required_pipelines = required_pipelines
     RegisteredFunctionPostprocess.required_pipeline_options = required_pipeline_options
     RegisteredFunctionPostprocess.missing_pipelines = []
+    RegisteredFunctionPostprocess.visibility = visibility
     return RegisteredFunctionPostprocess
 
 
@@ -149,6 +154,7 @@ class PostprocessDescriptor:
     missing_pipelines: list[str] = field(default_factory=list)
     postprocess_cls: type["BatchPostprocess"] | None = None
     error_msg: str = ""
+    visibility: str = "visible"
 
     def instantiate(self) -> "BatchPostprocess":
         if not self.available or self.postprocess_cls is None:
@@ -159,6 +165,7 @@ class PostprocessDescriptor:
                 required_pipelines=self.required_pipelines,
                 required_pipeline_options=self.required_pipeline_options,
                 missing_pipelines=self.missing_pipelines,
+                visibility=self.visibility,
             )
         return self.postprocess_cls()
 
@@ -172,6 +179,7 @@ class BatchPostprocess:
     required_pipelines: list[str]
     required_pipeline_options: list[list[str]]
     missing_pipelines: list[str]
+    visibility: str = "visible"
 
     def __init__(self) -> None:
         if not getattr(self, "name", None):
@@ -200,6 +208,7 @@ class MissingPostprocess(BatchPostprocess):
         required_pipelines: list[str],
         required_pipeline_options: list[list[str]],
         missing_pipelines: list[str],
+        visibility: str = "visible",
     ) -> None:
         self.name = name
         self.description = description or "Postprocess unavailable."
@@ -208,6 +217,7 @@ class MissingPostprocess(BatchPostprocess):
         self.required_pipelines = required_pipelines
         self.required_pipeline_options = required_pipeline_options
         self.missing_pipelines = missing_pipelines
+        self.visibility = visibility
 
     def run(self, context: PostprocessContext) -> PostprocessResult:
         parts: list[str] = []
