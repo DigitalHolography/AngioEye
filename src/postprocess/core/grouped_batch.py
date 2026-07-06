@@ -20,16 +20,37 @@ class GroupedH5File:
 def extract_group_name(root: str | Path, batch_root: str | Path) -> str:
     root_path = Path(root)
     batch_root_path = Path(batch_root)
+
     try:
         relative = root_path.relative_to(batch_root_path)
     except ValueError:
         return root_path.name
-    return "all" if relative == Path(".") else relative.parts[0]
+
+    if relative == Path("."):
+        return "all"
+
+    parts = relative.parts
+
+    if parts[0].lower() == "h5":
+        if len(parts) == 1:
+            return "all"
+        return parts[1]
+
+    return parts[0]
 
 
 def _extract_member_group_name(member: ZipH5Member) -> str:
     parts = member.relative_path.parts
-    return "all" if len(parts) == 1 else parts[0]
+
+    if len(parts) == 1:
+        return "all"
+
+    if parts[0].lower() == "h5":
+        if len(parts) == 2:
+            return "all"
+        return parts[1]
+
+    return parts[0]
 
 
 def _grouped_record_for_member(member: ZipH5Member, file_path: Path) -> GroupedH5File:
