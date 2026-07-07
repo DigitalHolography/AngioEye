@@ -16,8 +16,9 @@
     "Pipeline Metrics Manifest": false,
     "Postprocess Tutorial": false,
     "QC_Windkessel_RC": false,
-    "Variability and heterogeneity tables": false,
-    "groups comparison dashboard": false,
+    "Variability and heterogeneity": false,
+    "Group comparison (HTML) - Waveform Shape Metrics": false,
+    "Group comparison (Dashboard) - Waveform Shape Metrics": false,
     "HTML summary": true
   },
   "trim_h5source": true,
