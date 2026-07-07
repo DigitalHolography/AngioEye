@@ -18,7 +18,7 @@ This project uses a `pyproject.toml` to describe all requirements needed. To sta
 python -m venv .venv
 
 # To enter the venv
-# If you are using Windows PowerShell, you might need to activate the "Exceution" policy
+# If you are using Windows PowerShell, you might need to activate the "Execution" policy
 ./.venv/Scripts/activate
 ```
 
@@ -46,12 +46,12 @@ pip install -e ".[postprocess]"
 # Install all dependencies including dev tools (ruff, pre-commit, pyinstaller)
 pip install -e ".[dev,pipelines,postprocess]"
 
-# Initialize pre-commit hooks (optionnal)
+# Initialize pre-commit hooks (optional)
 pre-commit install
 ```
 
 > [!NOTE]
-> The pre-commit is really usefull to run automatic checks before pushing code, reducing chances of ugly code being pushed.
+> The pre-commit is really useful to run automatic checks before pushing code, reducing chances of ugly code being pushed.
 >
 > If a pre-commit hook fails, it will try to fix all needed files, **so you will need to add them again before recreating the commit**.
 
