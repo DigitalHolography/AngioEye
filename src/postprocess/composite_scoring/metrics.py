@@ -57,78 +57,84 @@ M_RESISTIVITY_INDEX = "resistivity_index"
 M_PULSATILITY_INDEX = "pulsatility_index"
 M_CREST_FACTOR = "crest_factor"
 
-# Metrics Threshold Directions
-GREATER = 1
-LESS = -1
+# Event timings and slope kinetics
+M_PEAK_TIMING = "peak_timing"
+M_TROUGH_TIMING = "trough_timing"
+M_UPSTROKE_STEEPNESS = "upstroke_steepness"
+M_DOWNSTROKE_STEEPNESS = "downstroke_steepness"
+M_UPSTROKE_TIMING = "upstroke_timing"
+M_DOWNSTROKE_TIMING = "downstroke_timing"
+M_SLOPE_ENERGY = "slope_energy"
 
-# Metrics Settings
-METRICS: dict[str, Metric] = {
-    M_STROKE_FRACTION: Metric(
-        name="SF_VTI",
-        threshold=0.48,
-        direction=GREATER,
-        control_std={"artery": 0.02130616468479075, "vein": 0.012238142379889327},
-    ),
-    M_MED_DISPLACEMENT_TIMING: Metric(
-        name="t50_over_T",
-        threshold=0.36,
-        direction=LESS,
-        control_std={"artery": 0.02170372191846459, "vein": 0.011114571157947383},
-    ),
-    M_LOW_FREQ_SPECTRAL_FRACTION: Metric(
-        name="E_low_over_E_total",
-        threshold=0.76,
-        direction=GREATER,
-        control_std={"artery": 0.0669936550252201, "vein": 0.06952508377563454},
-        numerator_name="E_low",
-        denominator_name="E_total",
-    ),
-    M_LATE_CYCLE_MEAN_FRACTION: Metric(
-        name="v_end_over_vbar",
-        threshold=0.59,
-        direction=LESS,
-        control_std={"artery": 0.06584969658865907, "vein": 0.0382835422777238},
-    ),
-    M_PARTICIPATION_RATIO_EFF_SUPP: Metric(
-        name="N_eff_over_T",
-        threshold=0.90,
-        direction=LESS,
-        control_std={"artery": 0.02584899777470274, "vein": 0.0055469432407653264},
-    ),
-    M_RESISTIVITY_INDEX: Metric(
-        name="RI",
-        threshold=0.70,
-        direction=GREATER,
-        control_std={"artery": 0.08357600130504828, "vein": 0.063285564839462},
-    ),
-    M_PULSATILITY_INDEX: Metric(
-        name="PI",
-        threshold=1.30,
-        direction=GREATER,
-        control_std={"artery": 0.2003058879383459, "vein": 0.07992210522433744},
-    ),
-    M_NEAR_PEAK_CREST_WIDTH: Metric(
-        name="W50_over_T",
-        threshold=0.60,
-        direction=LESS,
-        control_std={"artery": 0.13043404441873044, "vein": 0.003223005055989731},
-    ),
-}
+# Late-cycle persistence / temporal support
+M_LATE_CYCLE_MEAN_FRACTION = "late_cycle_mean_fraction"
+M_EFFECTIVE_DURATION = "effective_duration"
+M_ENTROPIC_DURATION = "entropic_duration"
 
-# Separation of Metrics into Domains, with weights
-DOMAINS: dict[str, Domain] = {
-    "timing": Domain(
-        metrics=(M_STROKE_FRACTION, M_MED_DISPLACEMENT_TIMING),
-        weight=1,
-    ),
-    "spectral": Domain(metrics=(M_LOW_FREQ_SPECTRAL_FRACTION,), weight=1.5),
-    "persistence": Domain(
-        metrics=(
-            M_LATE_CYCLE_MEAN_FRACTION,
-            M_PARTICIPATION_RATIO_EFF_SUPP,
-            M_NEAR_PEAK_CREST_WIDTH,
-        ),
-        weight=1,
+# Spectral and representation-fidelity descriptors
+M_LOW_FREQ_SPECTRAL_RATIO = "low_freq_spectral_ratio"
+M_RECONSTRUCTION_FIDELITY = "reconstruction_fidelity"
+
+
+METRIC_PANEL: dict[str, Metric] = {
+    # VTI-weighted temporal moments
+    M_CENTROID_TIMING: Metric(name="mu_t_over_T"),
+    M_TEMPORAL_SPREAD: Metric(name="sigma_t_over_T"),
+    M_TEMPORAL_SKEWNESS: Metric(name="gamma_t"),
+
+    # Displacement timing quantiles tq/T
+    M_T10_TIMING: Metric(name="t10_over_T"),
+    M_T25_TIMING: Metric(name="t25_over_T"),
+    M_T50_TIMING: Metric(name="t50_over_T"),
+    M_T75_TIMING: Metric(name="t75_over_T"),
+    M_T90_TIMING: Metric(name="t90_over_T"),
+
+    # Time-quantile geometry
+    M_QT_WIDTH: Metric(name="Qt_width"),
+    M_QT_SKEW: Metric(name="Qt_skew"),
+
+    # Cumulative-distance geometry
+    M_DELTA_DTI: Metric(name="Delta_DTI"),
+    M_D10_FRACTION: Metric(name="d10_over_D"),
+    M_D25_FRACTION: Metric(name="d25_over_D"),
+    M_D50_FRACTION: Metric(name="d50_over_D"),
+    M_D75_FRACTION: Metric(name="d75_over_D"),
+    M_D90_FRACTION: Metric(name="d90_over_D"),
+    M_QD_WIDTH: Metric(name="Qd_width"),
+    M_QD_SKEW: Metric(name="Qd_skew"),
+    M_EARLY_LATE_BALANCE: Metric(name="R_VTI"),
+    M_STROKE_FRACTION: Metric(name="SF_VTI"),
+
+    # Crest morphology
+    M_NEAR_PEAK_CREST_WIDTH: Metric(name="W50_over_T"),
+    M_SUMMIT_CREST_WIDTH: Metric(name="W80_over_T"),
+
+    # Excursion and pulsatility
+    M_RESISTIVITY_INDEX: Metric(name="RI"),
+    M_PULSATILITY_INDEX: Metric(name="PI"),
+    M_CREST_FACTOR: Metric(name="CF"),
+
+    # Event timings and slope kinetics
+    M_PEAK_TIMING: Metric(name="tmax_over_T"),
+    M_TROUGH_TIMING: Metric(name="tmin_over_T"),
+    M_UPSTROKE_STEEPNESS: Metric(name="Srise"),
+    M_DOWNSTROKE_STEEPNESS: Metric(name="Sfall"),
+    M_UPSTROKE_TIMING: Metric(name="trise_over_T"),
+    M_DOWNSTROKE_TIMING: Metric(name="tfall_over_T"),
+    M_SLOPE_ENERGY: Metric(name="Eslope"),
+
+    # Late-cycle persistence / temporal support
+    M_LATE_CYCLE_MEAN_FRACTION: Metric(name="v_end_over_vbar"),
+    M_EFFECTIVE_DURATION: Metric(name="N_eff_over_T"),
+    M_ENTROPIC_DURATION: Metric(name="N_t_over_T"),
+
+    # Spectral and representation-fidelity descriptors
+    # The paper defines ELF/EHF. If your pipeline stores E_low/E_high instead,
+    # keep numerator_name/denominator_name but adapt names to the HDF5 datasets.
+    M_LOW_FREQ_SPECTRAL_RATIO: Metric(
+        name="E_LF_over_E_HF",
+        numerator_name="E_LF",
+        denominator_name="E_HF",
     ),
     M_RECONSTRUCTION_FIDELITY: Metric(name="eta_h"),
 }

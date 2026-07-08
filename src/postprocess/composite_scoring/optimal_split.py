@@ -25,7 +25,6 @@ CONTROL_NAME_HINTS = (
     "sain",
     "temoin",
     "témoin",
-    "after",
 )
 
 

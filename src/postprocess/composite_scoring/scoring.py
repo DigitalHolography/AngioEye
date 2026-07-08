@@ -122,9 +122,9 @@ def _finite_scalar(value: Any) -> float | None:
 def _finite_values(value: Any) -> np.ndarray:
     values = np.asarray(value, dtype=float).ravel()
     return values[np.isfinite(values)]
-MAX_Z_SCORE = 5.0
 
-def _severity(value: Any, metric: Metric, vessel_type: str) -> float:
+
+def _metric_z(value: Any, metric: Metric, vessel_type: str) -> float:
     values = _finite_values(value)
     if values.size == 0:
         return 0.0
@@ -140,8 +140,6 @@ def _severity(value: Any, metric: Metric, vessel_type: str) -> float:
 
     deviation = metric.direction * (values - metric.threshold)
     z_values = np.maximum(0.0, deviation / sigma0)
-    normalized = np.minimum(normalized, MAX_Z_SCORE)
-
     return float(np.nanmax(z_values))
 
 
@@ -173,25 +171,7 @@ def _read_metric_or_ratio(
             np.nan,
         )
 
-def _domain_has_abnormality(
-    values: dict[tuple[str, str], Any],
-    vessel_type: str,
-    domain_metrics: tuple[str, ...],
-) -> bool:
-    abnormal_count = sum(
-        int(
-            _has_abnormal_value(
-                values[(vessel_type, metric_key)],
-                METRICS[metric_key],
-            )
-        )
-        for metric_key in domain_metrics
-    )
 
-    if len(domain_metrics) >= 3:
-        return abnormal_count >= 2
-
-    return abnormal_count >= 1
 def _build_scores_tree(
     file_path: Path,
     *,
@@ -241,33 +221,13 @@ def _build_scores_tree(
                 if missing_input:
                     continue
 
-            for vessel_type in VESSEL_TYPES:
-                rwas_score = 0.0
-                rwas4_score = 0
-
-                for domain in DOMAINS.values():
-                    domain_severity = max(
-                        _severity(
-                            values[(vessel_type, metric_key)],
-                            METRICS[metric_key],
-                            vessel_type,
-                        )
-                        for metric_key in domain.metrics
-                    )
-
-                    rwas_score += domain.weight * domain_severity
-
-                    domain_has_abnormality = _domain_has_abnormality(
-                        values,
-                        vessel_type,
-                        domain.metrics,
-                    )
-
-                    rwas4_score += int(domain_has_abnormality)
+                z_array = np.asarray(z_scores, dtype=float)
+                was = 10.0 / nm * float(np.sum(z_array))
+                was_c = 10.0 / nm * float(np.sum(np.minimum(1.0, z_array)))
 
                 base = f"{vessel_type}/global/{representation}"
-                metrics[f"{base}/RWAS"] = np.asarray(rwas_score, dtype=float)
-                metrics[f"{base}/RWAS4"] = np.asarray(rwas4_score, dtype=int)
+                metrics[f"{base}/WAS"] = np.asarray(was, dtype=float)
+                metrics[f"{base}/WAS_c"] = np.asarray(was_c, dtype=float)
 
         return MetricsTree(
             name=POSTPROCESS_GROUP,
