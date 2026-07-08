@@ -25,7 +25,7 @@ LESS = -1
 METRICS: dict[str, Metric] = {
     M_STROKE_FRACTION: Metric(
         name="SF_VTI",
-        threshold=0.5,
+        threshold=0.48,
         direction=GREATER,
         control_std={"artery": 0.02130616468479075, "vein": 0.012238142379889327},
     ),
@@ -57,7 +57,7 @@ METRICS: dict[str, Metric] = {
     ),
     M_RESISTIVITY_INDEX: Metric(
         name="RI",
-        threshold=0.75,
+        threshold=0.70,
         direction=GREATER,
         control_std={"artery": 0.08357600130504828, "vein": 0.063285564839462},
     ),

@@ -60,6 +60,7 @@ def _finite_scalar(value: Any) -> float | None:
 def _finite_values(value: Any) -> np.ndarray:
     values = np.asarray(value, dtype=float).ravel()
     return values[np.isfinite(values)]
+MAX_Z_SCORE = 5.0
 
 def _severity(value: Any, metric: Metric, vessel_type: str) -> float:
     values = _finite_values(value)
@@ -68,6 +69,8 @@ def _severity(value: Any, metric: Metric, vessel_type: str) -> float:
 
     deviation = metric.direction * (values - metric.threshold)
     normalized = np.maximum(0.0, deviation / metric.control_std[vessel_type])
+    normalized = np.minimum(normalized, MAX_Z_SCORE)
+
     return float(np.nanmax(normalized))
 
 def _has_abnormal_value(value: Any, metric: Metric) -> bool:
@@ -77,7 +80,25 @@ def _has_abnormal_value(value: Any, metric: Metric) -> bool:
     if metric.direction == GREATER:
         return bool(np.any(values >= metric.threshold))
     return bool(np.any(values <= metric.threshold))
+def _domain_has_abnormality(
+    values: dict[tuple[str, str], Any],
+    vessel_type: str,
+    domain_metrics: tuple[str, ...],
+) -> bool:
+    abnormal_count = sum(
+        int(
+            _has_abnormal_value(
+                values[(vessel_type, metric_key)],
+                METRICS[metric_key],
+            )
+        )
+        for metric_key in domain_metrics
+    )
 
+    if len(domain_metrics) >= 3:
+        return abnormal_count >= 2
+
+    return abnormal_count >= 1
 def _build_scores_tree(file_path: Path) -> MetricsTree:
     with h5py.File(file_path, "r") as h5:
         source_group = find_pipeline_group(h5, "waveform_shape_metrics")
@@ -132,11 +153,11 @@ def _build_scores_tree(file_path: Path) -> MetricsTree:
             if missing_input:
                 continue
 
-            weighted_scores = {"artery": 0.0, "vein": 0.0}
-            rwas4_score = 0
-            for domain in DOMAINS.values():
-                domain_has_abnormality = False
-                for vessel_type in VESSEL_TYPES:
+            for vessel_type in VESSEL_TYPES:
+                rwas_score = 0.0
+                rwas4_score = 0
+
+                for domain in DOMAINS.values():
                     domain_severity = max(
                         _severity(
                             values[(vessel_type, metric_key)],
@@ -145,21 +166,18 @@ def _build_scores_tree(file_path: Path) -> MetricsTree:
                         )
                         for metric_key in domain.metrics
                     )
-                    weighted_scores[vessel_type] += domain.weight * domain_severity
-                    domain_has_abnormality = domain_has_abnormality or any(
-                        _has_abnormal_value(
-                            values[(vessel_type, metric_key)],
-                            METRICS[metric_key],
-                        )
-                        for metric_key in domain.metrics
+
+                    rwas_score += domain.weight * domain_severity
+
+                    domain_has_abnormality = _domain_has_abnormality(
+                        values,
+                        vessel_type,
+                        domain.metrics,
                     )
-                rwas4_score += int(domain_has_abnormality)
 
-            rwas_score = max(weighted_scores.values())
+                    rwas4_score += int(domain_has_abnormality)
 
-            for vessel_type in VESSEL_TYPES:
                 base = f"{vessel_type}/global/{representation}"
-
                 metrics[f"{base}/RWAS"] = np.asarray(rwas_score, dtype=float)
                 metrics[f"{base}/RWAS4"] = np.asarray(rwas4_score, dtype=int)
 
