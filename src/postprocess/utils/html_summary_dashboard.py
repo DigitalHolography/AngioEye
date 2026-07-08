@@ -2,6 +2,7 @@
 import tempfile
 import zipfile
 from collections import defaultdict
+from pathlib import Path
 import shutil
 import h5py
 import matplotlib.pyplot as plt
@@ -22,10 +23,16 @@ from input_output.archive_io import (
     replace_folder_in_zip,
     reset_output_dir,
 )
+from input_output.output_paths import (
+    PNG_OUTPUT_DIRNAME,
+    dataset_stem_from_path,
+    find_companion_file,
+)
 
 WAVEFORM_SHAPE_METRICS_PIPELINE = "waveform_shape_metrics"
 VALID_METRIC_FOLDERS = ["raw", "bandlimited"]
 VALID_VESSELS = ["artery", "vein"]
+VALID_VESSEL_TYPES = ("artery", "vein")
 SELECTED_METRICS = {
     "mu_t_over_T",
     "RI",
@@ -354,6 +361,15 @@ def dataframe_to_html_table(
         font-weight: bold;
         cursor: pointer;
     }
+
+    .vessel-image-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-rows: repeat(2, auto);
+        gap: 20px;
+        margin-bottom: 30px;
+        align-items: start;
+    }
     </style>
 
     <script>
@@ -376,67 +392,27 @@ def dataframe_to_html_table(
     """)
 
     html_parts.append("""
-    <div style="
-        display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        grid-template-rows: repeat(2, auto);
-        gap: 20px;
-        margin-bottom: 30px;
-        align-items: start;
-    ">
+    <div class="vessel-image-grid">
     """)
 
-    if M_0_path is not None:
+    if mask_artery_path is not None:
         html_parts.append(f"""
         <div>
-            <h2>\\(M_0\\)</h2>
+            <h2>Artery Segmentation</h2>
             <img
-                src="{M_0_path}"
+                src="{mask_artery_path}"
                 class="image-thumbnail"
                 onclick="openImageModal(this.src)"
             >
         </div>
         """)
-
-    if mask_artery_path is not None:
-        html_parts.append(f"""
-        <div>
-            <h2>Mask Artery</h2>
-            <img
-                src="{mask_artery_path}"
-                class="image-thumbnail"
-                onclick="openImageModal(this.src)"
-            >        </div>
-        """)
-
-    if artery_velocity_signal_path is not None:
-            html_parts.append(f"""
-            <div>
-                <h2>Artery Velocity Signal</h2>
-            <img
-                src="{artery_velocity_signal_path}"
-                class="image-thumbnail"
-                onclick="openImageModal(this.src)"
-            >
-           </div>
-            """)
-
-    if f_AVG_mean_path is not None:
-            html_parts.append(f"""
-            <div>
-                <h2>f AVG mean</h2>
-            <img
-                src="{f_AVG_mean_path}"
-                class="image-thumbnail"
-                onclick="openImageModal(this.src)"
-            >                              
-            </div>
-            """)
+    else:
+        html_parts.append("<div></div>")
 
     if mask_vein_path is not None:
         html_parts.append(f"""
         <div>
-            <h2>Mask Vein</h2>
+            <h2>Vein Segmentation</h2>
             <img
                 src="{mask_vein_path}"
                 class="image-thumbnail"
@@ -444,6 +420,22 @@ def dataframe_to_html_table(
             >
         </div>
         """)
+    else:
+        html_parts.append("<div></div>")
+
+    if artery_velocity_signal_path is not None:
+        html_parts.append(f"""
+        <div>
+            <h2>Artery Velocity Signal</h2>
+            <img
+                src="{artery_velocity_signal_path}"
+                class="image-thumbnail"
+                onclick="openImageModal(this.src)"
+            >
+        </div>
+        """)
+    else:
+        html_parts.append("<div></div>")
 
     if vein_velocity_signal_path is not None:
         html_parts.append(f"""
@@ -456,6 +448,8 @@ def dataframe_to_html_table(
             >
         </div>
         """)
+    else:
+        html_parts.append("<div></div>")
 
     html_parts.append("</div>")
 
@@ -518,7 +512,237 @@ def image_file_to_base64(image_path):
         encoded = base64.b64encode(f.read()).decode("utf-8")
     return f"data:image/png;base64,{encoded}"
 
-def generate_metric_tables_html(zip_path, output_dir="html_metric_tables"):
+
+def normalize_vessel_type(vessel_type):
+    vessel = vessel_type.strip().lower()
+    if vessel not in VALID_VESSEL_TYPES:
+        raise ValueError(
+            f"Unknown vessel type: {vessel_type!r}. "
+            f"Expected one of {', '.join(VALID_VESSEL_TYPES)}."
+        )
+    return vessel
+
+
+def _stem_for_source_path(path, stem=None):
+    if stem is not None:
+        return stem
+    path_obj = Path(path)
+    for parent in (path_obj.parent, *path_obj.parents):
+        if parent.name.endswith("_EF") and len(parent.name) > len("_EF"):
+            return parent.name.removesuffix("_EF")
+    try:
+        return dataset_stem_from_path(path)
+    except ValueError:
+        return path_obj.stem
+
+
+def velocity_signal_png_filename(*, stem, vessel_type):
+    vessel = normalize_vessel_type(vessel_type)
+    return f"{stem}_RI_v_{vessel}.png"
+
+
+def segmentation_map_png_filename(*, stem, vessel_type):
+    vessel = normalize_vessel_type(vessel_type)
+    return f"{stem}_{vessel}_seg_map_bkg.png"
+
+
+def find_velocity_signal_png(path, *, vessel_type, stem=None):
+    filename = velocity_signal_png_filename(
+        stem=_stem_for_source_path(path, stem),
+        vessel_type=vessel_type,
+    )
+    return find_companion_file(
+        path,
+        app_suffix="EF",
+        query_type=PNG_OUTPUT_DIRNAME,
+        filename=filename,
+    )
+
+
+def find_segmentation_map_png(path, *, vessel_type, stem=None):
+    filename = segmentation_map_png_filename(
+        stem=_stem_for_source_path(path, stem),
+        vessel_type=vessel_type,
+    )
+    return find_companion_file(
+        path,
+        app_suffix="EF",
+        query_type=PNG_OUTPUT_DIRNAME,
+        filename=filename,
+    )
+
+
+def _velocity_signal_image_to_base64(source_path, *, vessel_type):
+    if source_path is None:
+        return None
+    try:
+        image_path = find_velocity_signal_png(
+            source_path,
+            vessel_type=vessel_type,
+        )
+    except ValueError:
+        return None
+    if image_path is None:
+        return None
+    return image_file_to_base64(image_path)
+
+
+def _segmentation_map_image_to_base64(source_path, *, vessel_type):
+    if source_path is None:
+        return None
+    try:
+        image_path = find_segmentation_map_png(
+            source_path,
+            vessel_type=vessel_type,
+        )
+    except ValueError:
+        return None
+    if image_path is None:
+        return None
+    return image_file_to_base64(image_path)
+
+
+def _array_image_to_base64(data, image_dir, filename, *, cmap):
+    os.makedirs(image_dir, exist_ok=True)
+    image_path = os.path.join(image_dir, filename)
+    fig, ax = plt.subplots(figsize=(4, 4))
+    ax.imshow(data.T, cmap=cmap)
+    ax.axis("off")
+    fig.savefig(image_path, bbox_inches="tight")
+    plt.close(fig)
+    return image_file_to_base64(image_path)
+
+
+def _signal_image_to_base64(data, image_dir, filename, *, color, title):
+    os.makedirs(image_dir, exist_ok=True)
+    image_path = os.path.join(image_dir, filename)
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.plot(data, linewidth=2, color=color)
+    ax.set_title(title)
+    ax.set_xlabel("Sample")
+    ax.set_ylabel("Velocity")
+    ax.grid(True)
+    fig.savefig(image_path, bbox_inches="tight")
+    plt.close(fig)
+    return image_file_to_base64(image_path)
+
+
+def _build_single_file_html(filepath, *, image_dir, source_path=None):
+    filepath = Path(filepath)
+    extracted = extract_metrics(filepath)
+    if not extracted:
+        raise ValueError("No compatible pipeline metrics were found for the dashboard.")
+
+    merged_metrics = defaultdict(dict)
+    for vessel in extracted.get("bandlimited", {}):
+        for metric_name, values in extracted["bandlimited"][vessel].items():
+            merged_metrics[vessel][metric_name] = values
+
+    df = build_metrics_table_for_file(merged_metrics)
+    base_name = filepath.stem
+
+    M_0_rel_path = None
+    mask_rel_path_vein = _segmentation_map_image_to_base64(
+        source_path,
+        vessel_type="vein",
+    )
+    mask_rel_path_artery = _segmentation_map_image_to_base64(
+        source_path,
+        vessel_type="artery",
+    )
+    f_AVG_mean_rel_path = None
+    artery_velocity_signal_path = _velocity_signal_image_to_base64(
+        source_path,
+        vessel_type="artery",
+    )
+    vein_velocity_signal_path = _velocity_signal_image_to_base64(
+        source_path,
+        vessel_type="vein",
+    )
+
+    with h5py.File(filepath, "r") as f:
+        if M_0_rel_path is None and "/Maps/M0_ff_img/value" in f:
+            M_0_rel_path = _array_image_to_base64(
+                np.array(f["/Maps/M0_ff_img/value"]),
+                image_dir,
+                f"{base_name}_M_0.png",
+                cmap="viridis",
+            )
+
+        if mask_rel_path_vein is None and "/Vein/Segmentation/Mask/value" in f:
+            mask_rel_path_vein = _array_image_to_base64(
+                np.array(f["/Vein/Segmentation/Mask/value"]),
+                image_dir,
+                f"{base_name}_vein_mask.png",
+                cmap="gray",
+            )
+
+        if mask_rel_path_artery is None and "/Artery/Segmentation/Mask/value" in f:
+            mask_rel_path_artery = _array_image_to_base64(
+                np.array(f["/Artery/Segmentation/Mask/value"]),
+                image_dir,
+                f"{base_name}_artery_mask.png",
+                cmap="gray",
+            )
+
+        if f_AVG_mean_rel_path is None and "/Maps/f_AVG_mean/value" in f:
+            f_AVG_mean_rel_path = _array_image_to_base64(
+                np.array(f["/Maps/f_AVG_mean/value"]),
+                image_dir,
+                f"{base_name}_f_AVG_mean.png",
+                cmap="viridis",
+            )
+
+        if (
+            artery_velocity_signal_path is None
+            and "/Artery/Velocity/VelocitySignal/value" in f
+        ):
+            artery_velocity_signal_path = _signal_image_to_base64(
+                np.array(f["/Artery/Velocity/VelocitySignal/value"]),
+                image_dir,
+                f"{base_name}_artery_velocity_signal.png",
+                color="#EC5241",
+                title="Artery Velocity Signal",
+            )
+
+        if (
+            vein_velocity_signal_path is None
+            and "/Vein/Velocity/VelocitySignal/value" in f
+        ):
+            vein_velocity_signal_path = _signal_image_to_base64(
+                np.array(f["/Vein/Velocity/VelocitySignal/value"]),
+                image_dir,
+                f"{base_name}_vein_velocity_signal.png",
+                color="#414CEC",
+                title="Vein Velocity Signal",
+            )
+
+    return dataframe_to_html_table(
+        df,
+        title=f"Metrics for {filepath.name}",
+        M_0_path=M_0_rel_path,
+        mask_vein_path=mask_rel_path_vein,
+        mask_artery_path=mask_rel_path_artery,
+        f_AVG_mean_path=f_AVG_mean_rel_path,
+        artery_velocity_signal_path=artery_velocity_signal_path,
+        vein_velocity_signal_path=vein_velocity_signal_path,
+    )
+
+
+def generate_metric_table_html_for_file(filepath, html_path, *, source_path=None):
+    html_path = Path(html_path)
+    html_path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory() as image_dir:
+        html_content = _build_single_file_html(
+            filepath,
+            image_dir=image_dir,
+            source_path=source_path or filepath,
+        )
+    html_path.write_text(html_content, encoding="utf-8")
+    return html_path
+
+
+def generate_metric_tables_html(zip_path, output_dir="html"):
     reset_output_dir(output_dir)
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -705,7 +929,7 @@ def save_dashboard(
     zip_path,
     export_png_dir="export_png",
     export_eps_dir="export_eps",
-    output_dir="html_metric_tables",
+    output_dir="html",
 ):
     del export_png_dir, export_eps_dir
     generate_metric_tables_html(
@@ -716,7 +940,7 @@ def save_dashboard(
     replace_folder_in_zip(
         zip_path,
         output_dir,
-        arc_folder="html_metric_tables",
+        arc_folder="html",
     )
 
     if os.path.isdir(output_dir):

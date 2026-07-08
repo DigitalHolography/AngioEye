@@ -1,5 +1,15 @@
 import tkinter as tk
 
+
+def ellipsize_text(text: str, max_chars: int) -> str:
+    """Shorten text to a fixed character budget, including the ellipsis."""
+    if max_chars < 4:
+        raise ValueError("max_chars must be at least 4")
+    if len(text) <= max_chars:
+        return text
+    return f"{text[: max_chars - 3].rstrip()}..."
+
+
 class _Tooltip:
     """Lightweight tooltip that shows on hover."""
 

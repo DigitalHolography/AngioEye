@@ -15,15 +15,15 @@ from .core.base import (
 
 
 @registerPostprocess(
-    name="groups comparison dashboard",
+    name="Group comparison (HTML) - Waveform Shape Metrics",
     description=(
-        "Build PNG metric exports from arterial "
+        "Build the cohort HTML dashboard and PNG metric exports from arterial "
         "waveform shape metrics."
     ),
     required_deps=["matplotlib>=3.8", "pandas>=2.1", "plotly>=5.18"],
     required_pipelines=["waveform_shape_metrics"],
 )
-class GraphicsDashboardPostprocess(BatchPostprocess):
+class GroupsComparisonHTMLPostprocess(BatchPostprocess):
     def run(self, context: PostprocessContext) -> PostprocessResult:
         if not context.processed_files:
             raise ValueError(
@@ -34,42 +34,35 @@ class GraphicsDashboardPostprocess(BatchPostprocess):
         if not output_dir.exists() or not output_dir.is_dir():
             raise FileNotFoundError(f"Output folder does not exist: {output_dir}")
 
-        from .utils import groups_comparison_dashboard
+        from .utils import groups_comparison_html
 
         with temporary_zip_from_tree(
             output_dir,
             source_paths=context.processed_files,
         ) as temp_zip:
-            all_results, single_group = groups_comparison_dashboard.analyze_zip(
-                str(temp_zip)
-            )
+            temp_root = temp_zip.parent
+            all_results = groups_comparison_html.analyze_zip(str(temp_zip))
             if not all_results:
                 raise ValueError(
                     "No compatible pipeline metrics were found for the dashboard."
                 )
-            groups_comparison_dashboard.save_dashboard(
-                all_results,
+            groups_comparison_html.save_dashboard(
                 str(temp_zip),
-                single_group,
+                export_png_dir=temp_root / "export_png_html",
             )
 
             png_paths = extract_folder_from_zip(
                 zip_path=temp_zip,
-                member_prefix="export_png/",
+                member_prefix="export_png_html/",
                 output_dir=output_dir,
             )
-            eps_paths = extract_folder_from_zip(
+            dashboard_path = extract_file_from_zip(
                 zip_path=temp_zip,
-                member_prefix="export_eps/",
+                member_name="waveform_metrics_dashboard.html",
                 output_dir=output_dir,
             )
 
-
-        created_paths = [
-            
-            *[str(path) for path in png_paths],
-            *[str(path) for path in eps_paths],
-        ]
-        summary = f" Generated dashboard {len(png_paths)} PNG illustration(s)."
+        created_paths = [str(dashboard_path), *[str(path) for path in png_paths]]
+        summary = f"Generated dashboard and {len(png_paths)} PNG illustration(s)."
         return PostprocessResult(summary=summary, generated_paths=created_paths)
 

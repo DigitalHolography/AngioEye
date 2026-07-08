@@ -2,6 +2,7 @@ from pathlib import Path
 
 import numpy as np
 
+from input_output import png_output_dir
 from input_output.hdf5_schema import safe_h5_key
 from postprocess.core.grouped_batch import build_group_order
 
@@ -21,7 +22,7 @@ def write_score_plots(
     matplotlib.use("Agg", force=True)
     import matplotlib.pyplot as plt
 
-    png_dir = output_dir / "png"
+    png_dir = png_output_dir(output_dir)
     png_dir.mkdir(parents=True, exist_ok=True)
     created_paths: list[str] = []
 

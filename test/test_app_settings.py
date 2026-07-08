@@ -11,6 +11,7 @@ if str(SRC_DIR) not in sys.path:
 
 from app_settings import (  # noqa: E402
     AppSettingsStore,
+    app_display_name,
     default_settings_path,
     normalize_pipeline_visibility,
     normalize_postprocess_visibility,
@@ -32,10 +33,22 @@ class AppSettingsTests(unittest.TestCase):
                 Path(r"C:\Users\Test\AppData\Roaming\AngioEye\9.9.9\settings.json"),
             )
 
-    def test_normalize_pipeline_visibility_defaults_first_run_to_visible(self) -> None:
-        visibility, changed = normalize_pipeline_visibility(["a", "b"], {})
+    def test_app_display_name_includes_version(self) -> None:
+        with mock.patch.dict("os.environ", {"ANGIOEYE_VERSION": "9.9.9"}):
+            self.assertEqual("AngioEye v9.9.9", app_display_name())
 
-        self.assertEqual(visibility, {"a": True, "b": True})
+    def test_normalize_pipeline_visibility_defaults_first_run_to_waveform_metrics(
+        self,
+    ) -> None:
+        visibility, changed = normalize_pipeline_visibility(
+            ["a", "waveform_shape_metrics", "b"],
+            {},
+        )
+
+        self.assertEqual(
+            visibility,
+            {"a": False, "waveform_shape_metrics": True, "b": False},
+        )
         self.assertTrue(changed)
 
     def test_normalize_pipeline_visibility_hides_new_pipelines_after_first_run(

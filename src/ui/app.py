@@ -3,7 +3,7 @@ import tkinter.font as tkfont
 from pathlib import Path
 from tkinter import ttk
 
-from app_settings import AppSettingsStore
+from app_settings import AppSettingsStore, app_display_name
 from pipelines import PipelineDescriptor
 from postprocess import PostprocessDescriptor
 
@@ -33,7 +33,7 @@ class ProcessApp(
 
     def __init__(self) -> None:
         super().__init__()
-        self.title("AngioEye")
+        self.title(app_display_name())
         self.ui_services = UiServices()
         self.settings_store = AppSettingsStore()
         self._settings_warning_shown = False

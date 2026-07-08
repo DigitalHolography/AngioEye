@@ -11,6 +11,26 @@ class ProgressMixin:
     def _batch_log_path(self) -> Path:
         return self.settings_store.path.with_name(LAST_BATCH_LOG_FILENAME)
 
+    def open_batch_log_file(self) -> None:
+        log_path = self._batch_log_path()
+        if not log_path.exists() and hasattr(self, "batch_output"):
+            self._persist_batch_log_snapshot()
+
+        if not log_path.exists():
+            services_for(self).dialogs.showwarning(
+                "Log file not found",
+                f"No batch log file was found at:\n{log_path}",
+            )
+            return
+
+        try:
+            services_for(self).file_opener.open_file(log_path)
+        except OSError as exc:
+            services_for(self).dialogs.showerror(
+                "Could not open log file",
+                f"Could not open log file:\n{log_path}\n\n{exc}",
+            )
+
     def _persist_batch_log_snapshot(self) -> None:
         log_path = self._batch_log_path()
         try:

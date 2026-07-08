@@ -267,7 +267,13 @@ class ViewBuilderMixin:
             variable=self.ui_mode_var,
             command=lambda: self._apply_ui_mode(self.ui_mode_var.get()),
         )
+        help_menu = tk.Menu(menu_bar, tearoff=False)
+        help_menu.add_command(
+            label="Open Log File",
+            command=self.open_batch_log_file,
+        )
         menu_bar.add_cascade(label="View", menu=view_menu)
+        menu_bar.add_cascade(label="Help", menu=help_menu)
         self.configure(menu=menu_bar)
 
     def _get_minimal_title_font(self) -> tkfont.Font:

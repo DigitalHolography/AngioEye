@@ -10,6 +10,7 @@ import h5py
 from input_output import (
     ANGIOEYE_PROCESSING_ROOT,
     create_h5_file,
+    h5_output_parent,
     write_metrics_trees_to_h5,
 )
 from pipelines import (
@@ -251,7 +252,7 @@ def _unique_pipeline_output_path(
     output_filename: str | None,
     reserved_paths: set[Path] | None = None,
 ) -> Path:
-    target_dir = output_root / output_relative_parent
+    target_dir = h5_output_parent(output_root, output_relative_parent)
     target_dir.mkdir(parents=True, exist_ok=True)
     reserved = reserved_paths or set()
 
