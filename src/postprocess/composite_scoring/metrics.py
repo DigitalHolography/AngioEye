@@ -1,21 +1,61 @@
-from .dataclasses import Domain, Metric
-
+from .dataclasses import Metric
 
 REPRESENTATIONS = ("raw", "bandlimited")
 VESSEL_TYPES = ("artery", "vein")
 POSTPROCESS_GROUP = "composite_scoring"
 PLOT_VESSEL_TYPE = "artery"
 
+# Direction constants used after automatic calibration.
+GREATER = 1
+LESS = -1
 
-# Metrics Definitions
+# -----------------------------------------------------------------------------
+# Complete metric panel from:
+# "Transportable retinal Doppler holography waveform-shape metrics..."
+#
+# IMPORTANT:
+# - No fixed threshold here.
+# - No fixed direction here.
+# - No fixed control_std here.
+# These are filled automatically by optimal split calibration.
+# -----------------------------------------------------------------------------
+
+# VTI-weighted temporal moments
+M_CENTROID_TIMING = "centroid_timing"
+M_TEMPORAL_SPREAD = "temporal_spread"
+M_TEMPORAL_SKEWNESS = "temporal_skewness"
+
+# Displacement timing quantiles tq/T
+M_T10_TIMING = "t10_displacement_timing"
+M_T25_TIMING = "t25_displacement_timing"
+M_T50_TIMING = "t50_displacement_timing"
+M_T75_TIMING = "t75_displacement_timing"
+M_T90_TIMING = "t90_displacement_timing"
+
+# Time-quantile geometry
+M_QT_WIDTH = "time_quantile_width"
+M_QT_SKEW = "time_quantile_skew"
+
+# Cumulative-distance geometry
+M_DELTA_DTI = "pulse_front_loading_index"
+M_D10_FRACTION = "d10_cumulative_distance_fraction"
+M_D25_FRACTION = "d25_cumulative_distance_fraction"
+M_D50_FRACTION = "d50_cumulative_distance_fraction"
+M_D75_FRACTION = "d75_cumulative_distance_fraction"
+M_D90_FRACTION = "d90_cumulative_distance_fraction"
+M_QD_WIDTH = "cumulative_distance_width"
+M_QD_SKEW = "cumulative_distance_skew"
+M_EARLY_LATE_BALANCE = "early_late_balance"
 M_STROKE_FRACTION = "stroke_fraction"
-M_MED_DISPLACEMENT_TIMING = "med_displacement_timing"
-M_LOW_FREQ_SPECTRAL_FRACTION = "low_freq_spectral_fraction"
-M_LATE_CYCLE_MEAN_FRACTION = "late_cycle_mean_fraction"
-M_PARTICIPATION_RATIO_EFF_SUPP = "participation_ratio_eff_supp"
+
+# Crest morphology
+M_NEAR_PEAK_CREST_WIDTH = "near_peak_crest_width"
+M_SUMMIT_CREST_WIDTH = "summit_crest_width"
+
+# Excursion and pulsatility
 M_RESISTIVITY_INDEX = "resistivity_index"
 M_PULSATILITY_INDEX = "pulsatility_index"
-M_NEAR_PEAK_CREST_WIDTH = "near_peak_crest_width"
+M_CREST_FACTOR = "crest_factor"
 
 # Metrics Threshold Directions
 GREATER = 1
@@ -90,8 +130,8 @@ DOMAINS: dict[str, Domain] = {
         ),
         weight=1,
     ),
-    "pulsatility": Domain(
-        metrics=(M_RESISTIVITY_INDEX, M_PULSATILITY_INDEX),
-        weight=1,
-    ),
+    M_RECONSTRUCTION_FIDELITY: Metric(name="eta_h"),
 }
+
+# Backward-compatible alias for older imports.
+METRICS = METRIC_PANEL

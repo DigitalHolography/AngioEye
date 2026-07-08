@@ -44,6 +44,7 @@ CONTROL_GROUP_PATTERNS = [
     r"^healthy$",
     r"^healthy_control$",
     r"^healthy_controls$",
+    r"^BL$",
 ]
 
 INPUT_METRICS = [
@@ -81,30 +82,30 @@ METRIC_LABELS = {
     "RI": r"$\rm RI$",
     "CF": r"$\rm CF$",
     "t50_over_T": r"$t_{50}/T$",
-    "R_VTI": r"$R_{\mathrm{VTI}}$",    
+    "R_VTI": r"$R_{\mathrm{VTI}}$",
     "mu_t_over_T": r"$\mu_t/T$",
     "PI": r"$\rm PI$",
     "SF_VTI": r"$SF_{\mathrm{VTI}}$",
-    "sigma_t_over_T": r"$\sigma_t/T$",    
+    "sigma_t_over_T": r"$\sigma_t/T$",
     "t_max_over_T": r"$t_{\mathrm{max}}/T$",
-    "t_min_over_T": r"$t_{\mathrm{min}}/T$",   
+    "t_min_over_T": r"$t_{\mathrm{min}}/T$",
     "t_rise_over_T": r"$t_{\mathrm{rise}}/T$",
-    "t_fall_over_T": r"$t_{\mathrm{fall}}/T$",    
+    "t_fall_over_T": r"$t_{\mathrm{fall}}/T$",
     "Delta_DTI": r"$\Delta_{\mathrm{DTI}}$",
     "E_LF_over_E_HF": r"$E_{\mathrm{LF}}/E_{\mathrm{HF}}$",
     "S_fall": r"$S_{\mathrm{fall}}$",
     "S_rise": r"$S_{\mathrm{rise}}$",
-    "gamma_t": r"$\gamma_t$",    
-    "N_eff_over_T": r"$N_{\mathrm{eff}}/T$",    
+    "gamma_t": r"$\gamma_t$",
+    "N_eff_over_T": r"$N_{\mathrm{eff}}/T$",
     "Q_t_skew": r"$Q_{\mathrm{t,skew}}$",
     "Q_t_width": r"$Q_{\mathrm{t,width}}$",
     "Q_d_skew": r"$Q_{\mathrm{d,skew}}$",
     "Q_d_width": r"$Q_{\mathrm{d,width}}$",
     "v_end_over_vbar": r"$\bar{\mathrm{v}}_{\mathrm{end}}/\bar{\mathrm{v}}$",
-    "E_slope": r"$E_{\mathrm{slope}}$",   
+    "E_slope": r"$E_{\mathrm{slope}}$",
     "W50_over_T": r"$W_{50}/T$",
     "W80_over_T": r"$W_{80}/T$",
-    "N_t_over_T": r"$N_t/T$",    
+    "N_t_over_T": r"$N_t/T$",
     "eta_h": r"$\eta_h$",
 }
 
@@ -1322,10 +1323,8 @@ def build_group_separation_metrics_table(
         )
 
         metric_results[metric_label(metric_name)] = {
-            n_control_label: str(sx["n"]),
-            n_group_label: str(sy["n"]),
-            f"Median {control_tex}": format_float(sx["median"], digits=digits),
-            f"Median {group_tex}": format_float(sy["median"], digits=digits),
+            f"variability Median {control_tex}": format_float(sx["median"], digits=digits),
+            f"variability Median {group_tex}": format_float(sy["median"], digits=digits),
             "More variable group": more_variable_group,
             "Mann--Whitney p-value": format_pvalue_latex(p, sig_digits=digits),
             "Cohen's $d$": format_float(d, digits=digits),
@@ -1336,12 +1335,9 @@ def build_group_separation_metrics_table(
             "AUC separability": format_float(auc_sep, digits=digits),
             "Sensitivity": format_float(sensitivity, digits=digits),
             "Specificity": format_float(specificity, digits=digits),
-            "Overlap OVL": format_float(ovl, digits=digits),
         }
 
     estimator_order = [
-        n_control_label,
-        n_group_label,
         f"Median {control_tex}",
         f"Median {group_tex}",
         "More variable group",
@@ -1351,7 +1347,6 @@ def build_group_separation_metrics_table(
         "AUC separability",
         "Sensitivity",
         "Specificity",
-        "Overlap OVL",
     ]
 
     rows = []
@@ -1422,17 +1417,14 @@ def build_auc_separability_ranking_table(
         rows.append(
             {
                 "Metric": metric_label(metric_name),
-                f"n {control_tex}": sx["n"],
-                f"n {group_tex}": sy["n"],
-                f"Median {control_tex}": sx["median"],
-                f"Median {group_tex}": sy["median"],
+                f"variability Median {control_tex}": sx["median"],
+                f"variability Median {group_tex}": sy["median"],
                 "More variable group": more_variable_group,
                 "AUC separability": auc_sep,
                 "Mann--Whitney p-value": p,
                 "Cohen's $d$": d,
                 "Sensitivity": sensitivity,
                 "Specificity": specificity,
-                "Overlap OVL": ovl,
             }
         )
 
@@ -1451,7 +1443,6 @@ def build_auc_separability_ranking_table(
         "Cohen's $d$",
         "Sensitivity",
         "Specificity",
-        "Overlap OVL",
     ]
     for col in numeric_cols:
         df[col] = df[col].apply(lambda v: format_float(v, digits=digits))
@@ -1464,8 +1455,6 @@ def build_auc_separability_ranking_table(
         [
             "Rank",
             "Metric",
-            f"n {control_tex}",
-            f"n {group_tex}",
             f"Median {control_tex}",
             f"Median {group_tex}",
             "More variable group",
@@ -1474,7 +1463,6 @@ def build_auc_separability_ranking_table(
             "Cohen's $d$",
             "Sensitivity",
             "Specificity",
-            "Overlap OVL",
         ]
     ]
 
@@ -2137,9 +2125,7 @@ def export_group_tables_from_results(
         if idle_callback is not None:
             idle_callback()
 
-    print(
-        f"Generated {len(generated)} variability/heterogeneity file(s) in {out_dir}."
-    )
+    print(f"Generated {len(generated)} variability/heterogeneity file(s) in {out_dir}.")
     return generated
 
 
@@ -2178,4 +2164,3 @@ def export_group_tables(
 if __name__ == "__main__":
     zip_path = choose_zip()
     export_group_tables(zip_path, top_n=DEFAULT_TOP_N)
-
