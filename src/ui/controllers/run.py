@@ -12,7 +12,6 @@ from input_output import (
     h5_output_dir,
     holo_input_status,
     is_hdf5_path,
-    stem_input_status,
 )
 from workflows import (
     ZIP_COMPANION_OUTPUT_FOLDERS,
@@ -454,13 +453,18 @@ class RunTabController(ViewController):
             self.set_minimal_holo_status(status, False)
             return
         stems = input_list.stems
-        statuses = [stem_input_status(stem, input_list.root_dir) for stem in stems]
+        statuses = [
+            holo_input_status(holo_path, require_holo_file=True)
+            for holo_path in input_list.holo_paths
+        ]
         missing_stems = [
             stem for stem, status in zip(stems, statuses) if not status.ef
         ]
         found_count = len(stems) - len(missing_stems)
         status = found_status_text("EF", found_count, len(stems), missing_stems)
-        found_all = not missing_stems
+        if input_list.warnings:
+            status += f"; skipped {len(input_list.warnings)} invalid list entry(s)"
+        found_all = not missing_stems and not input_list.warnings
         self.app.holo_status_var.set(status)
         self.set_holo_status_color(found_all)
         self.set_minimal_holo_status(status, found_all)
