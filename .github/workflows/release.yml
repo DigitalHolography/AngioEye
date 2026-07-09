@@ -121,14 +121,25 @@ jobs:
           }
           Assert-LastExit "Could not verify that origin/main is an ancestor of tagged dev."
 
-          gh release view $tagName *> $null
-          $releaseLookupExitCode = $LASTEXITCODE
-          $global:LASTEXITCODE = 0
-          if ($releaseLookupExitCode -eq 0) {
-              throw "Release '$tagName' already exists."
+          $releaseApiUrl = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/tags/$tagName"
+          $releaseExists = $false
+          try {
+              $null = Invoke-RestMethod `
+                  -Uri $releaseApiUrl `
+                  -Headers @{
+                      Authorization = "Bearer $env:GH_TOKEN"
+                      Accept = "application/vnd.github+json"
+                      "X-GitHub-Api-Version" = "2022-11-28"
+                  }
+              $releaseExists = $true
+          } catch {
+              $statusCode = [int]$_.Exception.Response.StatusCode
+              if ($statusCode -ne 404) {
+                  throw "Could not check release availability for '$tagName' (HTTP $statusCode)."
+              }
           }
-          if ($releaseLookupExitCode -ne 1) {
-              throw "Could not check release availability for '$tagName'."
+          if ($releaseExists) {
+              throw "Release '$tagName' already exists."
           }
 
           if (-not [string]::IsNullOrWhiteSpace($tagMessage)) {
@@ -222,7 +233,7 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           uv sync
 
-      - name: Commit squash release locally
+      - name: Create or reuse release commit
         id: commit
         env:
           COMMIT_MESSAGE_PATH: ${{ steps.validate.outputs.commit_message_path }}
@@ -234,10 +245,11 @@ jobs:
 
           $stagedChanges = @(git diff --cached --name-only)
           if ([string]::IsNullOrWhiteSpace(($stagedChanges -join "`n"))) {
-              throw "No release changes were staged. Refusing to create an empty release commit."
+              Write-Host "Tagged tree already matches main; reusing the existing release commit."
+          } else {
+              git commit -F $env:COMMIT_MESSAGE_PATH
           }
 
-          git commit -F $env:COMMIT_MESSAGE_PATH
           $releaseCommit = ((@(git rev-parse HEAD)) -join "`n").Trim()
           if ([string]::IsNullOrWhiteSpace($releaseCommit)) {
               throw "Local release commit resolved to empty output."
@@ -293,8 +305,6 @@ jobs:
               "--force-with-lease=refs/heads/dev`:${env:TAG_COMMIT_SHA}" `
               "--force-with-lease=refs/tags/${env:TAG_NAME}`:${env:TAG_REF_SHA}"
 
-          New-Item -ItemType File -Path ".release-remote-mutated" -Force | Out-Null
-
       - name: Publish GitHub release
         env:
           INSTALLER_PATH: ${{ steps.build.outputs.installer_path }}
@@ -307,24 +317,3 @@ jobs:
               --title "AngioEye $env:TAG_NAME" `
               --notes-file $env:RELEASE_NOTES_PATH `
               --verify-tag
-
-      - name: Reject failed release tag
-        if: ${{ failure() && steps.validate.outcome == 'success' }}
-        env:
-          TAG_REF_SHA: ${{ steps.validate.outputs.tag_ref_sha }}
-        run: |
-          $ErrorActionPreference = "Continue"
-          $PSNativeCommandUseErrorActionPreference = $false
-
-          if (Test-Path -LiteralPath ".release-remote-mutated") {
-              Write-Warning "Remote main, dev, and tag were already updated. Leaving '$env:TAG_NAME' in place to avoid a partial rollback."
-              exit 0
-          }
-
-          Write-Warning "Release failed before publishing. Deleting rejected tag '$env:TAG_NAME' from origin."
-          git push origin `
-              ":refs/tags/${env:TAG_NAME}" `
-              "--force-with-lease=refs/tags/${env:TAG_NAME}`:${env:TAG_REF_SHA}"
-          if ($LASTEXITCODE -ne 0) {
-              Write-Warning "Could not safely delete rejected tag '$env:TAG_NAME'; it may have moved."
-          }
