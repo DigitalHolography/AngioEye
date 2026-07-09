@@ -761,10 +761,14 @@ class WorkflowDispatchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
             holo_paths = []
-            for stem in ("first", "second"):
-                holo_path = tmp_path / f"{stem}.holo"
+            for stem, parent in (
+                ("first", tmp_path),
+                ("second", tmp_path / "other"),
+            ):
+                parent.mkdir(exist_ok=True)
+                holo_path = parent / f"{stem}.holo"
                 holo_path.write_text("holo", encoding="utf-8")
-                ef_h5_dir = tmp_path / stem / f"{stem}_EF"
+                ef_h5_dir = parent / stem / f"{stem}_EF"
                 ef_h5_dir.mkdir(parents=True)
                 (ef_h5_dir / f"{stem}.h5").write_text("h5", encoding="utf-8")
                 holo_paths.append(holo_path)
@@ -790,7 +794,9 @@ class WorkflowDispatchTests(unittest.TestCase):
             self.assertEqual(2, len(contexts))
             self.assertEqual(holo_paths, [context.holo_path for context in contexts])
             self.assertTrue((tmp_path / "first" / "first_AE").is_dir())
-            self.assertTrue((tmp_path / "second" / "second_AE").is_dir())
+            self.assertTrue(
+                (tmp_path / "other" / "second" / "second_AE").is_dir()
+            )
 
     def test_dispatch_rejects_empty_zip_without_tk(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

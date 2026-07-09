@@ -1,0 +1,407 @@
+name: Release AngioEye
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-angioeye
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Squash dev to main and publish release
+    runs-on: windows-latest
+    if: github.event.deleted == false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG_CREATED: ${{ github.event.created }}
+      TAG_NAME: ${{ github.ref_name }}
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Validate release tag
+        id: validate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $false
+
+          function Assert-LastExit {
+              param([Parameter(Mandatory = $true)][string]$Message)
+              if ($LASTEXITCODE -ne 0) {
+                  throw $Message
+              }
+          }
+
+          function Get-NativeText {
+              param(
+                  [Parameter(Mandatory = $true)][string]$FailureMessage,
+                  [Parameter(Mandatory = $true)][scriptblock]$Command
+              )
+
+              $lines = @(& $Command)
+              Assert-LastExit $FailureMessage
+              return ($lines -join "`n")
+          }
+
+          function Get-RequiredNativeText {
+              param(
+                  [Parameter(Mandatory = $true)][string]$FailureMessage,
+                  [Parameter(Mandatory = $true)][string]$EmptyMessage,
+                  [Parameter(Mandatory = $true)][scriptblock]$Command
+              )
+
+              $text = (Get-NativeText -FailureMessage $FailureMessage -Command $Command).Trim()
+              if ([string]::IsNullOrWhiteSpace($text)) {
+                  throw $EmptyMessage
+              }
+              return $text
+          }
+
+          $tagName = $env:TAG_NAME
+          if ($env:TAG_CREATED -ne "true") {
+              throw "Release tag '$tagName' must be newly created. Tag updates are rejected."
+          }
+          if ($tagName -notmatch '^v\d+\.\d+\.\d+$') {
+              throw "Invalid release tag '$tagName'. Expected vX.X.X, for example v1.20.1."
+          }
+
+          git fetch --prune origin `
+              "+refs/heads/main:refs/remotes/origin/main" `
+              "+refs/heads/dev:refs/remotes/origin/dev" `
+              "+refs/tags/${tagName}:refs/tags/${tagName}"
+          Assert-LastExit "Could not fetch origin/main, origin/dev, and '$tagName'."
+
+          $tagRefSha = Get-RequiredNativeText `
+              -FailureMessage "Could not resolve tag ref '$tagName'." `
+              -EmptyMessage "Tag ref '$tagName' resolved to empty output." `
+              -Command { git rev-parse "refs/tags/$tagName" }
+          $tagCommitSha = Get-RequiredNativeText `
+              -FailureMessage "Could not resolve tag commit '$tagName'." `
+              -EmptyMessage "Tag commit '$tagName' resolved to empty output." `
+              -Command { git rev-parse "refs/tags/$tagName^{commit}" }
+          $devSha = Get-RequiredNativeText `
+              -FailureMessage "Could not resolve origin/dev." `
+              -EmptyMessage "origin/dev resolved to empty output." `
+              -Command { git rev-parse "refs/remotes/origin/dev^{commit}" }
+          $mainSha = Get-RequiredNativeText `
+              -FailureMessage "Could not resolve origin/main." `
+              -EmptyMessage "origin/main resolved to empty output." `
+              -Command { git rev-parse "refs/remotes/origin/main^{commit}" }
+
+          if ($tagCommitSha -ne $devSha) {
+              throw "Tag '$tagName' points to $tagCommitSha, but origin/dev is $devSha. Create the release tag from the current dev HEAD."
+          }
+
+          gh release view $tagName *> $null
+          if ($LASTEXITCODE -eq 0) {
+              throw "Release '$tagName' already exists."
+          }
+          if ($LASTEXITCODE -ne 1) {
+              throw "Could not check release availability for '$tagName'."
+          }
+
+          $releaseSubjects = @(git log --reverse --format='%s' "origin/main..$tagCommitSha")
+          Assert-LastExit "Could not generate release notes for '$tagName'."
+          $releaseSubjects = @($releaseSubjects | Where-Object {
+              $_ -notmatch '^Merge release v[0-9]+\.[0-9]+\.[0-9]+ into dev$' -and
+              $_ -notmatch '^Version v[0-9]+\.[0-9]+\.[0-9]+$'
+          })
+          $releaseNotes = ($releaseSubjects | ForEach-Object { "- $_" }) -join "`n"
+          if ([string]::IsNullOrWhiteSpace($releaseNotes)) {
+              $releaseNotes = "- No commit messages found since origin/main."
+          }
+
+          $releaseNotesPath = Join-Path $env:RUNNER_TEMP "release-notes.md"
+          $commitMessagePath = Join-Path $env:RUNNER_TEMP "release-commit-message.txt"
+          Set-Content -LiteralPath $releaseNotesPath -Value $releaseNotes -Encoding UTF8
+
+          $commitMessage = @(
+              "Version $tagName",
+              "",
+              "Release changes:",
+              "",
+              $releaseNotes,
+              "",
+              "Dev-Head: $tagCommitSha"
+          ) -join "`n"
+          Set-Content -LiteralPath $commitMessagePath -Value $commitMessage -Encoding UTF8
+
+          "version=$($tagName.Substring(1))" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding UTF8
+          "tag_ref_sha=$tagRefSha" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding UTF8
+          "tag_commit_sha=$tagCommitSha" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding UTF8
+          "main_sha=$mainSha" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding UTF8
+          "release_notes_path=$releaseNotesPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding UTF8
+          "commit_message_path=$commitMessagePath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding UTF8
+
+      - name: Configure Git author
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $false
+
+          function Assert-LastExit {
+              param([Parameter(Mandatory = $true)][string]$Message)
+              if ($LASTEXITCODE -ne 0) {
+                  throw $Message
+              }
+          }
+
+          git config user.name "github-actions[bot]"
+          Assert-LastExit "Could not configure Git author name."
+          git config user.email "gha[bot]@users.noreply.github.com"
+          Assert-LastExit "Could not configure Git author email."
+
+      - name: Prepare squash release commit
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.validate.outputs.version }}
+          TAG_COMMIT_SHA: ${{ steps.validate.outputs.tag_commit_sha }}
+          MAIN_SHA: ${{ steps.validate.outputs.main_sha }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $false
+
+          function Assert-LastExit {
+              param([Parameter(Mandatory = $true)][string]$Message)
+              if ($LASTEXITCODE -ne 0) {
+                  throw $Message
+              }
+          }
+
+          git checkout -B release-main origin/main
+          Assert-LastExit "Could not check out origin/main."
+
+          git diff --quiet $env:MAIN_SHA $env:TAG_COMMIT_SHA
+          if ($LASTEXITCODE -eq 0) {
+              Write-Host "No source delta between origin/main and '$env:TAG_COMMIT_SHA'."
+          } elseif ($LASTEXITCODE -eq 1) {
+              $releasePatchPath = Join-Path $env:RUNNER_TEMP "release-delta.patch"
+              git diff --binary "--output=$releasePatchPath" $env:MAIN_SHA $env:TAG_COMMIT_SHA
+              Assert-LastExit "Could not create release delta from origin/main to '$env:TAG_COMMIT_SHA'."
+
+              git apply --index --3way $releasePatchPath
+              Assert-LastExit "Could not apply release delta to origin/main. Resolve the conflict on dev/main, then recreate the release tag."
+          } else {
+              throw "Could not compare origin/main '$env:MAIN_SHA' with '$env:TAG_COMMIT_SHA'."
+          }
+
+          $pyprojectPath = "pyproject.toml"
+          $pyproject = Get-Content -LiteralPath $pyprojectPath -Raw -Encoding UTF8
+          $versionLine = [regex]::new('(?m)^version\s*=\s*"[^"]+"\s*$')
+          if (-not $versionLine.IsMatch($pyproject)) {
+              throw "Could not find [project].version in pyproject.toml."
+          }
+
+          $pyproject = $versionLine.Replace($pyproject, "version = `"$env:RELEASE_VERSION`"", 1)
+          Set-Content -LiteralPath $pyprojectPath -Value $pyproject -Encoding UTF8 -NoNewline
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Sync dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $false
+
+          uv sync
+          if ($LASTEXITCODE -ne 0) {
+              throw "Could not sync Python dependencies with uv."
+          }
+
+      - name: Commit squash release locally
+        id: commit
+        shell: pwsh
+        env:
+          COMMIT_MESSAGE_PATH: ${{ steps.validate.outputs.commit_message_path }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $false
+
+          function Assert-LastExit {
+              param([Parameter(Mandatory = $true)][string]$Message)
+              if ($LASTEXITCODE -ne 0) {
+                  throw $Message
+              }
+          }
+
+          git add -A
+          Assert-LastExit "Could not stage release changes."
+
+          $stagedChanges = @(git diff --cached --name-only)
+          Assert-LastExit "Could not inspect staged release changes."
+          if ([string]::IsNullOrWhiteSpace(($stagedChanges -join "`n"))) {
+              throw "No release changes were staged. Refusing to create an empty release commit."
+          }
+
+          git commit -F $env:COMMIT_MESSAGE_PATH
+          Assert-LastExit "Could not create local release commit."
+
+          $releaseCommit = ((@(git rev-parse HEAD)) -join "`n").Trim()
+          Assert-LastExit "Could not resolve local release commit."
+          if ([string]::IsNullOrWhiteSpace($releaseCommit)) {
+              throw "Local release commit resolved to empty output."
+          }
+          "release_commit=$releaseCommit" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding UTF8
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $false
+
+          choco install innosetup --no-progress -y
+          if ($LASTEXITCODE -ne 0) {
+              throw "Could not install Inno Setup."
+          }
+
+      - name: Build installer
+        id: build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $false
+
+          .\build_installer.ps1
+          if (-not $?) {
+              throw "Installer build script failed."
+          }
+
+          $installer = Get-ChildItem -LiteralPath "dist\installer" -Filter "*-setup-v*.exe" |
+              Sort-Object LastWriteTime -Descending |
+              Select-Object -First 1
+          if (-not $installer) {
+              throw "Build finished, but no installer was found in dist\installer."
+          }
+
+          "installer_path=$($installer.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding UTF8
+
+      - name: Push main and move tag
+        id: push
+        shell: pwsh
+        env:
+          MAIN_SHA: ${{ steps.validate.outputs.main_sha }}
+          TAG_REF_SHA: ${{ steps.validate.outputs.tag_ref_sha }}
+          RELEASE_COMMIT: ${{ steps.commit.outputs.release_commit }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $false
+
+          function Assert-LastExit {
+              param([Parameter(Mandatory = $true)][string]$Message)
+              if ($LASTEXITCODE -ne 0) {
+                  throw $Message
+              }
+          }
+
+          $currentMainText = ((@(git ls-remote origin refs/heads/main)) -join "`n").Trim()
+          Assert-LastExit "Could not resolve current origin/main."
+          if ([string]::IsNullOrWhiteSpace($currentMainText)) {
+              throw "origin/main lookup returned empty output."
+          }
+          $currentMain = ($currentMainText -split '\s+')[0]
+          if ($currentMain -ne $env:MAIN_SHA) {
+              throw "origin/main moved from $env:MAIN_SHA to $currentMain while this release was building. Recreate the tag and try again."
+          }
+
+          git tag -f $env:TAG_NAME $env:RELEASE_COMMIT
+          Assert-LastExit "Could not retarget local tag '$env:TAG_NAME' to the release commit."
+
+          git push --atomic origin `
+              HEAD:refs/heads/main `
+              "+refs/tags/${env:TAG_NAME}:refs/tags/${env:TAG_NAME}" `
+              "--force-with-lease=refs/tags/${env:TAG_NAME}`:${env:TAG_REF_SHA}"
+          Assert-LastExit "Could not push the release commit to main and move tag '$env:TAG_NAME'."
+
+          New-Item -ItemType File -Path ".release-remote-mutated" -Force | Out-Null
+
+      - name: Publish GitHub release
+        shell: pwsh
+        env:
+          INSTALLER_PATH: ${{ steps.build.outputs.installer_path }}
+          RELEASE_NOTES_PATH: ${{ steps.validate.outputs.release_notes_path }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $false
+
+          function Assert-LastExit {
+              param([Parameter(Mandatory = $true)][string]$Message)
+              if ($LASTEXITCODE -ne 0) {
+                  throw $Message
+              }
+          }
+
+          gh release create $env:TAG_NAME $env:INSTALLER_PATH `
+              --title "AngioEye $env:TAG_NAME" `
+              --notes-file $env:RELEASE_NOTES_PATH `
+              --verify-tag
+          Assert-LastExit "Could not publish GitHub release '$env:TAG_NAME'."
+
+      - name: Merge version commit back into dev
+        if: ${{ always() && steps.push.outcome == 'success' }}
+        shell: pwsh
+        env:
+          RELEASE_COMMIT: ${{ steps.commit.outputs.release_commit }}
+          TAG_COMMIT_SHA: ${{ steps.validate.outputs.tag_commit_sha }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $false
+
+          function Assert-LastExit {
+              param([Parameter(Mandatory = $true)][string]$Message)
+              if ($LASTEXITCODE -ne 0) {
+                  throw $Message
+              }
+          }
+
+          $currentDevText = ((@(git ls-remote origin refs/heads/dev)) -join "`n").Trim()
+          Assert-LastExit "Could not resolve current origin/dev."
+          if ([string]::IsNullOrWhiteSpace($currentDevText)) {
+              throw "origin/dev lookup returned empty output."
+          }
+          $currentDev = ($currentDevText -split '\s+')[0]
+          if ($currentDev -ne $env:TAG_COMMIT_SHA) {
+              throw "origin/dev moved from $env:TAG_COMMIT_SHA to $currentDev while this release was building. Merge main into dev manually, then continue development from the updated dev branch."
+          }
+
+          git checkout -B dev origin/dev
+          Assert-LastExit "Could not check out origin/dev."
+
+          git merge --no-ff $env:RELEASE_COMMIT -m "Merge release $env:TAG_NAME into dev"
+          Assert-LastExit "Could not merge release commit '$env:RELEASE_COMMIT' into dev. Resolve the conflict manually by merging main into dev."
+
+          git push origin HEAD:refs/heads/dev
+          Assert-LastExit "Could not push release merge back to dev."
+
+      - name: Reject failed release tag
+        if: failure()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          $PSNativeCommandUseErrorActionPreference = $false
+
+          if (Test-Path -LiteralPath ".release-remote-mutated") {
+              Write-Warning "Remote main/tag was already updated before the failure. Leaving '$env:TAG_NAME' in place to avoid partial rollback."
+              exit 0
+          }
+
+          Write-Warning "Release failed before publishing. Deleting rejected tag '$env:TAG_NAME' from origin."
+          git push origin ":refs/tags/${env:TAG_NAME}"
+          if ($LASTEXITCODE -ne 0) {
+              Write-Warning "Could not delete rejected tag '$env:TAG_NAME' from origin."
+          }
