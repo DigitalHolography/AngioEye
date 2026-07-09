@@ -42,12 +42,13 @@ def _resolve_holo_path_list_contexts(path: Path) -> ResolvedInputContexts:
     skipped: list[str] = []
     failures: list[str] = []
     input_list = read_holo_path_list(path.expanduser())
-    for stem in input_list.stems:
+    failures.extend(input_list.warnings)
+    for holo_path in input_list.holo_paths:
         try:
-            contexts.append(resolve_stem_context(input_list.root_dir, stem))
+            contexts.append(resolve_context(holo_path))
         except Exception as exc:  # noqa: BLE001
-            skipped.append(stem)
-            failures.append(f"{stem}: {exc}")
+            skipped.append(holo_path.stem)
+            failures.append(f"{holo_path}: {exc}")
     return ResolvedInputContexts(contexts, skipped, failures)
 
 
