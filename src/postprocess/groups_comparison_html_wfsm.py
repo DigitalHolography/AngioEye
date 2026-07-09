@@ -48,17 +48,17 @@ class GroupsComparisonHTMLPostprocess(BatchPostprocess):
                 )
             groups_comparison_html.save_dashboard(
                 str(temp_zip),
-                export_png_dir=temp_root / "export_png_html",
+                export_png_dir=temp_root / "group comparison (HTML) - Waveform Shape Metrics",
             )
 
             png_paths = extract_folder_from_zip(
                 zip_path=temp_zip,
-                member_prefix="export_png_html/",
+                member_prefix="group comparison (HTML) - Waveform Shape Metrics/",
                 output_dir=output_dir,
             )
             dashboard_path = extract_file_from_zip(
                 zip_path=temp_zip,
-                member_name="waveform_metrics_dashboard.html",
+                member_name="waveform_shape_metrics_group_comparison.html",
                 output_dir=output_dir,
             )
 
