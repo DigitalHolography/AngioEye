@@ -47,7 +47,6 @@ class HoloPathList:
     root_dir: Path
     stems: tuple[str, ...]
     holo_paths: tuple[Path, ...]
-    warnings: tuple[str, ...] = ()
 
 
 def prepare_run_input(input_path: str | Path) -> InputPlan:
@@ -179,29 +178,34 @@ def read_holo_path_list(path: Path) -> HoloPathList:
         raise FileNotFoundError(f"Holo path list does not exist: {path}")
 
     holo_paths: list[Path] = []
-    warnings: list[str] = []
-    entries = [
-        (number, line.strip())
-        for number, line in enumerate(
-            path.read_text(encoding="utf-8").splitlines(), 1
-        )
-        if line.strip()
-    ]
-    if not entries:
-        raise ValueError(f"Holo path list is empty: {path}")
-
-    for line_number, raw_value in entries:
-        try:
-            holo_paths.append(_listed_holo_path(raw_value, path.parent))
-        except (OSError, RuntimeError, ValueError) as exc:
-            warnings.append(f"{path}:{line_number}: {exc}")
+    stems: list[str] = []
+    root_dir: Path | None = None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        raw_value = line.strip()
+        if not raw_value:
             continue
+        holo_path = Path(raw_value).expanduser()
+        if not holo_path.is_absolute():
+            holo_path = path.parent / holo_path
+        if holo_path.suffix.lower() != HOLO_SUFFIX:
+            raise ValueError(f"Listed input is not a {HOLO_SUFFIX} file: {raw_value}")
 
+        parent = holo_path.parent
+        if root_dir is None:
+            root_dir = parent
+        elif parent != root_dir:
+            raise ValueError(
+                "All .holo paths in the input list must share the same parent folder."
+            )
+        holo_paths.append(holo_path)
+        stems.append(holo_path.stem)
+
+    if root_dir is None:
+        raise ValueError(f"Holo path list is empty: {path}")
     return HoloPathList(
-        root_dir=path.parent,
-        stems=tuple(holo_path.stem for holo_path in holo_paths),
+        root_dir=root_dir,
+        stems=tuple(stems),
         holo_paths=tuple(holo_paths),
-        warnings=tuple(warnings),
     )
 
 
@@ -222,36 +226,6 @@ def found_status_text(
 def _absolute(path: str | Path) -> Path:
     resolved = Path(path).expanduser()
     return resolved if resolved.is_absolute() else Path.cwd() / resolved
-
-
-def _unavailable_path_root(path: Path) -> Path | None:
-    root = Path(path.anchor) if path.is_absolute() and path.anchor else None
-    return root if root is not None and not root.exists() else None
-
-
-def _listed_holo_path(raw_value: str, list_dir: Path) -> Path:
-    try:
-        path = Path(raw_value).expanduser()
-    except (OSError, RuntimeError) as exc:
-        raise ValueError(f"could not expand listed path {raw_value!r}: {exc}") from exc
-
-    path = path if path.is_absolute() else list_dir / path
-    if path.suffix.lower() != HOLO_SUFFIX:
-        raise ValueError(f"listed input is not a {HOLO_SUFFIX} file: {raw_value}")
-    try:
-        exists = path.is_file()
-    except OSError as exc:
-        raise OSError(f"could not access listed path {path}: {exc}") from exc
-    if exists:
-        return path
-
-    root = _unavailable_path_root(path)
-    if root is not None:
-        raise FileNotFoundError(
-            f"path root is unavailable to AngioEye ({root}); use an accessible "
-            f"UNC path if this is a mapped network drive: {path}"
-        )
-    raise FileNotFoundError(f"listed {HOLO_SUFFIX} file does not exist: {path}")
 
 
 def _validate_holo_file(holo_path: Path, *, require_file: bool) -> None:

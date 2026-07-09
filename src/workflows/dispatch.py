@@ -117,7 +117,7 @@ def _dispatch_holo_workflow(
     input_failures = resolved_inputs.failures
     if not contexts:
         for failure in input_failures:
-            callbacks.log(f"[INPUT FAILURE] {failure}")
+            callbacks.log(f"[INPUT SKIP] {failure}")
         return WorkflowDispatchResult(
             workflow_result=None,
             skipped_holo_stems=tuple(skipped_holo_stems),
@@ -148,7 +148,7 @@ def _dispatch_holo_workflow(
     )
     if input_failures:
         for failure in input_failures:
-            callbacks.log(f"[INPUT FAILURE] {failure}")
+            callbacks.log(f"[INPUT SKIP] {failure}")
         workflow_result.failures.extend(input_failures)
         total_inputs = len(contexts) + len(input_failures)
         workflow_result.summary_message = (
