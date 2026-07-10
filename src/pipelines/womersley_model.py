@@ -107,15 +107,15 @@ def registration_velocity_profile(dataset):
     side_len = center_idx
 
     dataset_x_aligned = np.full_like(dataset, np.nan)
-    out = np.full(n_x, np.nan)
 
     for branch_idx in range(n_branches):
         for radii_idx in range(n_radii):
             for t_idx in range(n_t):
+                out = np.full(n_x, np.nan)
                 profile = np.asarray(dataset[t_idx, :, branch_idx, radii_idx])
 
                 if np.all(np.isnan(profile)):
-                    return out
+                    continue
 
                 peak_idx = np.nanargmax(profile)
                 peak_value = profile[peak_idx]
