@@ -482,11 +482,12 @@ def _run_holo_pipeline_jobs(
     use_process_pool = settings.process_workers > 1 and can_pickle(run_job)
     if use_process_pool:
         process_count = min(len(batches), max(1, settings.process_workers))
-        thread_count = max(1, settings.batch_size)
+        thread_count = max(1, settings.thread_workers_per_process)
         log(
             f"[PROCESS] Starting ProcessPoolExecutor(max_workers={process_count}) "
-            f"for {len(batches)} holo batch(es); each process uses "
-            f"ThreadPoolExecutor(max_workers={thread_count})."
+            f"for {len(batches)} holo batch(es); "
+            f"threads per process={thread_count}; "
+            f"max concurrent file workers={process_count * thread_count}."
         )
         for batch_index, batch in enumerate(batches, start=1):
             log(
@@ -521,7 +522,7 @@ def _run_holo_pipeline_jobs(
     for task_result in run_task_batch(
         jobs,
         run_item=run_job,
-        max_workers=settings.batch_size,
+        max_workers=settings.thread_workers_per_process,
         idle_callback=idle_callback,
     ):
         _record_holo_task_result(

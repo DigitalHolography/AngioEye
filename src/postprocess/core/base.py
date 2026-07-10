@@ -133,6 +133,7 @@ class PostprocessContext:
     zip_outputs: bool
     input_h5_paths: tuple[Path, ...] = ()
     idle_callback: Callable[[], None] | None = None
+    record_timing: Callable[[str, float], None] | None = None
 
 
 @dataclass

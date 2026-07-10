@@ -182,6 +182,7 @@ def run_postprocesses(
             zip_outputs=zip_outputs,
             input_h5_paths=tuple(input_h5_paths),
             idle_callback=idle_callback,
+            record_timing=record_timing,
         )
         _record_timing(
             record_timing,
