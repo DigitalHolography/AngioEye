@@ -24,6 +24,7 @@ from .core.base import (
         "under /AngioEye/Postprocessing/QC_Windkessel_RC."
     ),
     required_pipelines=["Windkessel_RC"],
+    input_methods=["single_file", "file_batch", "cohort_batch", "zip_batch"],
 )
 class QCWindkesselRC(BatchPostprocess):
     """

@@ -16,6 +16,7 @@ from .core.base import (
     ),
     required_deps=["matplotlib>=3.8", "pandas>=2.1", "plotly>=5.18"],
     required_pipelines=["waveform_shape_metrics"],
+    input_methods=["file_batch", "cohort_batch", "zip_batch"],
     visibility="hidden",
 )
 class GraphicsDashboardPostprocess(BatchPostprocess):

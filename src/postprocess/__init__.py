@@ -7,15 +7,17 @@ from pathlib import Path
 from pipelines import load_pipeline_catalog
 
 from .core.base import (
+    DEFAULT_INPUT_METHODS,
     POSTPROCESS_REGISTRY,
     BatchPostprocess,
     MissingPostprocess,
     PostprocessContext,
     PostprocessDescriptor,
+    PostprocessInputMethod,
     PostprocessResult,
     format_required_pipeline_options,
-    required_pipeline_options_for,
     registerPostprocess,
+    required_pipeline_options_for,
 )
 
 
@@ -84,6 +86,7 @@ def _discover_postprocesses() -> tuple[
             missing_deps=cls.missing_deps,
             required_pipelines=getattr(cls, "required_pipelines", []),
             required_pipeline_options=[list(option) for option in pipeline_options],
+            input_methods=getattr(cls, "input_methods", list(DEFAULT_INPUT_METHODS)),
             missing_pipelines=missing_pipelines,
             postprocess_cls=cls,
             error_msg=(
@@ -147,9 +150,11 @@ for _name, _cls in _EXPORTED_POSTPROCESS_CLASSES.items():
 
 __all__ = [
     "BatchPostprocess",
+    "DEFAULT_INPUT_METHODS",
     "MissingPostprocess",
     "PostprocessContext",
     "PostprocessDescriptor",
+    "PostprocessInputMethod",
     "PostprocessResult",
     "format_required_pipeline_options",
     "required_pipeline_options_for",

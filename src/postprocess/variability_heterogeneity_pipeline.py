@@ -18,7 +18,6 @@ from .core.base import (
     registerPostprocess,
 )
 
-
 DEFAULT_VARIABILITY_BATCH_SIZE = 8
 
 
@@ -50,6 +49,7 @@ def _compute_variability_batch(file_paths):
         ["waveform_shape_metrics"],
         ["waveform_shape_metrics_denoised"],
     ],
+    input_methods=["file_batch", "cohort_batch", "zip_batch"],
 )
 class VariabilityHeterogeneityPostprocess(BatchPostprocess):
     def run(self, context: PostprocessContext) -> PostprocessResult:
