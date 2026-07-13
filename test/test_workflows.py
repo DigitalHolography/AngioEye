@@ -90,8 +90,10 @@ class PostprocessRequirementTests(unittest.TestCase):
                 "waveform_shape_metrics_denoised",
             ),
             required_pipeline_options=(
-                ("waveform_shape_metrics",),
-                ("waveform_shape_metrics_denoised",),
+                (
+                    "waveform_shape_metrics",
+                    "waveform_shape_metrics_denoised",
+                ),
             ),
             selected_pipeline_names=("waveform_shape_metrics",),
         )
@@ -99,25 +101,38 @@ class PostprocessRequirementTests(unittest.TestCase):
         self.assertEqual((processed_output,), result.files)
         self.assertEqual((), result.skipped)
 
-    def test_alternative_required_pipeline_errors_accept_either_selection(self):
+    def test_pipeline_option_groups_require_each_group(self):
         postprocess = type(
             "Postprocess",
             (),
             {
                 "name": "Variability",
                 "required_pipeline_options": (
-                    ("waveform_shape_metrics",),
-                    ("waveform_shape_metrics_denoised",),
+                    ("one", "one_alternative"),
+                    ("two", "two_alternative"),
                 ),
             },
         )()
 
         errors = missing_required_pipeline_errors(
             postprocesses=(postprocess,),
-            selected_pipeline_names=("waveform_shape_metrics",),
+            selected_pipeline_names=("one_alternative", "two"),
         )
 
         self.assertEqual([], errors)
+
+        errors = missing_required_pipeline_errors(
+            postprocesses=(postprocess,),
+            selected_pipeline_names=("one",),
+        )
+
+        self.assertEqual(
+            [
+                "Variability requires pipeline data: "
+                "(one or one_alternative) and (two or two_alternative)"
+            ],
+            errors,
+        )
 
 
 class FilesystemWorkflowTests(unittest.TestCase):

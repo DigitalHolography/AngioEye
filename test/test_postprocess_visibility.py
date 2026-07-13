@@ -15,6 +15,7 @@ from postprocess.core import base as postprocess_base  # noqa: E402
 from postprocess.core.base import (  # noqa: E402
     DEFAULT_INPUT_METHODS,
     PostprocessResult,
+    format_required_pipeline_options,
     registerPostprocess,
 )
 from postprocess.pipeline_metrics_manifest import (  # noqa: E402
@@ -92,6 +93,37 @@ class PostprocessVisibilityTests(unittest.TestCase):
             self.assertEqual(
                 registered.input_methods,
                 list(DEFAULT_INPUT_METHODS),
+            )
+        finally:
+            postprocess_base.POSTPROCESS_REGISTRY.clear()
+            postprocess_base.POSTPROCESS_REGISTRY.update(original_registry)
+
+    def test_register_postprocess_groups_pipeline_options_as_or_with_and_groups(
+        self,
+    ) -> None:
+        original_registry = postprocess_base.POSTPROCESS_REGISTRY.copy()
+        postprocess_base.POSTPROCESS_REGISTRY.clear()
+        try:
+
+            @registerPostprocess(
+                name="Grouped Pipelines",
+                required_pipeline_options=[
+                    ["one", "one_alternative"],
+                    ["two", "two_alternative"],
+                ],
+            )
+            def grouped_pipelines(_context):
+                return PostprocessResult()
+
+            registered = postprocess_base.POSTPROCESS_REGISTRY["Grouped Pipelines"]
+
+            self.assertEqual(
+                registered.required_pipeline_options,
+                [["one", "one_alternative"], ["two", "two_alternative"]],
+            )
+            self.assertEqual(
+                format_required_pipeline_options(registered),
+                "(one or one_alternative) and (two or two_alternative)",
             )
         finally:
             postprocess_base.POSTPROCESS_REGISTRY.clear()

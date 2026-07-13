@@ -160,6 +160,9 @@ Use `@registerPostprocess(...)` to declare:
 
 - optional Python package dependencies with `required_deps`
 - required pipeline outputs with `required_pipelines`
+- grouped pipeline alternatives with `required_pipeline_options`; alternatives
+  within each inner list are OR'ed, while separate inner lists are AND'ed:
+  `[["one", "one_alternative"], ["two", "two_alternative"]]`
 
 ### Simple Postprocess Structure
 

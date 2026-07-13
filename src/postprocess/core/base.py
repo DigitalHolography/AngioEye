@@ -26,6 +26,7 @@ def registerPostprocess(
     description: str = "",
     required_deps: list[str] | None = None,
     required_pipelines: list[str] | None = None,
+    # Each inner list is an OR group; separate inner lists are ANDed.
     required_pipeline_options: list[list[str]] | None = None,
     input_methods: list[PostprocessInputMethod] | None = None,
     visibility: str = "visible",
@@ -95,12 +96,15 @@ def normalize_required_pipeline_options(
 ) -> list[list[str]]:
     if required_pipeline_options is not None:
         return [
-            list(dict.fromkeys(option))
-            for option in required_pipeline_options
-            if option
+            list(dict.fromkeys(option_group))
+            for option_group in required_pipeline_options
+            if option_group
         ]
     if required_pipelines:
-        return [list(dict.fromkeys(required_pipelines))]
+        return [
+            [pipeline_name]
+            for pipeline_name in dict.fromkeys(required_pipelines)
+        ]
     return []
 
 
@@ -125,9 +129,12 @@ def required_pipeline_options_for(obj: object) -> tuple[tuple[str, ...], ...]:
 
 def format_required_pipeline_options(obj: object) -> str:
     groups = []
-    for option in required_pipeline_options_for(obj):
-        groups.append(" + ".join(option))
-    return " or ".join(groups)
+    for option_group in required_pipeline_options_for(obj):
+        formatted_group = " or ".join(option_group)
+        groups.append(
+            f"({formatted_group})" if len(option_group) > 1 else formatted_group
+        )
+    return " and ".join(groups)
 
 
 def _build_function_postprocess(

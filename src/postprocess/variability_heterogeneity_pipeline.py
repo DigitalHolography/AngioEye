@@ -46,8 +46,10 @@ def _compute_variability_batch(file_paths):
     ),
     required_deps=["pandas>=2.1", "scipy>=1.10"],
     required_pipeline_options=[
-        ["waveform_shape_metrics"],
-        ["waveform_shape_metrics_denoised"],
+        [
+            "waveform_shape_metrics", # OR
+            "waveform_shape_metrics_denoised",
+        ],
     ],
     input_methods=["file_batch", "cohort_batch", "zip_batch"],
 )

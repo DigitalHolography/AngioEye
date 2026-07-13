@@ -116,13 +116,19 @@ def _missing_pipeline_names_for_options(
 ) -> list[str]:
     if not pipeline_options:
         return []
-    if any(set(option).issubset(available_pipeline_names) for option in pipeline_options):
-        return []
+    unsatisfied_groups = [
+        option_group
+        for option_group in pipeline_options
+        if not any(
+            pipeline_name in available_pipeline_names
+            for pipeline_name in option_group
+        )
+    ]
     return sorted(
         {
             pipeline_name
-            for option in pipeline_options
-            for pipeline_name in option
+            for option_group in unsatisfied_groups
+            for pipeline_name in option_group
             if pipeline_name not in available_pipeline_names
         }
     )
