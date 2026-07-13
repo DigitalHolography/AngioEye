@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -110,6 +110,40 @@ def read_array(
     if arr.shape == ():
         return np.asarray([arr.item()], dtype=dtype)
     return np.ravel(arr)
+
+
+def iter_h5_arrays(
+    h5_path: Path | str,
+    dataset_names: Sequence[str],
+    *,
+    group_paths: Sequence[str] = ("/",),
+    dtype=None,
+    ndim: int | None = None,
+) -> Iterator[tuple[str, np.ndarray]]:
+    """Yield requested arrays from the first matching group in priority order.
+
+    The file is opened once for the lifetime of the iterator. For each dataset name,
+    ``group_paths`` are searched in order. If ``ndim`` is provided, a dataset found
+    with another dimensionality is skipped without falling through to a lower-priority
+    group.
+    """
+    with open_h5(h5_path, "r") as h5file:
+        groups = [
+            group
+            for group_path in group_paths
+            if isinstance((group := h5file.get(group_path)), h5py.Group)
+        ]
+
+        for dataset_name in dataset_names:
+            for group in groups:
+                dataset = group.get(dataset_name)
+                if not isinstance(dataset, h5py.Dataset):
+                    continue
+
+                arr = np.asarray(dataset, dtype=dtype)
+                if ndim is None or arr.ndim == ndim:
+                    yield dataset_name, arr
+                break
 
 
 def create_unique_group(parent: h5py.Group, base_name: str) -> h5py.Group:

@@ -19,10 +19,10 @@ except ImportError as exc:
         "This script requires scipy for Mann-Whitney tests. Install it with: pip install scipy"
     ) from exc
 
-from input_output.hdf5_io import find_first_existing_path
 from input_output.archive_io import replace_folder_in_zip
+from input_output.hdf5_io import MetricsTree, iter_h5_arrays
+
 from ..core.grouped_batch import extract_group_name, iter_grouped_h5_files_in_zip
-from input_output.hdf5_io import MetricsTree
 
 
 SEGMENT_METRIC_FOLDERS = (
@@ -169,24 +169,34 @@ def extract_sort_key(filename):
     return date, hd_index
 
 
-def extract_segment_metric(h5_path, metric_name, mode=SEGMENT_MODE):
-    suffix = f"{mode}/{metric_name}"
-    candidate_paths = [
-        f"{folder.rstrip('/')}/{suffix}" for folder in SEGMENT_METRIC_FOLDERS
+def iter_segment_metrics(
+    h5_path,
+    metric_names,
+    mode=SEGMENT_MODE,
+    *,
+    metric_folders=SEGMENT_METRIC_FOLDERS,
+):
+    """Yield available 3D metric arrays while opening the HDF5 file only once."""
+    group_paths = [
+        f"{folder.rstrip('/')}/{mode}" for folder in metric_folders
     ]
+    yield from iter_h5_arrays(
+        h5_path,
+        metric_names,
+        group_paths=group_paths,
+        dtype=float,
+        ndim=3,
+    )
 
-    with h5py.File(h5_path, "r") as f:
-        dataset_path = find_first_existing_path(f, candidate_paths)
 
-        if dataset_path is None:
-            return None
-
-        arr = np.array(f[dataset_path], dtype=float)
-
-    if arr.ndim != 3:
-        return None
-
-    return arr
+def extract_segment_metric(h5_path, metric_name, mode=SEGMENT_MODE):
+    for _metric_name, arr in iter_segment_metrics(
+        h5_path,
+        (metric_name,),
+        mode=mode,
+    ):
+        return arr
+    return None
 
 
 # -----------------------------------------------------------------------------
@@ -357,11 +367,7 @@ def compute_file_higher_metric_blocks(
 ):
     blocks = {}
 
-    for metric_name in metrics:
-        arr = extract_segment_metric(file_path, metric_name, mode=mode)
-        if arr is None:
-            continue
-
+    for metric_name, arr in iter_segment_metrics(file_path, metrics, mode=mode):
         high = compute_file_higher_metrics_from_segment_array(arr)
         if high is None:
             continue
