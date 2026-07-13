@@ -5,12 +5,11 @@ from collections import defaultdict
 from pathlib import Path
 import shutil
 import h5py
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import matplotlib
 
-matplotlib.use("Agg")
+matplotlib.use("Agg", force=True)
 
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FormatStrFormatter

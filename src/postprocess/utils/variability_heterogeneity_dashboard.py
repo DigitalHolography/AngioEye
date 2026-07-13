@@ -9,7 +9,7 @@ import pandas as pd
 
 import matplotlib
 
-matplotlib.use("Agg")
+matplotlib.use("Agg", force=True)
 import matplotlib.pyplot as plt
 
 try:
@@ -33,6 +33,8 @@ SEGMENT_MODE = "bandlimited_segment"
 EPS = 1e-12
 
 DEFAULT_TOP_N = 10
+PLOT_STYLE = "default"
+PNG_PIL_KWARGS = {"compress_level": 1}
 
 CONTROL_GROUP_PATTERNS = [
     r"^control$",
@@ -1601,7 +1603,10 @@ def export_variability_value_plots(
             if not group_values:
                 continue
 
-            fig, ax = plt.subplots(figsize=(max(6, 1.2 * len(group_values)), 4.5))
+            fig, ax = plt.subplots(
+                figsize=(max(6, 1.2 * len(group_values)), 4.5),
+                layout="constrained",
+            )
 
             positions = np.arange(1, len(group_values) + 1)
 
@@ -1633,7 +1638,6 @@ def export_variability_value_plots(
                 f"{domain_name.capitalize()} {descriptor_name} variability for {metric_name}"
             )
             ax.grid(axis="y", alpha=0.25)
-            fig.tight_layout()
 
             filename = (
                 f"{safe_name(domain_name)}_"
@@ -1641,7 +1645,7 @@ def export_variability_value_plots(
                 f"{safe_name(metric_name)}_by_group.png"
             )
             path = out_dir / filename
-            fig.savefig(path, dpi=dpi, bbox_inches="tight")
+            fig.savefig(path, dpi=dpi, pil_kwargs=PNG_PIL_KWARGS)
             plt.close(fig)
             generated.append(path)
 
@@ -2301,6 +2305,8 @@ def export_group_tables_from_results(
     temporal_cmp_dir = out_dir / "temporal" / "comparisons_vs_control"
     spatial_fig_dir = out_dir / "spatial" / "figures"
     temporal_fig_dir = out_dir / "temporal" / "figures"
+
+    plt.style.use(PLOT_STYLE)
 
     if out_dir.is_dir():
         shutil.rmtree(out_dir)

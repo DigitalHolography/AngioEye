@@ -4,6 +4,9 @@ from pathlib import Path
 from collections import defaultdict
 from tkinter import Tk, filedialog
 import h5py
+import matplotlib
+
+matplotlib.use("Agg", force=True)
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
