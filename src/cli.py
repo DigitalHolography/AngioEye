@@ -3,7 +3,7 @@ Run AngioEye pipelines from the command line.
 
 Usage example:
     python cli.py --data data/ --pipelines pipelines.txt \
-        --postprocess postprocess.txt --output ./results --zip \
+        --postprocesses "HTML summary" --output ./results --zip \
         --zip-name my_run.zip
 
 Inputs:
@@ -11,16 +11,14 @@ Inputs:
                        file,
                        a .zip archive of .h5 files, one or more .holo files, or a .txt
                        holo path list. May be repeated for multiple explicit inputs.
-    --pipelines / -p   Text file listing pipeline names (one per line, '#' and blank
-                       lines ignored).
-    --pipeline         Pipeline name; may be repeated. Combined with --pipelines.
-    --postprocess      Optional text file listing postprocess names (one per line, '#'
-                       and blank lines ignored).
-    --postprocess-step Postprocess name; may be repeated. Combined with --postprocess.
+    --pipelines        One or more pipeline names, a text file listing names, or a
+                       list literal such as ["pipeline1", "pipeline2"].
+    --postprocesses    One or more postprocess names, a text file listing names, or
+                       a list literal such as ["postprocess1", "postprocess2"].
     --output / -o      Base directory where results will be written (input subfolder
                        layout is preserved).
-    --trim-source / -t When set, source HDF5 contents will not be copied into pipeline
-                       output files (reducing output size, but losing provenance).
+    --keep-source      When set, persist the source HDF5 contents in pipeline output
+                       files (increasing output size but preserving provenance).
     --zip / -z         When set, compress the outputs into a .zip archive after
                        completion.
                        Companion report folders such as png/ are kept next to it.
@@ -30,12 +28,18 @@ Inputs:
 from __future__ import annotations
 
 import argparse
+import ast
 import multiprocessing
 import sys
 import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from app_settings import (
+    AppSettingsStore,
+    normalize_pipeline_visibility,
+    normalize_postprocess_visibility,
+)
 from pipelines import PipelineDescriptor, load_pipeline_catalog
 from postprocess import PostprocessDescriptor, load_postprocess_catalog
 from workflows import (
@@ -68,6 +72,19 @@ def _build_postprocess_registry() -> dict[str, PostprocessDescriptor]:
     }
 
 
+def _default_selected_names(
+    registry: dict[str, object],
+    *,
+    visibility_loader: Callable[[], dict[str, bool]],
+    normalize_visibility: Callable[..., tuple[dict[str, bool], bool]],
+) -> list[str]:
+    visibility, _changed = normalize_visibility(
+        registry.keys(),
+        visibility_loader(),
+    )
+    return [name for name in registry if visibility.get(name, False)]
+
+
 def _load_name_list(path: Path) -> list[str]:
     raw_lines = path.read_text(encoding="utf-8").splitlines()
     return [
@@ -89,14 +106,62 @@ def _dedupe_names(names: Sequence[str]) -> list[str]:
     return deduped
 
 
-def _selected_names(
-    selection_file: Path | None,
-    inline_names: Sequence[str],
-) -> list[str]:
+def _parse_list_literal(value: str) -> list[str] | None:
+    stripped = value.strip()
+    if not (stripped.startswith("[") and stripped.endswith("]")):
+        return None
+    try:
+        parsed = ast.literal_eval(stripped)
+    except (SyntaxError, ValueError):
+        parsed = None
+    if isinstance(parsed, (list, tuple)):
+        return [str(item) for item in parsed]
+
+    # Some shells remove quotes from an unquoted expression such as
+    # [pipeline1, pipeline2]. Keep that convenient form working too.
+    inner = stripped[1:-1].strip()
+    if not inner:
+        return []
+    return [part.strip().strip("'\"") for part in inner.replace(",", " ").split()]
+
+
+def _expand_selection_values(values: Sequence[str | Path] | None) -> list[str]:
+    """Flatten repeated values and shell-friendly list literals."""
+
+    if not values:
+        return []
+    if isinstance(values, (str, Path)):
+        values = (values,)
+    expanded: list[str] = []
+    pending: list[str] = []
+    bracket_depth = 0
+    for raw_value in values:
+        value = str(raw_value).strip()
+        if not value:
+            continue
+        if pending or value.startswith("["):
+            pending.append(value)
+            bracket_depth += value.count("[") - value.count("]")
+            if bracket_depth > 0:
+                continue
+            value = " ".join(pending)
+            pending.clear()
+            bracket_depth = 0
+        parsed = _parse_list_literal(value)
+        expanded.extend(parsed if parsed is not None else [value])
+    if pending:
+        expanded.append(" ".join(pending))
+    return _dedupe_names(expanded)
+
+
+def _selected_names(selection_values: Sequence[str | Path] | None) -> list[str]:
     names: list[str] = []
-    if selection_file is not None:
-        names.extend(_load_name_list(selection_file))
-    names.extend(inline_names)
+    for value in _expand_selection_values(selection_values):
+        selection_file = Path(value).expanduser()
+        if selection_file.is_file():
+            names.extend(_load_name_list(selection_file))
+        else:
+            names.append(value)
     return _dedupe_names(names)
 
 
@@ -136,24 +201,38 @@ def _prepare_cli_input(paths: Sequence[Path]) -> WorkflowInputSelection:
 
 def run_cli(
     data_paths: str | Path | Sequence[str | Path],
-    pipelines_file: Path | None,
-    postprocess_file: Path | None,
-    output_dir: str | Path,
-    pipeline_names: Sequence[str] = (),
-    postprocess_names: Sequence[str] = (),
-    trim_source: bool = False,
+    pipelines_file: Path | Sequence[str | Path] | None,
+    postprocess_file: Path | Sequence[str | Path] | None,
+    output_dir: str | Path | None,
+    persist_source: bool = False,
     zip_outputs: bool = False,
     zip_name: str | None = None,
 ) -> int:
     data_paths = _normalize_data_paths(data_paths)
     try:
-        selected_pipeline_names = _selected_names(pipelines_file, pipeline_names)
-        selected_postprocess_names = _selected_names(postprocess_file, postprocess_names)
+        pipeline_registry = _build_pipeline_registry()
+        postprocess_registry = _build_postprocess_registry()
+        settings_store = AppSettingsStore()
+        effective_persist_source = bool(persist_source)
+        selected_pipeline_names = _selected_names(pipelines_file)
+        if not pipelines_file:
+            selected_pipeline_names = _default_selected_names(
+                pipeline_registry,
+                visibility_loader=settings_store.load_pipeline_visibility,
+                normalize_visibility=normalize_pipeline_visibility,
+            )
+        selected_postprocess_names = _selected_names(postprocess_file)
+        if not postprocess_file:
+            selected_postprocess_names = _default_selected_names(
+                postprocess_registry,
+                visibility_loader=settings_store.load_postprocess_visibility,
+                normalize_visibility=normalize_postprocess_visibility,
+            )
         work_selection = resolve_work_selection(
             selected_pipeline_names,
-            _build_pipeline_registry(),
+            pipeline_registry,
             selected_postprocess_names,
-            _build_postprocess_registry(),
+            postprocess_registry,
         )
         input_selection = _prepare_cli_input(data_paths)
         request = build_workflow_request(
@@ -161,10 +240,10 @@ def run_cli(
                 input_selection=input_selection,
                 work_selection=work_selection,
                 output_options=WorkflowOutputOptions(
-                    base_output_value=str(output_dir),
+                    base_output_value="" if output_dir is None else str(output_dir),
                     zip_outputs=zip_outputs,
                     zip_name=zip_name or "outputs.zip",
-                    trim_source=trim_source,
+                    persist_source=effective_persist_source,
                 ),
             ),
             zip_output_dir=zip_output_dir,
@@ -240,34 +319,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
-        "-p",
         "--pipelines",
-        type=Path,
+        nargs="+",
         default=None,
         help=(
-            "Text file with pipeline names to run (one per line, '#' and blank "
-            "lines ignored)."
+            "Pipeline name(s), a text file with one name per line, or a list "
+            "such as ['pipeline1', 'pipeline2']. If omitted, use settings."
         ),
     )
     parser.add_argument(
-        "--pipeline",
-        action="append",
-        default=[],
-        help="Pipeline name to run; may be repeated and is combined with --pipelines.",
-    )
-    parser.add_argument(
-        "--postprocess",
-        type=Path,
+        "--postprocesses",
+        nargs="+",
         default=None,
-        help="Optional text file with postprocess names to run after pipelines.",
-    )
-    parser.add_argument(
-        "--postprocess-step",
-        action="append",
-        default=[],
         help=(
-            "Postprocess step name to run; may be repeated and is combined with "
-            "--postprocess."
+            "Postprocess name(s), a text file with one name per line, or a list "
+            "such as ['postprocess1', 'postprocess2']. If omitted, use settings."
         ),
     )
     parser.add_argument(
@@ -277,18 +343,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=None,
         help=(
             "Base output directory. Input subfolder layout is preserved for "
-            "output files."
+            "output files. If omitted, derive it from the input like the GUI."
         ),
     )
-    parser.add_argument(
-        "-t",
-        "--trim-source",
+    persist_group = parser.add_mutually_exclusive_group()
+    persist_group.add_argument(
+        "--keep-source",
+        dest="persist_source",
         action="store_true",
-        help=(
-            "When set, source HDF5 contents will not be copied into pipeline "
-            "output files (reducing output size, but losing provenance)."
-        ),
+        help="Persist source HDF5 contents into pipeline output files.",
     )
+    persist_group.set_defaults(persist_source=False)
     parser.add_argument(
         "-z",
         "--zip",
@@ -328,16 +393,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if not args.data:
             parser.error("the following arguments are required: -d/--data")
-        if args.output is None:
-            parser.error("the following arguments are required: -o/--output")
         return run_cli(
             args.data,
             args.pipelines,
-            args.postprocess,
+            args.postprocesses,
             args.output,
-            pipeline_names=args.pipeline,
-            postprocess_names=args.postprocess_step,
-            trim_source=args.trim_source,
+            persist_source=args.persist_source,
             zip_outputs=args.zip,
             zip_name=args.zip_name,
         )
@@ -348,9 +409,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 def _log_cli(message: str) -> None:
     if message.startswith("[POST FAIL]") or message.startswith("[POST WARN]"):
-        print(message, file=sys.stderr)
+        print(message, file=sys.stderr, flush=True)
     else:
-        print(message)
+        print(message, flush=True)
 
 
 def _cli_workflow_callbacks() -> WorkflowCallbacks:
@@ -373,7 +434,7 @@ def _make_cli_zip_progress_callback():
         now = time.monotonic()
         if done == total or (now - last_progress_log) >= 0.5:
             pct = 100 if total == 0 else int((done * 100) / total)
-            print(f"[ZIP] {done}/{total} files ({pct}%)")
+            print(f"[ZIP] {done}/{total} files ({pct}%)", flush=True)
             last_progress_log = now
 
     return _zip_progress

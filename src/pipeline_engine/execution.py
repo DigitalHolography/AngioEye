@@ -67,7 +67,7 @@ def run_pipeline_file(
     output_relative_parent: Path = Path("."),
     output_filename: str | None = None,
     *,
-    trim_source: bool = True,
+    persist_source: bool = False,
     log: LogCallback | None = None,
     advance_progress: ProgressCallback | None = None,
     write_idle_callback: IdleCallback | None = None,
@@ -115,7 +115,7 @@ def run_pipeline_file(
             pipeline_results=pipeline_results,
             output_path=output_path,
             source_file=str(h5_path),
-            trim_source=trim_source,
+            persist_source=persist_source,
             idle_callback=write_idle_callback,
             record_timing=record_timing,
         )
@@ -347,7 +347,7 @@ def _write_pipeline_output(
     pipeline_results: Sequence[tuple[str, ProcessResult]],
     output_path: Path,
     source_file: str,
-    trim_source: bool,
+    persist_source: bool,
     idle_callback: IdleCallback | None,
     record_timing: TimingCallback | None,
 ) -> None:
@@ -356,7 +356,7 @@ def _write_pipeline_output(
             pipeline_results=pipeline_results,
             output_path=output_path,
             source_file=source_file,
-            trim_source=trim_source,
+            persist_source=persist_source,
             record_timing=record_timing,
         )
         return
@@ -370,7 +370,7 @@ def _write_pipeline_output(
                 pipeline_results=pipeline_results,
                 output_path=output_path,
                 source_file=source_file,
-                trim_source=trim_source,
+                persist_source=persist_source,
                 record_timing=record_timing,
             )
         except Exception as exc:  # noqa: BLE001
@@ -398,20 +398,15 @@ def _write_pipeline_output_sync(
     pipeline_results: Sequence[tuple[str, ProcessResult]],
     output_path: Path,
     source_file: str,
-    trim_source: bool,
+    persist_source: bool,
     record_timing: TimingCallback | None,
 ) -> None:
-    copy_source = not pipeline_results
-    source_mode = (
-        "source copy disabled"
-        if trim_source and not copy_source
-        else "source copy enabled"
-    )
+    source_mode = "source copy enabled" if persist_source else "source copy disabled"
     create_started_at = time.monotonic()
     create_h5_file(
         output_path,
         source_file=source_file,
-        trim_source=trim_source and not copy_source,
+        persist_source=persist_source,
     )
     _record_timing(
         record_timing,

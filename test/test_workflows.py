@@ -628,7 +628,7 @@ class WorkflowDispatchTests(unittest.TestCase):
             "base_output_dir": tmp_path / "outputs",
             "zip_outputs": False,
             "zip_name": "outputs.zip",
-            "trim_source": True,
+            "persist_source": True,
             "zip_output_dir": lambda folder, target_path=None, progress_callback=None: (
                 target_path or folder / "outputs.zip"
             ),

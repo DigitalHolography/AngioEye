@@ -21,6 +21,6 @@
     "Group comparison (Dashboard) - Waveform Shape Metrics": false,
     "HTML summary": true
   },
-  "trim_h5source": true,
+  "persist_source": false,
   "ui_mode": "minimal"
 }

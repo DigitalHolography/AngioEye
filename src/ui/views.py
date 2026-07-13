@@ -183,7 +183,7 @@ class RunTab(ttk.Frame):
             advanced_input_frame,
             text="Persist Eyeflow Data",
             variable=controller.persist_eyeflow_data_var,
-            command=controller.persist_trim_h5source,
+            command=controller.persist_source_preference,
         )
         persist_eyeflow_data_btn.grid(row=3, column=1, sticky="w", pady=(12, 0))
 

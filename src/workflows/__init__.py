@@ -35,6 +35,7 @@ from .request_state import (
     WorkflowWorkSelection,
     build_workflow_request,
     resolve_base_output_dir,
+    resolve_workflow_output_dir,
     resolve_work_selection,
 )
 from .runs import (
@@ -82,6 +83,7 @@ __all__ = [
     "reset_output_dir",
     "read_holo_path_list",
     "resolve_base_output_dir",
+    "resolve_workflow_output_dir",
     "resolve_work_selection",
     "resolve_context",
     "resolve_stem_context",

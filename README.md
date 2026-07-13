@@ -99,7 +99,11 @@ The CLI is designed for batch processing in headless environments or clusters.
 
 ```sh
 # Via the same entry point (arguments select CLI mode)
-angioeye --data data/ --pipelines pipelines.txt --output ./results
+angioeye --data data/ --pipelines waveform_shape_metrics --output ./results
+
+# Multiple names can follow one option, or be supplied as a list literal
+angioeye --data data/ --pipelines pipeline1 pipeline2 --postprocesses "HTML summary"
+angioeye --data data/ --pipelines '["pipeline1", "pipeline2"]'
 
 # Or via the script
 python src/cli.py --data data/ --pipelines pipelines.txt --output ./results

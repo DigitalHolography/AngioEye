@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from input_output import prepare_run_input, prepare_run_inputs
+from input_output import InputPlan, prepare_run_input, prepare_run_inputs
 
 from ._postprocess_requirements import missing_required_pipeline_errors
 from .dispatch import OutputFilenameResolver, WorkflowInputError, WorkflowRunRequest
@@ -34,7 +34,7 @@ class WorkflowOutputOptions:
     base_output_value: str
     zip_outputs: bool
     zip_name: str
-    trim_source: bool
+    persist_source: bool = False
 
 
 @dataclass(frozen=True)
@@ -146,20 +146,47 @@ def build_workflow_request(
         holo_paths=input_selection.holo_paths
         if input_selection.convention == "holo"
         else (),
-        base_output_dir=(
-            cwd()
-            if input_selection.convention == "holo"
-            else resolve_base_output_dir(output_options.base_output_value, cwd=cwd)
+        base_output_dir=resolve_workflow_output_dir(
+            input_selection=input_selection,
+            input_plan=input_plan,
+            output_value=output_options.base_output_value,
+            cwd=cwd,
         ),
         pipelines=work_selection.pipelines,
         postprocesses=work_selection.postprocesses,
         selected_pipeline_names=work_selection.pipeline_names,
         zip_outputs=output_options.zip_outputs,
         zip_name=output_options.zip_name,
-        trim_source=output_options.trim_source,
+        persist_source=output_options.persist_source,
         zip_output_dir=zip_output_dir,
         output_filename_for_run=output_filename_for_run,
     )
+
+
+def resolve_workflow_output_dir(
+    *,
+    input_selection: WorkflowInputSelection,
+    input_plan: InputPlan | None,
+    output_value: str,
+    cwd: Callable[[], Path] = Path.cwd,
+) -> Path:
+    """Resolve an explicit output or the GUI-equivalent input-based default."""
+    if input_selection.convention == "holo":
+        return cwd()
+    if output_value.strip():
+        return resolve_base_output_dir(output_value, cwd=cwd)
+    if input_plan is None:
+        return cwd()
+
+    input_path = input_plan.input_path
+    if input_plan.kind == "zip":
+        default_dir = input_path.parent / f"{input_path.stem}_angioeye"
+    elif input_plan.kind == "file" and input_path.is_file():
+        default_dir = input_path.parent
+    else:
+        default_dir = input_path
+    default_dir.mkdir(parents=True, exist_ok=True)
+    return default_dir
 
 
 def resolve_base_output_dir(
