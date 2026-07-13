@@ -7,14 +7,12 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from input_output import (
-    create_zip_from_tree,
     found_status_text,
     h5_output_dir,
     holo_input_status,
     is_hdf5_path,
 )
 from workflows import (
-    ZIP_COMPANION_OUTPUT_FOLDERS,
     HoloInputContext,
     WorkflowCallbacks,
     WorkflowInputError,
@@ -32,6 +30,7 @@ from workflows import (
     read_holo_path_list,
     reset_output_dir as reset_holo_output_dir,
     resolve_context as resolve_holo_context,
+    zip_output_dir as shared_zip_output_dir,
 )
 
 from ..services import services_for
@@ -134,8 +133,8 @@ class RunTabController(ViewController):
     def is_supported_file_input(self, input_path: Path) -> bool:
         return is_hdf5_path(input_path) or input_path.suffix.lower() == ".zip"
 
-    def persist_trim_h5source(self) -> None:
-        self.app._persist_trim_h5source()
+    def persist_source_preference(self) -> None:
+        self.app._persist_source_preference()
 
     def run(self) -> None:
         self.app._reset_progress()
@@ -194,7 +193,7 @@ class RunTabController(ViewController):
             base_output_value=(self.app.batch_output_var.get() or "").strip(),
             zip_outputs=bool(self.app.batch_zip_var.get()),
             zip_name=self.app.batch_zip_name_var.get(),
-            trim_source=self.trim_eyeflow_source(),
+            persist_source=self.persist_source(),
         )
 
     def collect_work_selection(self) -> WorkflowWorkSelection | None:
@@ -605,27 +604,11 @@ class RunTabController(ViewController):
         target_path: Path | None = None,
         progress_callback: Callable[[int, int, Path], None] | None = None,
     ) -> Path:
-        folder = folder.expanduser().resolve()
-        if not folder.exists() or not folder.is_dir():
-            raise FileNotFoundError(f"Output folder does not exist: {folder}")
-        if target_path is None:
-            zip_name = f"{folder.name}_outputs.zip" if folder.name else "outputs.zip"
-            zip_path = folder.parent / zip_name
-        else:
-            zip_path = target_path.expanduser().resolve()
-        if zip_path.exists():
-            zip_path.unlink()
-        return create_zip_from_tree(
-            folder,
-            zip_path,
-            exclude_root_dirs=ZIP_COMPANION_OUTPUT_FOLDERS,
-            compresslevel=1,
-            progress_callback=progress_callback,
-        )
+        return shared_zip_output_dir(folder, target_path, progress_callback)
 
-    def trim_eyeflow_source(self) -> bool:
+    def persist_source(self) -> bool:
         persist_var = getattr(self.app, "_persist_eyeflow_data", None)
-        return not bool(persist_var.get()) if persist_var is not None else True
+        return bool(persist_var.get()) if persist_var is not None else False
 
     def update_ui(self) -> None:
         try:

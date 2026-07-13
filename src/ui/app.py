@@ -73,7 +73,7 @@ class ProcessApp(
         self._minimal_logo_image: tk.PhotoImage | None = None
         self._minimal_title_font: tkfont.Font | None = None
         self._persist_eyeflow_data = tk.BooleanVar(
-            value=not self.settings_store.load_trim_h5source()
+            value=self.settings_store.load_persist_source()
         )
         self.run_controller = RunTabController(self)
         self.workflow_selection_controller = WorkflowSelectionController(self)

@@ -40,8 +40,8 @@ class WorkflowRunRequest:
     base_output_dir: Path
     zip_outputs: bool
     zip_name: str
-    trim_source: bool
     zip_output_dir: ZipOutputDir
+    persist_source: bool = False
     input_plan: InputPlan | None = None
     holo_paths: Sequence[Path] = ()
     zip_batch_settings: ZipBatchSettings = field(
@@ -360,7 +360,7 @@ def _pipeline_file_runner(
     if worker_safe:
         return functools.partial(
             run_pipeline_file,
-            trim_source=request.trim_source,
+            persist_source=request.persist_source,
             log=None,
             advance_progress=None,
             write_idle_callback=None,
@@ -382,7 +382,7 @@ def _pipeline_file_runner(
             output_root,
             output_relative_parent,
             output_filename,
-            trim_source=request.trim_source,
+            persist_source=request.persist_source,
             log=callbacks.log,
             advance_progress=callbacks.advance_progress,
             write_idle_callback=callbacks.idle_callback,

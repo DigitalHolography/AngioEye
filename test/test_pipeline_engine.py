@@ -78,6 +78,30 @@ class PipelineEngineTests(unittest.TestCase):
                     tmp_path / "outputs",
                 )
 
+    def test_persist_source_is_opt_in_and_copies_source_contents(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            input_path = tmp_path / "sample.h5"
+            with h5py.File(input_path, "w") as h5file:
+                h5file.create_dataset("eyeflow", data=[1, 2, 3])
+
+            default_output = run_pipeline_file(
+                input_path,
+                [_PipelineDescriptor()],
+                tmp_path / "default",
+            )
+            persisted_output = run_pipeline_file(
+                input_path,
+                [_PipelineDescriptor()],
+                tmp_path / "persisted",
+                persist_source=True,
+            )
+
+            with h5py.File(default_output, "r") as h5file:
+                self.assertNotIn("eyeflow", h5file)
+            with h5py.File(persisted_output, "r") as h5file:
+                self.assertIn("eyeflow", h5file)
+
     def test_run_postprocesses_propagates_metadata_failures(self):
         calls: list[str] = []
         logs: list[str] = []

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
-from postprocess import PostprocessDescriptor
-from workflows import WorkflowWorkSelection
+from workflows import (
+    WorkflowInputError,
+    WorkflowWorkSelection,
+    resolve_work_selection,
+)
 
 from ..services import services_for
 from .base import ViewController
@@ -21,45 +24,17 @@ class WorkflowSelectionController(ViewController):
             if postprocess.available
             and self.app.postprocess_visibility.get(postprocess.name, False)
         ]
-        if not pipeline_names and not selected_postprocess_names:
-            services_for(self.app).dialogs.showwarning(
-                "No work selected",
-                "Select at least one pipeline or postprocess step.",
+        try:
+            return resolve_work_selection(
+                pipeline_names,
+                self.app.pipeline_registry,
+                selected_postprocess_names,
+                self.app.postprocess_registry,
             )
-            return None
-
-        pipelines = []
-        missing: list[str] = []
-        for name in pipeline_names:
-            pipeline = self.app.pipeline_registry.get(name)
-            if pipeline is None:
-                missing.append(name)
+        except WorkflowInputError as exc:
+            dialog = services_for(self.app).dialogs
+            if exc.title == "No work selected":
+                dialog.showwarning(exc.title, exc.message)
             else:
-                pipelines.append(pipeline)
-        if missing:
-            services_for(self.app).dialogs.showerror(
-                "Pipeline missing",
-                f"Pipeline(s) not registered: {', '.join(missing)}",
-            )
+                dialog.showerror(exc.title, exc.message)
             return None
-
-        postprocesses: list[PostprocessDescriptor] = []
-        missing_postprocesses: list[str] = []
-        for name in selected_postprocess_names:
-            postprocess = self.app.postprocess_registry.get(name)
-            if postprocess is None:
-                missing_postprocesses.append(name)
-            else:
-                postprocesses.append(postprocess)
-        if missing_postprocesses:
-            services_for(self.app).dialogs.showerror(
-                "Postprocess missing",
-                f"Postprocess step(s) not registered: {', '.join(missing_postprocesses)}",
-            )
-            return None
-
-        return WorkflowWorkSelection(
-            pipeline_names=tuple(pipeline_names),
-            pipelines=tuple(pipelines),
-            postprocesses=tuple(postprocesses),
-        )
