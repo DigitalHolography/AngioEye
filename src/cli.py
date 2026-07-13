@@ -33,28 +33,25 @@ import argparse
 import multiprocessing
 import sys
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import TypeVar
 
-from input_output import create_zip_from_tree
 from pipelines import PipelineDescriptor, load_pipeline_catalog
 from postprocess import PostprocessDescriptor, load_postprocess_catalog
 from workflows import (
-    ZIP_COMPANION_OUTPUT_FOLDERS,
     WorkflowCallbacks,
     WorkflowInputError,
-    WorkflowRunRequest,
-    ZipBatchSettings,
+    WorkflowInputSelection,
+    WorkflowOutputOptions,
+    WorkflowRequestState,
+    build_workflow_request,
     dispatch_workflow,
-    missing_required_pipeline_errors,
-    prepare_run_input,
-    prepare_run_inputs,
+    resolve_work_selection,
+    zip_output_dir,
 )
 
 HOLO_SUFFIX = ".holo"
 INPUT_LIST_SUFFIX = ".txt"
-Descriptor = TypeVar("Descriptor")
 
 
 def _build_pipeline_registry() -> dict[str, PipelineDescriptor]:
@@ -64,7 +61,11 @@ def _build_pipeline_registry() -> dict[str, PipelineDescriptor]:
 
 def _build_postprocess_registry() -> dict[str, PostprocessDescriptor]:
     available, _missing = load_postprocess_catalog()
-    return {postprocess.name: postprocess for postprocess in available}
+    return {
+        postprocess.name: postprocess
+        for postprocess in available
+        if getattr(postprocess, "visibility", "visible") != "hidden"
+    }
 
 
 def _load_name_list(path: Path) -> list[str]:
@@ -99,44 +100,6 @@ def _selected_names(
     return _dedupe_names(names)
 
 
-def _resolve_named_items(
-    names: Sequence[str],
-    registry: Mapping[str, Descriptor],
-    *,
-    label: str,
-) -> list[Descriptor]:
-    selected: list[Descriptor] = []
-    missing: list[str] = []
-    for name in names:
-        item = registry.get(name)
-        if item is None:
-            missing.append(name)
-        else:
-            selected.append(item)
-    if missing:
-        available = ", ".join(registry.keys())
-        raise ValueError(
-            f"Unknown {label}(s): {', '.join(missing)}. Available: {available}"
-        )
-    return selected
-
-
-def _validate_postprocess_selection(
-    postprocesses: Sequence[PostprocessDescriptor],
-    selected_pipeline_names: Sequence[str],
-    reusable_h5_paths: Sequence[Path] = (),
-    defer_when_no_reusable_paths: bool = False,
-) -> None:
-    errors = missing_required_pipeline_errors(
-        postprocesses=postprocesses,
-        selected_pipeline_names=selected_pipeline_names,
-        reusable_h5_paths=reusable_h5_paths,
-        defer_when_no_reusable_paths=defer_when_no_reusable_paths,
-    )
-    if errors:
-        raise ValueError("\n".join(errors))
-
-
 def _is_holo_selection(paths: Sequence[Path]) -> bool:
     if len(paths) == 1 and paths[0].suffix.lower() == INPUT_LIST_SUFFIX:
         return True
@@ -151,40 +114,23 @@ def _normalize_data_paths(
     return tuple(Path(path) for path in data_paths)
 
 
-def _prepare_cli_input(paths: Sequence[Path]):
+def _prepare_cli_input(paths: Sequence[Path]) -> WorkflowInputSelection:
     expanded_paths = tuple(path.expanduser() for path in paths)
     if not expanded_paths:
         raise ValueError("Provide at least one --data path.")
     if _is_holo_selection(expanded_paths):
-        return "holo", None, expanded_paths
+        return WorkflowInputSelection(
+            convention="holo",
+            holo_paths=expanded_paths,
+        )
     if len(expanded_paths) == 1:
-        input_plan = prepare_run_input(expanded_paths[0])
-    else:
-        input_plan = prepare_run_inputs(expanded_paths)
-    return input_plan.kind, input_plan, ()
-
-
-def _zip_output_dir(
-    folder: Path,
-    target_path: Path | None = None,
-    progress_callback: Callable[[int, int, Path], None] | None = None,
-) -> Path:
-    folder = folder.expanduser().resolve()
-    if not folder.exists() or not folder.is_dir():
-        raise FileNotFoundError(f"Output folder does not exist: {folder}")
-    if target_path is None:
-        zip_name = f"{folder.name}_outputs.zip" if folder.name else "outputs.zip"
-        zip_path = folder.parent / zip_name
-    else:
-        zip_path = target_path.expanduser().resolve()
-    if zip_path.exists():
-        zip_path.unlink()
-    return create_zip_from_tree(
-        folder,
-        zip_path,
-        exclude_root_dirs=ZIP_COMPANION_OUTPUT_FOLDERS,
-        compresslevel=1,
-        progress_callback=progress_callback,
+        return WorkflowInputSelection(
+            convention="legacy",
+            data_value=str(expanded_paths[0]),
+        )
+    return WorkflowInputSelection(
+        convention="legacy",
+        legacy_input_paths=expanded_paths,
     )
 
 
@@ -200,58 +146,32 @@ def run_cli(
     zip_name: str | None = None,
 ) -> int:
     data_paths = _normalize_data_paths(data_paths)
-
-    registry = _build_pipeline_registry()
-    selected_pipeline_names = _selected_names(pipelines_file, pipeline_names)
-    pipelines = _resolve_named_items(
-        selected_pipeline_names,
-        registry,
-        label="pipeline",
-    )
-
-    postprocess_registry = _build_postprocess_registry()
-    selected_postprocess_names = _selected_names(postprocess_file, postprocess_names)
-    postprocesses = _resolve_named_items(
-        selected_postprocess_names,
-        postprocess_registry,
-        label="postprocess step",
-    )
-    if not pipelines and not postprocesses:
-        raise ValueError("Select at least one pipeline or postprocess step.")
-
-    mode, input_plan, holo_paths = _prepare_cli_input(data_paths)
-    reusable_h5_paths = (
-        ()
-        if input_plan is None or input_plan.is_zip
-        else input_plan.h5_paths
-    )
-    _validate_postprocess_selection(
-        postprocesses,
-        selected_pipeline_names=selected_pipeline_names,
-        reusable_h5_paths=reusable_h5_paths,
-        defer_when_no_reusable_paths=(
-            bool(input_plan and input_plan.is_zip) or (mode == "holo" and not pipelines)
-        ),
-    )
-    output_root = Path(output_dir).expanduser().resolve()
-    output_root.mkdir(parents=True, exist_ok=True)
-
     try:
-        dispatch_result = dispatch_workflow(
-            WorkflowRunRequest(
-                mode=mode,
-                input_plan=input_plan,
-                holo_paths=holo_paths,
-                pipelines=pipelines,
-                postprocesses=postprocesses,
-                selected_pipeline_names=selected_pipeline_names,
-                base_output_dir=output_root,
-                zip_outputs=zip_outputs,
-                zip_name=zip_name or "outputs.zip",
-                trim_source=trim_source,
-                zip_output_dir=_zip_output_dir,
-                zip_batch_settings=ZipBatchSettings.from_app_settings(),
+        selected_pipeline_names = _selected_names(pipelines_file, pipeline_names)
+        selected_postprocess_names = _selected_names(postprocess_file, postprocess_names)
+        work_selection = resolve_work_selection(
+            selected_pipeline_names,
+            _build_pipeline_registry(),
+            selected_postprocess_names,
+            _build_postprocess_registry(),
+        )
+        input_selection = _prepare_cli_input(data_paths)
+        request = build_workflow_request(
+            WorkflowRequestState(
+                input_selection=input_selection,
+                work_selection=work_selection,
+                output_options=WorkflowOutputOptions(
+                    base_output_value=str(output_dir),
+                    zip_outputs=zip_outputs,
+                    zip_name=zip_name or "outputs.zip",
+                    trim_source=trim_source,
+                ),
             ),
+            zip_output_dir=zip_output_dir,
+            output_filename_for_run=lambda _path, _inputs: None,
+        )
+        dispatch_result = dispatch_workflow(
+            request,
             _cli_workflow_callbacks(),
         )
     except WorkflowInputError as exc:

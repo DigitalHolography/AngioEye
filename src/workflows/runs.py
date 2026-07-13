@@ -18,7 +18,7 @@ from batch_engine import (
     run_task_batch,
     run_threaded_batches_in_process_pool,
 )
-from input_output import PNG_OUTPUT_DIRNAME, ZipH5Member
+from input_output import PNG_OUTPUT_DIRNAME, ZipH5Member, create_zip_from_tree
 from pipelines import load_pipeline_catalog
 
 from ._holo import HoloInputContext, output_filename
@@ -92,6 +92,31 @@ ZipProgressCallback = Callable[[int, int, Path], None]
 ZipOutputDir = Callable[[Path, Path | None, ZipProgressCallback | None], Path]
 IdleCallback = Callable[[], None]
 ZIP_COMPANION_OUTPUT_FOLDERS = (PNG_OUTPUT_DIRNAME,)
+
+
+def zip_output_dir(
+    folder: Path,
+    target_path: Path | None = None,
+    progress_callback: ZipProgressCallback | None = None,
+) -> Path:
+    """Create a workflow archive using the same rules in every frontend."""
+    folder = folder.expanduser().resolve()
+    if not folder.exists() or not folder.is_dir():
+        raise FileNotFoundError(f"Output folder does not exist: {folder}")
+    if target_path is None:
+        zip_name = f"{folder.name}_outputs.zip" if folder.name else "outputs.zip"
+        target_path = folder.parent / zip_name
+    else:
+        target_path = target_path.expanduser().resolve()
+    if target_path.exists():
+        target_path.unlink()
+    return create_zip_from_tree(
+        folder,
+        target_path,
+        exclude_root_dirs=ZIP_COMPANION_OUTPUT_FOLDERS,
+        compresslevel=1,
+        progress_callback=progress_callback,
+    )
 
 
 @dataclass(frozen=True)

@@ -47,8 +47,6 @@ dev = ["ruff", "pre-commit", "pyinstaller"]
 [project.scripts]
 # This allows users to simply type 'angioeye' in their terminal
 angioeye = "launcher:main"
-angioeye-cli = "launcher:cli_main"
-build-installer = "scripts.build_installer:main"
 
 lint-tool = "scripts.ruff_linter:main"
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -42,6 +42,56 @@ class WorkflowRequestState:
     input_selection: WorkflowInputSelection
     work_selection: WorkflowWorkSelection
     output_options: WorkflowOutputOptions
+
+
+def resolve_work_selection(
+    pipeline_names: Sequence[str],
+    pipeline_registry: Mapping[str, Any],
+    postprocess_names: Sequence[str],
+    postprocess_registry: Mapping[str, Any],
+) -> WorkflowWorkSelection:
+    """Resolve frontend names into descriptors consumed by the dispatcher."""
+    selected_pipelines = [
+        pipeline_registry[name]
+        for name in pipeline_names
+        if name in pipeline_registry
+    ]
+    missing_pipelines = [
+        name for name in pipeline_names if name not in pipeline_registry
+    ]
+    if missing_pipelines:
+        available = ", ".join(pipeline_registry)
+        raise WorkflowInputError(
+            "Pipeline missing",
+            f"Pipeline(s) not registered: {', '.join(missing_pipelines)}"
+            + (f". Available: {available}" if available else ""),
+        )
+
+    selected_postprocesses = [
+        postprocess_registry[name]
+        for name in postprocess_names
+        if name in postprocess_registry
+    ]
+    missing_postprocesses = [
+        name for name in postprocess_names if name not in postprocess_registry
+    ]
+    if missing_postprocesses:
+        available = ", ".join(postprocess_registry)
+        raise WorkflowInputError(
+            "Postprocess missing",
+            f"Postprocess step(s) not registered: {', '.join(missing_postprocesses)}"
+            + (f". Available: {available}" if available else ""),
+        )
+    if not selected_pipelines and not selected_postprocesses:
+        raise WorkflowInputError(
+            "No work selected",
+            "Select at least one pipeline or postprocess step.",
+        )
+    return WorkflowWorkSelection(
+        pipeline_names=tuple(pipeline_names),
+        pipelines=tuple(selected_pipelines),
+        postprocesses=tuple(selected_postprocesses),
+    )
 
 
 def build_workflow_request(

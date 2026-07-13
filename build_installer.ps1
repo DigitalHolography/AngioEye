@@ -3,9 +3,9 @@
 Build the AngioEye Windows installer.
 
 .DESCRIPTION
-Builds a PyInstaller one-dir bundle for the GUI application, copies editable
-pipeline/postprocess modules next to the bundle, generates an Inno Setup script,
-and compiles the final setup executable into dist\installer.
+Builds a PyInstaller one-dir bundle for the unified GUI/CLI application, copies
+editable pipeline/postprocess modules next to the bundle, generates an Inno Setup
+script, and compiles the final setup executable into dist\installer.
 
 .EXAMPLE
 .\build_installer.ps1 -IncludeAllExtras
@@ -221,7 +221,7 @@ from launcher import main
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
 '@ | Set-Content -LiteralPath $GeneratedGuiEntryPoint -Encoding UTF8
 
     @'
@@ -293,7 +293,7 @@ def common_datas():
 
 def common_hiddenimports():
     hiddenimports = []
-    hiddenimports += ["angio_eye", "launcher"]
+    hiddenimports += ["angio_eye", "cli", "launcher"]
     hiddenimports += collect_submodules("pipelines")
     hiddenimports += collect_submodules("postprocess")
     hiddenimports += collect_submodules("jinja2")
@@ -338,7 +338,7 @@ gui_exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=False,
+    console=True,
     disable_windowed_traceback=False,
     icon=r'$icon',
 )
