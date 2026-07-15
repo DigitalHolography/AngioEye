@@ -140,7 +140,7 @@ class WaveformMetricSummaryTablesPostprocess(BatchPostprocess):
                     source_relative_path,
                 )
                 html_path = (
-                    output_dir / "html" / html_parent / f"{processed_file.stem}.html"
+                    output_dir / "HTML summary" / html_parent / f"{processed_file.stem}.html"
                 )
                 table_paths.append(
                     html_summary_dashboard.generate_metric_table_html_for_file(

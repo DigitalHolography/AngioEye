@@ -892,7 +892,7 @@ def generate_metric_tables_html(zip_path, output_dir="html"):
 
 def save_dashboard(
     zip_path,
-    output_dir="html",
+    output_dir="HTML summary",
 ):
 
     generate_metric_tables_html(
@@ -903,7 +903,7 @@ def save_dashboard(
     replace_folder_in_zip(
         zip_path,
         output_dir,
-        arc_folder="html",
+        arc_folder="HTML summary",
     )
 
     if os.path.isdir(output_dir):
