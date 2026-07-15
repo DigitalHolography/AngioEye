@@ -1,0 +1,319 @@
+name: Release AngioEye
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-angioeye
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Squash dev to main and publish release
+    runs-on: windows-latest
+    if: github.event.deleted == false
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG_CREATED: ${{ github.event.created }}
+      TAG_NAME: ${{ github.ref_name }}
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Validate release tag
+        id: validate
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $false
+
+          function Assert-LastExit {
+              param([Parameter(Mandatory = $true)][string]$Message)
+              if ($LASTEXITCODE -ne 0) {
+                  throw $Message
+              }
+          }
+
+          function Get-NativeText {
+              param(
+                  [Parameter(Mandatory = $true)][string]$FailureMessage,
+                  [Parameter(Mandatory = $true)][scriptblock]$Command
+              )
+
+              $lines = @(& $Command)
+              Assert-LastExit $FailureMessage
+              return ($lines -join "`n")
+          }
+
+          function Get-RequiredNativeText {
+              param(
+                  [Parameter(Mandatory = $true)][string]$FailureMessage,
+                  [Parameter(Mandatory = $true)][string]$EmptyMessage,
+                  [Parameter(Mandatory = $true)][scriptblock]$Command
+              )
+
+              $text = (Get-NativeText -FailureMessage $FailureMessage -Command $Command).Trim()
+              if ([string]::IsNullOrWhiteSpace($text)) {
+                  throw $EmptyMessage
+              }
+              return $text
+          }
+
+          $tagName = $env:TAG_NAME
+          if ($env:TAG_CREATED -ne "true") {
+              throw "Release tag '$tagName' must be newly created. Tag updates are rejected."
+          }
+          if ($tagName -notmatch '^v\d+\.\d+\.\d+$') {
+              throw "Invalid release tag '$tagName'. Expected vX.X.X, for example v1.20.1."
+          }
+
+          git fetch --prune origin `
+              "+refs/heads/main:refs/remotes/origin/main" `
+              "+refs/heads/dev:refs/remotes/origin/dev" `
+              "+refs/tags/${tagName}:refs/tags/${tagName}"
+          Assert-LastExit "Could not fetch origin/main, origin/dev, and '$tagName'."
+
+          $tagRefSha = Get-RequiredNativeText `
+              -FailureMessage "Could not resolve tag ref '$tagName'." `
+              -EmptyMessage "Tag ref '$tagName' resolved to empty output." `
+              -Command { git rev-parse "refs/tags/$tagName" }
+          $tagCommitSha = Get-RequiredNativeText `
+              -FailureMessage "Could not resolve tag commit '$tagName'." `
+              -EmptyMessage "Tag commit '$tagName' resolved to empty output." `
+              -Command { git rev-parse "refs/tags/$tagName^{commit}" }
+          $tagObjectType = Get-RequiredNativeText `
+              -FailureMessage "Could not inspect tag '$tagName'." `
+              -EmptyMessage "Tag '$tagName' has no object type." `
+              -Command { git cat-file -t $tagRefSha }
+          $tagIsAnnotated = $tagObjectType -eq "tag"
+          $tagMessage = ""
+          if ($tagIsAnnotated) {
+              $tagMessage = (Get-NativeText `
+                  -FailureMessage "Could not read annotated tag message for '$tagName'." `
+                  -Command { git tag --list $tagName "--format=%(contents)" }).Trim()
+          }
+          $devSha = Get-RequiredNativeText `
+              -FailureMessage "Could not resolve origin/dev." `
+              -EmptyMessage "origin/dev resolved to empty output." `
+              -Command { git rev-parse "refs/remotes/origin/dev^{commit}" }
+          $mainSha = Get-RequiredNativeText `
+              -FailureMessage "Could not resolve origin/main." `
+              -EmptyMessage "origin/main resolved to empty output." `
+              -Command { git rev-parse "refs/remotes/origin/main^{commit}" }
+
+          if ($tagCommitSha -ne $devSha) {
+              throw "Tag '$tagName' points to $tagCommitSha, but origin/dev is $devSha. Create the release tag from the current dev HEAD."
+          }
+
+          git merge-base --is-ancestor $mainSha $tagCommitSha
+          if ($LASTEXITCODE -eq 1) {
+              throw "origin/main ($mainSha) is not an ancestor of tagged dev ($tagCommitSha). Merge or rebase main into dev, verify the result, then create a new release tag. Releasing diverged branches would overwrite main-only changes."
+          }
+          Assert-LastExit "Could not verify that origin/main is an ancestor of tagged dev."
+
+          $releaseApiUrl = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/tags/$tagName"
+          $releaseExists = $false
+          try {
+              $null = Invoke-RestMethod `
+                  -Uri $releaseApiUrl `
+                  -Headers @{
+                      Authorization = "Bearer $env:GH_TOKEN"
+                      Accept = "application/vnd.github+json"
+                      "X-GitHub-Api-Version" = "2022-11-28"
+                  }
+              $releaseExists = $true
+          } catch {
+              $statusCode = [int]$_.Exception.Response.StatusCode
+              if ($statusCode -ne 404) {
+                  throw "Could not check release availability for '$tagName' (HTTP $statusCode)."
+              }
+          }
+          if ($releaseExists) {
+              throw "Release '$tagName' already exists."
+          }
+
+          if (-not [string]::IsNullOrWhiteSpace($tagMessage)) {
+              $releaseNotes = $tagMessage
+          } else {
+              $releaseSubjects = @(git log --reverse --format='%s' "origin/main..$tagCommitSha")
+              Assert-LastExit "Could not generate release notes for '$tagName'."
+              $releaseSubjects = @($releaseSubjects | Where-Object {
+                  $_ -notmatch '^Merge release v[0-9]+\.[0-9]+\.[0-9]+ into dev$' -and
+                  $_ -notmatch '^Version v[0-9]+\.[0-9]+\.[0-9]+$'
+              })
+              $releaseNotes = ($releaseSubjects | ForEach-Object { "- $_" }) -join "`n"
+              if ([string]::IsNullOrWhiteSpace($releaseNotes)) {
+                  $releaseNotes = "- No commit messages found since origin/main."
+              }
+          }
+
+          $releaseNotesPath = Join-Path $env:RUNNER_TEMP "release-notes.md"
+          $commitMessagePath = Join-Path $env:RUNNER_TEMP "release-commit-message.txt"
+          $tagMessagePath = Join-Path $env:RUNNER_TEMP "release-tag-message.txt"
+          Set-Content -LiteralPath $releaseNotesPath -Value $releaseNotes -Encoding UTF8
+          Set-Content -LiteralPath $tagMessagePath -Value $tagMessage -Encoding UTF8
+
+          $commitMessage = @(
+              "Version $tagName",
+              "",
+              "Release changes:",
+              "",
+              $releaseNotes,
+              "",
+              "Dev-Head: $tagCommitSha"
+          ) -join "`n"
+          Set-Content -LiteralPath $commitMessagePath -Value $commitMessage -Encoding UTF8
+
+          $outputs = [ordered]@{
+              version = $tagName.Substring(1)
+              tag_ref_sha = $tagRefSha
+              tag_commit_sha = $tagCommitSha
+              tag_is_annotated = $tagIsAnnotated.ToString().ToLowerInvariant()
+              tag_message_path = $tagMessagePath
+              main_sha = $mainSha
+              release_notes_path = $releaseNotesPath
+              commit_message_path = $commitMessagePath
+          }
+          foreach ($output in $outputs.GetEnumerator()) {
+              "$($output.Key)=$($output.Value)" |
+                  Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding UTF8
+          }
+
+      - name: Configure Git author
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          git config user.name "github-actions[bot]"
+          git config user.email "gha[bot]@users.noreply.github.com"
+
+      - name: Prepare squash release commit
+        env:
+          RELEASE_VERSION: ${{ steps.validate.outputs.version }}
+          TAG_COMMIT_SHA: ${{ steps.validate.outputs.tag_commit_sha }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          git checkout -B release-main origin/main
+          git restore --source=$env:TAG_COMMIT_SHA --staged --worktree -- .
+          git diff --quiet $env:TAG_COMMIT_SHA --
+
+          $pyprojectPath = "pyproject.toml"
+          $pyproject = Get-Content -LiteralPath $pyprojectPath -Raw -Encoding UTF8
+          $versionLine = [regex]::new('(?m)^version\s*=\s*"[^"]+"\s*$')
+          if (-not $versionLine.IsMatch($pyproject)) {
+              throw "Could not find [project].version in pyproject.toml."
+          }
+
+          $pyproject = $versionLine.Replace($pyproject, "version = `"$env:RELEASE_VERSION`"", 1)
+          Set-Content -LiteralPath $pyprojectPath -Value $pyproject -Encoding UTF8 -NoNewline
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Sync dependencies
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          uv sync
+
+      - name: Create or reuse release commit
+        id: commit
+        env:
+          COMMIT_MESSAGE_PATH: ${{ steps.validate.outputs.commit_message_path }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          git add -A
+
+          $stagedChanges = @(git diff --cached --name-only)
+          if ([string]::IsNullOrWhiteSpace(($stagedChanges -join "`n"))) {
+              Write-Host "Tagged tree already matches main; reusing the existing release commit."
+          } else {
+              git commit -F $env:COMMIT_MESSAGE_PATH
+          }
+
+          $releaseCommit = ((@(git rev-parse HEAD)) -join "`n").Trim()
+          if ([string]::IsNullOrWhiteSpace($releaseCommit)) {
+              throw "Local release commit resolved to empty output."
+          }
+          "release_commit=$releaseCommit" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding UTF8
+
+      - name: Install Inno Setup
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          choco install innosetup --no-progress -y
+
+      - name: Build installer
+        id: build
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          .\build_installer.ps1
+
+          $installer = Get-ChildItem -LiteralPath "dist\installer" -Filter "*-setup-v*.exe" |
+              Sort-Object LastWriteTime -Descending |
+              Select-Object -First 1
+          if (-not $installer) {
+              throw "Build finished, but no installer was found in dist\installer."
+          }
+
+          "installer_path=$($installer.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding UTF8
+
+      - name: Atomically publish Git refs
+        env:
+          MAIN_SHA: ${{ steps.validate.outputs.main_sha }}
+          TAG_REF_SHA: ${{ steps.validate.outputs.tag_ref_sha }}
+          TAG_COMMIT_SHA: ${{ steps.validate.outputs.tag_commit_sha }}
+          TAG_IS_ANNOTATED: ${{ steps.validate.outputs.tag_is_annotated }}
+          TAG_MESSAGE_PATH: ${{ steps.validate.outputs.tag_message_path }}
+          RELEASE_COMMIT: ${{ steps.commit.outputs.release_commit }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          if ($env:TAG_IS_ANNOTATED -eq "true") {
+              git tag -a -f $env:TAG_NAME $env:RELEASE_COMMIT -F $env:TAG_MESSAGE_PATH
+          } else {
+              git tag -f $env:TAG_NAME $env:RELEASE_COMMIT
+          }
+
+          git push --atomic origin `
+              HEAD:refs/heads/main `
+              HEAD:refs/heads/dev `
+              "refs/tags/${env:TAG_NAME}:refs/tags/${env:TAG_NAME}" `
+              "--force-with-lease=refs/heads/main`:${env:MAIN_SHA}" `
+              "--force-with-lease=refs/heads/dev`:${env:TAG_COMMIT_SHA}" `
+              "--force-with-lease=refs/tags/${env:TAG_NAME}`:${env:TAG_REF_SHA}"
+
+      - name: Publish GitHub release
+        env:
+          INSTALLER_PATH: ${{ steps.build.outputs.installer_path }}
+          RELEASE_NOTES_PATH: ${{ steps.validate.outputs.release_notes_path }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          gh release create $env:TAG_NAME $env:INSTALLER_PATH `
+              --title "AngioEye $env:TAG_NAME" `
+              --notes-file $env:RELEASE_NOTES_PATH `
+              --verify-tag

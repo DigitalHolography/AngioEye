@@ -18,7 +18,7 @@ This project uses a `pyproject.toml` to describe all requirements needed. To sta
 python -m venv .venv
 
 # To enter the venv
-# If you are using Windows PowerShell, you might need to activate the "Exceution" policy
+# If you are using Windows PowerShell, you might need to activate the "Execution" policy
 ./.venv/Scripts/activate
 ```
 
@@ -46,12 +46,12 @@ pip install -e ".[postprocess]"
 # Install all dependencies including dev tools (ruff, pre-commit, pyinstaller)
 pip install -e ".[dev,pipelines,postprocess]"
 
-# Initialize pre-commit hooks (optionnal)
+# Initialize pre-commit hooks (optional)
 pre-commit install
 ```
 
 > [!NOTE]
-> The pre-commit is really usefull to run automatic checks before pushing code, reducing chances of ugly code being pushed.
+> The pre-commit is really useful to run automatic checks before pushing code, reducing chances of ugly code being pushed.
 >
 > If a pre-commit hook fails, it will try to fix all needed files, **so you will need to add them again before recreating the commit**.
 
@@ -91,21 +91,25 @@ python src/angio_eye.py
 
 When you run `angioeye` from inside the repository checkout, the launcher prefers the local `src/` tree so newly added or edited pipelines are picked up without needing a full reinstall.
 
-Installed builds expose editable `pipelines/` and `postprocess/` folders next to `AngioEye.exe` and `AngioEyeCLI.exe`; use the Library tabs' Open folder and Reload buttons to edit and refresh them.
+Installed builds expose editable `pipelines/` and `postprocess/` folders next to `AngioEye.exe`; use the Library tabs' Open folder and Reload buttons to edit and refresh them.
 
 ### CLI
 
 The CLI is designed for batch processing in headless environments or clusters.
 
 ```sh
-# Via the entry point
-angioeye-cli
+# Via the same entry point (arguments select CLI mode)
+angioeye --data data/ --pipelines waveform_shape_metrics --output ./results
+
+# Multiple names can follow one option, or be supplied as a list literal
+angioeye --data data/ --pipelines pipeline1 pipeline2 --postprocesses "HTML summary"
+angioeye --data data/ --pipelines '["pipeline1", "pipeline2"]'
 
 # Or via the script
-python src/cli.py
+python src/cli.py --data data/ --pipelines pipelines.txt --output ./results
 ```
 
-Windows installer builds also ship `AngioEyeCLI.exe` alongside `AngioEye.exe`, so the installed release can be used headlessly without a Python environment.
+The Windows installer ships one `AngioEye.exe`: launching it without arguments opens the GUI, while supplying arguments runs headlessly in CLI mode.
 
 ---
 

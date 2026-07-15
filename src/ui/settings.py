@@ -26,15 +26,15 @@ class SettingsMixin:
                 f"Could not save UI mode preference:\n{exc}",
             )
 
-    def _persist_trim_h5source(self) -> None:
+    def _persist_source_preference(self) -> None:
         try:
-            self.settings_store.save_trim_h5source(
-                not self._persist_eyeflow_data.get()
+            self.settings_store.save_persist_source(
+                bool(self._persist_eyeflow_data.get())
             )
         except OSError as exc:
             self._show_settings_warning(
                 "Settings not saved",
-                f"Could not save trim preference:\n{exc}",
+                f"Could not save source persistence preference:\n{exc}",
             )
 
     def _window_size_for_mode(self, mode: str) -> tuple[int, int, int, int]:
@@ -131,5 +131,5 @@ class SettingsMixin:
 
     def _on_close(self) -> None:
         self._persist_ui_mode()
-        self._persist_trim_h5source()
+        self._persist_source_preference()
         self.destroy()

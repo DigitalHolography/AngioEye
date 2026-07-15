@@ -7,15 +7,12 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from input_output import (
-    create_zip_from_tree,
     found_status_text,
     h5_output_dir,
     holo_input_status,
     is_hdf5_path,
-    stem_input_status,
 )
 from workflows import (
-    ZIP_COMPANION_OUTPUT_FOLDERS,
     HoloInputContext,
     WorkflowCallbacks,
     WorkflowInputError,
@@ -33,6 +30,7 @@ from workflows import (
     read_holo_path_list,
     reset_output_dir as reset_holo_output_dir,
     resolve_context as resolve_holo_context,
+    zip_output_dir as shared_zip_output_dir,
 )
 
 from ..services import services_for
@@ -135,8 +133,8 @@ class RunTabController(ViewController):
     def is_supported_file_input(self, input_path: Path) -> bool:
         return is_hdf5_path(input_path) or input_path.suffix.lower() == ".zip"
 
-    def persist_trim_h5source(self) -> None:
-        self.app._persist_trim_h5source()
+    def persist_source_preference(self) -> None:
+        self.app._persist_source_preference()
 
     def run(self) -> None:
         self.app._reset_progress()
@@ -195,7 +193,7 @@ class RunTabController(ViewController):
             base_output_value=(self.app.batch_output_var.get() or "").strip(),
             zip_outputs=bool(self.app.batch_zip_var.get()),
             zip_name=self.app.batch_zip_name_var.get(),
-            trim_source=self.trim_eyeflow_source(),
+            persist_source=self.persist_source(),
         )
 
     def collect_work_selection(self) -> WorkflowWorkSelection | None:
@@ -454,13 +452,18 @@ class RunTabController(ViewController):
             self.set_minimal_holo_status(status, False)
             return
         stems = input_list.stems
-        statuses = [stem_input_status(stem, input_list.root_dir) for stem in stems]
+        statuses = [
+            holo_input_status(holo_path, require_holo_file=True)
+            for holo_path in input_list.holo_paths
+        ]
         missing_stems = [
             stem for stem, status in zip(stems, statuses) if not status.ef
         ]
         found_count = len(stems) - len(missing_stems)
         status = found_status_text("EF", found_count, len(stems), missing_stems)
-        found_all = not missing_stems
+        if input_list.warnings:
+            status += f"; skipped {len(input_list.warnings)} invalid list entry(s)"
+        found_all = not missing_stems and not input_list.warnings
         self.app.holo_status_var.set(status)
         self.set_holo_status_color(found_all)
         self.set_minimal_holo_status(status, found_all)
@@ -601,27 +604,11 @@ class RunTabController(ViewController):
         target_path: Path | None = None,
         progress_callback: Callable[[int, int, Path], None] | None = None,
     ) -> Path:
-        folder = folder.expanduser().resolve()
-        if not folder.exists() or not folder.is_dir():
-            raise FileNotFoundError(f"Output folder does not exist: {folder}")
-        if target_path is None:
-            zip_name = f"{folder.name}_outputs.zip" if folder.name else "outputs.zip"
-            zip_path = folder.parent / zip_name
-        else:
-            zip_path = target_path.expanduser().resolve()
-        if zip_path.exists():
-            zip_path.unlink()
-        return create_zip_from_tree(
-            folder,
-            zip_path,
-            exclude_root_dirs=ZIP_COMPANION_OUTPUT_FOLDERS,
-            compresslevel=1,
-            progress_callback=progress_callback,
-        )
+        return shared_zip_output_dir(folder, target_path, progress_callback)
 
-    def trim_eyeflow_source(self) -> bool:
+    def persist_source(self) -> bool:
         persist_var = getattr(self.app, "_persist_eyeflow_data", None)
-        return not bool(persist_var.get()) if persist_var is not None else True
+        return bool(persist_var.get()) if persist_var is not None else False
 
     def update_ui(self) -> None:
         try:

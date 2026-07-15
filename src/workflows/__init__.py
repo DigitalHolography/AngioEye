@@ -35,6 +35,8 @@ from .request_state import (
     WorkflowWorkSelection,
     build_workflow_request,
     resolve_base_output_dir,
+    resolve_workflow_output_dir,
+    resolve_work_selection,
 )
 from .runs import (
     ZIP_COMPANION_OUTPUT_FOLDERS,
@@ -45,6 +47,7 @@ from .runs import (
     run_filesystem_workflow,
     run_holo_workflow,
     run_zip_workflow,
+    zip_output_dir,
 )
 
 __all__ = [
@@ -80,9 +83,12 @@ __all__ = [
     "reset_output_dir",
     "read_holo_path_list",
     "resolve_base_output_dir",
+    "resolve_workflow_output_dir",
+    "resolve_work_selection",
     "resolve_context",
     "resolve_stem_context",
     "run_filesystem_workflow",
     "run_holo_workflow",
     "run_zip_workflow",
+    "zip_output_dir",
 ]
