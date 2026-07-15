@@ -21,8 +21,11 @@ from math_utils import (  # noqa: E402
     nanmedian_or_nan,
     std_1d,
 )
-from postprocess.utils import (  # noqa: E402
-    variability_heterogeneity_dashboard as dashboard,
+from postprocess.variability_heterogeneity import (  # noqa: E402
+    compute,
+    constants,
+    export,
+    statistics,
 )
 
 
@@ -38,7 +41,7 @@ def _reference_axis_statistics(slices, eps):
     return {name: np.asarray(values, dtype=float) for name, values in stats.items()}
 
 
-def _reference_higher_metrics(arr, eps=dashboard.EPS):
+def _reference_higher_metrics(arr, eps=constants.EPS):
     arr = np.asarray(arr, dtype=float)
     if arr.ndim != 3:
         return None
@@ -77,7 +80,7 @@ class SegmentMetricExtractionTests(unittest.TestCase):
                 group.create_dataset("RI", data=np.full((2, 2, 2), 3.0))
 
             extracted = list(
-                dashboard.iter_segment_metrics(
+                compute.iter_segment_metrics(
                     h5_path,
                     ("RI",),
                     mode="custom_mode",
@@ -118,12 +121,12 @@ class SegmentMetricExtractionTests(unittest.TestCase):
                     wraps=real_h5_file,
                 ) as open_h5,
                 mock.patch.object(
-                    dashboard,
+                    compute,
                     "compute_file_higher_metrics_from_segment_array",
                     side_effect=summarize,
                 ),
             ):
-                blocks = dashboard.compute_file_higher_metric_blocks(
+                blocks = compute.compute_file_higher_metric_blocks(
                     h5_path,
                     metrics=("RI", "PI", "missing"),
                 )
@@ -158,7 +161,7 @@ class HigherMetricComputationTests(unittest.TestCase):
         for name, values in cases.items():
             with self.subTest(name=name):
                 expected = _reference_higher_metrics(values)
-                actual = dashboard.compute_file_higher_metrics_from_segment_array(
+                actual = compute.compute_file_higher_metrics_from_segment_array(
                     values
                 )
                 self.assertEqual(actual.keys(), expected.keys())
@@ -172,7 +175,7 @@ class HigherMetricComputationTests(unittest.TestCase):
 
     def test_non_3d_array_is_rejected(self):
         self.assertIsNone(
-            dashboard.compute_file_higher_metrics_from_segment_array(
+            compute.compute_file_higher_metrics_from_segment_array(
                 np.ones((2, 2))
             )
         )
@@ -197,12 +200,12 @@ class ThresholdSweepTests(unittest.TestCase):
 
         for name, (control, group) in cases.items():
             with self.subTest(name=name):
-                expected = dashboard.best_threshold_sensitivity_specificity(
+                expected = statistics.best_threshold_sensitivity_specificity(
                     control,
                     group,
                 )
                 actual = (
-                    dashboard.best_threshold_sensitivity_specificity_cumulative_sweep(
+                    statistics.best_threshold_sensitivity_specificity_cumulative_sweep(
                         control,
                         group,
                     )
@@ -215,12 +218,12 @@ class ThresholdSweepTests(unittest.TestCase):
         for sample_index in range(100):
             control = rng.integers(-4, 5, size=rng.integers(2, 30)).astype(float)
             group = rng.integers(-4, 5, size=rng.integers(2, 30)).astype(float)
-            expected = dashboard.best_threshold_sensitivity_specificity(
+            expected = statistics.best_threshold_sensitivity_specificity(
                 control,
                 group,
             )
             actual = (
-                dashboard.best_threshold_sensitivity_specificity_cumulative_sweep(
+                statistics.best_threshold_sensitivity_specificity_cumulative_sweep(
                     control,
                     group,
                 )
@@ -235,12 +238,12 @@ class ThresholdSweepTests(unittest.TestCase):
         group = np.asarray([-200.0] * 4 + [6.0] * 2 + [200.0] * 5)
 
         preferred = (
-            dashboard.best_threshold_sensitivity_specificity_cumulative_sweep(
+            statistics.best_threshold_sensitivity_specificity_cumulative_sweep(
                 control,
                 group,
             )
         )
-        both = dashboard.best_threshold_sensitivity_specificity_cumulative_sweep(
+        both = statistics.best_threshold_sensitivity_specificity_cumulative_sweep(
             control,
             group,
             evaluate_both_directions=True,
@@ -259,12 +262,12 @@ class ThresholdSweepTests(unittest.TestCase):
             ([1.0, 1.0], [1.0, 1.0]),
         ):
             with self.subTest(control=control, group=group):
-                expected = dashboard.best_threshold_sensitivity_specificity(
+                expected = statistics.best_threshold_sensitivity_specificity(
                     control,
                     group,
                 )
                 actual = (
-                    dashboard.best_threshold_sensitivity_specificity_cumulative_sweep(
+                    statistics.best_threshold_sensitivity_specificity_cumulative_sweep(
                         control,
                         group,
                     )
@@ -275,6 +278,48 @@ class ThresholdSweepTests(unittest.TestCase):
                     equal_nan=True,
                 )
                 self.assertEqual(actual[3], expected[3])
+
+
+class ReportExportTests(unittest.TestCase):
+    def test_export_builds_complete_report_tree_from_grouped_results(self):
+        results = {}
+        for group_name, scale in (("control", 1.0), ("patient", 1.8)):
+            results[group_name] = {}
+            for metric_name in constants.INPUT_METRICS:
+                results[group_name][metric_name] = {
+                    "MED_seg_medbeat": [1.0, 1.1, 0.9],
+                    "STD_seg_medbeat": [0.10 * scale, 0.11 * scale, 0.09 * scale],
+                    "IQR_seg_medbeat": [0.12 * scale, 0.13 * scale, 0.11 * scale],
+                    "MAD_seg_medbeat": [0.08 * scale, 0.09 * scale, 0.07 * scale],
+                    "CV_seg_medbeat": [0.15 * scale, 0.16 * scale, 0.14 * scale],
+                    "STD_beat_medseg": [0.09 * scale, 0.10 * scale, 0.08 * scale],
+                    "MAD_beat_medseg": [0.07 * scale, 0.08 * scale, 0.06 * scale],
+                    "CV_beat_medseg": [0.13 * scale, 0.14 * scale, 0.12 * scale],
+                }
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_dir = Path(tmp_dir) / "Variability and heterogeneity"
+            generated = export.export_group_tables_from_results(results, output_dir)
+
+            self.assertEqual(63, len(generated))
+            self.assertTrue(
+                (output_dir / "spatial/raw/control_spatial_variability_table.csv").is_file()
+            )
+            self.assertTrue(
+                (
+                    output_dir
+                    / "spatial/comparisons_vs_control/"
+                    "patient_vs_control_spatial_auc_separability_ranking_all_metrics.csv"
+                ).is_file()
+            )
+            self.assertTrue(
+                (
+                    output_dir
+                    / "temporal/comparisons_vs_control/"
+                    "patient_vs_control_best_temporal_variability_mannwhitney.tex"
+                ).is_file()
+            )
+            self.assertTrue((output_dir / "variability_report.html").is_file())
 
 
 if __name__ == "__main__":
