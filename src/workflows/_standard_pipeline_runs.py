@@ -115,7 +115,7 @@ def run_filesystem_pipeline_run(
             log=log,
             advance_progress=advance_progress,
             process_workers=settings.process_workers,
-            thread_workers=settings.batch_size,
+            thread_workers=settings.thread_workers_per_process,
             idle_callback=idle_callback,
             pool_timing_label="filesystem pipeline run: process pool wall time",
             batch_timing_label="filesystem pipeline run: process batch wall time",
@@ -147,7 +147,7 @@ def run_filesystem_pipeline_run(
             result=result,
             log=log,
             advance_progress=advance_progress,
-            max_workers=settings.batch_size,
+            max_workers=settings.thread_workers_per_process,
             idle_callback=idle_callback,
             timings=result.timings,
         )
@@ -234,8 +234,8 @@ def _run_threaded_pipeline_batches_in_process_pool(
     )
     log(
         f"[PROCESS] Starting ProcessPoolExecutor(max_workers={process_count}) "
-        f"for {len(job_batches)} batch(es); each process uses "
-        f"ThreadPoolExecutor(max_workers={thread_count})."
+        f"for {len(job_batches)} batch(es); threads per process={thread_count}; "
+        f"max concurrent file workers={process_count * thread_count}."
     )
     for batch_index, job_batch in enumerate(job_batches, start=1):
         log(
@@ -471,7 +471,7 @@ def _run_threaded_zip_batches_in_process_pool(
         "keeping one extracted batch ready ahead..."
     )
     process_count = min(batch_count_value, max(1, settings.process_workers))
-    thread_count = max(1, settings.batch_size)
+    thread_count = max(1, settings.thread_workers_per_process)
     run_job = functools.partial(
         _run_pipeline_job_by_name,
         pipeline_names=tuple(pipeline_names),
@@ -483,8 +483,9 @@ def _run_threaded_zip_batches_in_process_pool(
     pool_started_at = time.monotonic()
     log(
         f"[PROCESS] Starting ProcessPoolExecutor(max_workers={process_count}) "
-        f"for {batch_count_value} streaming ZIP batch(es); each process uses "
-        f"ThreadPoolExecutor(max_workers={thread_count})."
+        f"for {batch_count_value} streaming ZIP batch(es); "
+        f"threads per process={thread_count}; "
+        f"max concurrent file workers={process_count * thread_count}."
     )
     with streamed_extracted_zip_batches(
         zip_path,

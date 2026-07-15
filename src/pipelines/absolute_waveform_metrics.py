@@ -1,5 +1,17 @@
-import warnings
 import numpy as np
+
+from math_utils import (
+    nanargmax,
+    nanargmin,
+    nanmax,
+    nanmean,
+    nanmedian,
+    nanmin,
+    nanpercentile,
+    nanstd,
+    nansum,
+    rfft_normalized,
+)
 
 from .core.base import ProcessPipeline, ProcessResult, registerPipeline, with_attrs
 
@@ -75,34 +87,6 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
     def _rectify_keep_nan(x: np.ndarray) -> np.ndarray:
         x = np.asarray(x, dtype=float)
         return np.where(np.isfinite(x), np.maximum(x, 0.0), np.nan)
-
-    @staticmethod
-    def _safe_nanmean(x: np.ndarray) -> float:
-        x = np.asarray(x, dtype=float)
-        if x.size == 0 or not np.any(np.isfinite(x)):
-            return np.nan
-        return float(np.nanmean(x))
-
-    @staticmethod
-    def _safe_nanmedian(x: np.ndarray) -> float:
-        x = np.asarray(x, dtype=float)
-        if x.size == 0 or not np.any(np.isfinite(x)):
-            return np.nan
-        return float(np.nanmedian(x))
-
-    @staticmethod
-    def _safe_nanmedian_array(x: np.ndarray, axis: int = 0) -> np.ndarray:
-        x = np.asarray(x, dtype=float)
-        if x.size == 0 or not np.any(np.isfinite(x)):
-            shape = list(x.shape)
-            if len(shape) == 0:
-                return np.asarray(np.nan, dtype=float)
-            del shape[axis]
-            return np.full(tuple(shape), np.nan, dtype=float)
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", category=RuntimeWarning)
-            return np.nanmedian(x, axis=axis)
 
     @staticmethod
     def _ensure_time_by_beat(v2: np.ndarray, n_beats: int) -> np.ndarray:
@@ -217,25 +201,25 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
         window = v[k0:k1]
         if not np.any(np.isfinite(window)):
             return np.nan
-        return float(np.nansum(window) * dt)
+        return float(nansum(window) * dt)
 
     def _window_mean(self, v: np.ndarray, a: float, b: float) -> float:
         k0, k1 = self._window_indices(v.size, a, b)
         if k1 <= k0:
             return np.nan
-        return self._safe_nanmean(v[k0:k1])
+        return nanmean(v[k0:k1])
 
     def _window_max(self, v: np.ndarray, a: float, b: float) -> float:
         k0, k1 = self._window_indices(v.size, a, b)
         if k1 <= k0 or not np.any(np.isfinite(v[k0:k1])):
             return np.nan
-        return float(np.nanmax(v[k0:k1]))
+        return float(nanmax(v[k0:k1]))
 
     def _window_min(self, v: np.ndarray, a: float, b: float) -> float:
         k0, k1 = self._window_indices(v.size, a, b)
         if k1 <= k0 or not np.any(np.isfinite(v[k0:k1])):
             return np.nan
-        return float(np.nanmin(v[k0:k1]))
+        return float(nanmin(v[k0:k1]))
 
     def _compute_metrics_1d(self, v: np.ndarray, Tbeat: float) -> dict:
         """
@@ -263,12 +247,12 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
         # -------------------------------------------------------------
         # Absolute velocity level / extrema
         # -------------------------------------------------------------
-        vmax = float(np.nanmax(vv))
-        vmin = float(np.nanmin(vv))
-        vmean = float(np.nanmean(vv))
-        vmedian = float(np.nanmedian(vv))
-        vrms = float(np.sqrt(np.nanmean(vv * vv)))
-        vstd = float(np.nanstd(vv))
+        vmax = float(nanmax(vv))
+        vmin = float(nanmin(vv))
+        vmean = float(nanmean(vv))
+        vmedian = float(nanmedian(vv))
+        vrms = float(np.sqrt(nanmean(vv * vv)))
+        vstd = float(nanstd(vv))
         v_range = float(vmax - vmin)
 
         out.update(
@@ -295,15 +279,15 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
             "v_p95": 95,
         }
         for key, q in percentiles.items():
-            out[key] = float(np.nanpercentile(vv, q))
+            out[key] = float(nanpercentile(vv, q))
 
         out["v_iqr"] = float(out["v_p75"] - out["v_p25"])
-        out["v_mad"] = float(np.nanmedian(np.abs(vv - vmedian)))
+        out["v_mad"] = float(nanmedian(np.abs(vv - vmedian)))
 
         # -------------------------------------------------------------
         # Absolute VTI / displacement-like metrics
         # -------------------------------------------------------------
-        vti_total = float(np.nansum(vv) * dt)
+        vti_total = float(nansum(vv) * dt)
         out["vti_total"] = vti_total
         out["vti_0_10"] = self._window_sum(vv, dt, 0.00, 0.10)
         out["vti_0_25"] = self._window_sum(vv, dt, 0.00, 0.25)
@@ -314,9 +298,9 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
         out["vti_90_100"] = self._window_sum(vv, dt, 0.90, 1.00)
         out["vti_late_half"] = self._window_sum(vv, dt, 0.50, 1.00)
 
-        out["vti_above_min"] = float(np.nansum(np.maximum(vv - vmin, 0.0)) * dt)
-        out["vti_above_mean_pos"] = float(np.nansum(np.maximum(vv - vmean, 0.0)) * dt)
-        out["vti_below_mean_abs"] = float(np.nansum(np.maximum(vmean - vv, 0.0)) * dt)
+        out["vti_above_min"] = float(nansum(np.maximum(vv - vmin, 0.0)) * dt)
+        out["vti_above_mean_pos"] = float(nansum(np.maximum(vv - vmean, 0.0)) * dt)
+        out["vti_below_mean_abs"] = float(nansum(np.maximum(vmean - vv, 0.0)) * dt)
 
         # -------------------------------------------------------------
         # Windowed absolute velocity levels
@@ -334,22 +318,22 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
         # Absolute pulsatile-component metrics
         # -------------------------------------------------------------
         vac = vv - vmean
-        out["v_ac_rms"] = float(np.sqrt(np.nanmean(vac * vac)))
-        out["v_ac_abs_mean"] = float(np.nanmean(np.abs(vac)))
-        out["v_ac_abs_integral"] = float(np.nansum(np.abs(vac)) * dt)
+        out["v_ac_rms"] = float(np.sqrt(nanmean(vac * vac)))
+        out["v_ac_abs_mean"] = float(nanmean(np.abs(vac)))
+        out["v_ac_abs_integral"] = float(nansum(np.abs(vac)) * dt)
         out["v_positive_pulsatile_integral"] = float(
-            np.nansum(np.maximum(vac, 0.0)) * dt
+            nansum(np.maximum(vac, 0.0)) * dt
         )
         out["v_negative_pulsatile_integral"] = float(
-            np.nansum(np.maximum(-vac, 0.0)) * dt
+            nansum(np.maximum(-vac, 0.0)) * dt
         )
         out["v_peak_to_peak"] = v_range
 
         # -------------------------------------------------------------
         # Absolute-time event metrics
         # -------------------------------------------------------------
-        idx_peak = int(np.nanargmax(vv))
-        idx_min = int(np.nanargmin(vv))
+        idx_peak = int(nanargmax(vv))
+        idx_min = int(nanargmin(vv))
 
         out["t_vmax"] = float(idx_peak * dt)
         out["t_vmin"] = float(idx_min * dt)
@@ -367,19 +351,19 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
         if n >= 2:
             dvdt = self._gradient_keep_nan(vv, dt)
             if np.any(np.isfinite(dvdt)):
-                out["dvdt_max"] = float(np.nanmax(dvdt))
-                out["dvdt_min"] = float(np.nanmin(dvdt))
-                out["dvdt_fall_abs_max"] = float(abs(np.nanmin(dvdt)))
-                out["dvdt_rms"] = float(np.sqrt(np.nanmean(dvdt * dvdt)))
-                out["dvdt_abs_mean"] = float(np.nanmean(np.abs(dvdt)))
-                out["dvdt_std"] = float(np.nanstd(dvdt))
-                out["dvdt_energy"] = float(np.nansum(dvdt * dvdt) * dt)
-                out["total_variation"] = float(np.nansum(np.abs(dvdt)) * dt)
-                out["positive_variation"] = float(np.nansum(np.maximum(dvdt, 0.0)) * dt)
-                out["negative_variation"] = float(np.nansum(np.maximum(-dvdt, 0.0)) * dt)
+                out["dvdt_max"] = float(nanmax(dvdt))
+                out["dvdt_min"] = float(nanmin(dvdt))
+                out["dvdt_fall_abs_max"] = float(abs(nanmin(dvdt)))
+                out["dvdt_rms"] = float(np.sqrt(nanmean(dvdt * dvdt)))
+                out["dvdt_abs_mean"] = float(nanmean(np.abs(dvdt)))
+                out["dvdt_std"] = float(nanstd(dvdt))
+                out["dvdt_energy"] = float(nansum(dvdt * dvdt) * dt)
+                out["total_variation"] = float(nansum(np.abs(dvdt)) * dt)
+                out["positive_variation"] = float(nansum(np.maximum(dvdt, 0.0)) * dt)
+                out["negative_variation"] = float(nansum(np.maximum(-dvdt, 0.0)) * dt)
 
-                idx_up = int(np.nanargmax(dvdt))
-                idx_down = int(np.nanargmin(dvdt))
+                idx_up = int(nanargmax(dvdt))
+                idx_down = int(nanargmin(dvdt))
                 out["t_upstroke_max"] = float(idx_up * dt)
                 out["t_downstroke_max"] = float(idx_down * dt)
 
@@ -387,7 +371,7 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
         # Absolute harmonic-amplitude metrics
         # -------------------------------------------------------------
         if n >= 2:
-            Vfull = np.fft.rfft(vf) / float(n)
+            Vfull = rfft_normalized(vf, axis=0)
             H = int(min(self.H_MAX, Vfull.size - 1))
             amp_factors = self._rfft_amplitude_factors(n, H)
 
@@ -420,14 +404,14 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
             )
 
             pulsatile_harmonic_power = (
-                float(np.nansum(power[1 : H + 1])) if H >= 1 else np.nan
+                float(nansum(power[1 : H + 1])) if H >= 1 else np.nan
             )
             higher_harmonic_power = (
-                float(np.nansum(power[2 : H + 1])) if H >= 2 else np.nan
+                float(nansum(power[2 : H + 1])) if H >= 2 else np.nan
             )
             Hlow = int(min(H, self.H_LOW_MAX))
             low_harmonic_power = (
-                float(np.nansum(power[1 : Hlow + 1])) if Hlow >= 1 else np.nan
+                float(nansum(power[1 : Hlow + 1])) if Hlow >= 1 else np.nan
             )
 
             out["pulsatile_harmonic_power"] = pulsatile_harmonic_power
@@ -436,7 +420,7 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
 
             if np.isfinite(pulsatile_harmonic_power) and pulsatile_harmonic_power >= 0:
                 ac_mean_square = float(
-                    np.nansum(amp_factors[1 : H + 1] * power[1 : H + 1])
+                    nansum(amp_factors[1 : H + 1] * power[1 : H + 1])
                 )
                 out["bandlimited_ac_rms_from_harmonics"] = float(
                     np.sqrt(ac_mean_square)
@@ -445,11 +429,11 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
         # -------------------------------------------------------------
         # Absolute signal-energy metrics
         # -------------------------------------------------------------
-        out["signal_energy"] = float(np.nansum(vv * vv) * dt)
-        out["signal_mean_square"] = float(np.nanmean(vv * vv))
-        out["pulsatile_energy"] = float(np.nansum(vac * vac) * dt)
-        out["pulsatile_mean_square"] = float(np.nanmean(vac * vac))
-        out["absolute_deviation_energy"] = float(np.nansum(np.abs(vac)) * dt)
+        out["signal_energy"] = float(nansum(vv * vv) * dt)
+        out["signal_mean_square"] = float(nanmean(vv * vv))
+        out["pulsatile_energy"] = float(nansum(vac * vac) * dt)
+        out["pulsatile_mean_square"] = float(nanmean(vac * vac))
+        out["absolute_deviation_energy"] = float(nansum(np.abs(vac)) * dt)
         out["vti_squared_over_T"] = (
             float((vti_total * vti_total) / Tbeat) if Tbeat > 0 else np.nan
         )
@@ -501,20 +485,20 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
         r[mask] = raw[mask] - band[mask]
         rf = np.where(np.isfinite(r), r, 0.0)
 
-        out["raw_minus_band_mean"] = self._safe_nanmean(r)
-        out["raw_minus_band_bias"] = float(np.nansum(rf) * dt / Tbeat)
-        out["raw_minus_band_rms"] = float(np.sqrt(np.nanmean(r * r)))
-        out["raw_minus_band_mae"] = float(np.nanmean(np.abs(r)))
-        out["raw_minus_band_max_abs"] = float(np.nanmax(np.abs(r)))
-        out["raw_minus_band_energy"] = float(np.nansum(rf * rf) * dt)
-        out["raw_minus_band_vti_abs"] = float(np.nansum(np.abs(rf)) * dt)
-        out["raw_band_vti_difference"] = float(np.nansum(rf) * dt)
+        out["raw_minus_band_mean"] = nanmean(r)
+        out["raw_minus_band_bias"] = float(nansum(rf) * dt / Tbeat)
+        out["raw_minus_band_rms"] = float(np.sqrt(nanmean(r * r)))
+        out["raw_minus_band_mae"] = float(nanmean(np.abs(r)))
+        out["raw_minus_band_max_abs"] = float(nanmax(np.abs(r)))
+        out["raw_minus_band_energy"] = float(nansum(rf * rf) * dt)
+        out["raw_minus_band_vti_abs"] = float(nansum(np.abs(rf)) * dt)
+        out["raw_band_vti_difference"] = float(nansum(rf) * dt)
 
         paired_raw = raw[mask]
         paired_band = band[mask]
         if paired_raw.size >= 2:
-            raw_std = float(np.nanstd(paired_raw))
-            band_std = float(np.nanstd(paired_band))
+            raw_std = float(nanstd(paired_raw))
+            band_std = float(nanstd(paired_band))
             if raw_std > self.eps and band_std > self.eps:
                 corr = np.corrcoef(paired_raw, paired_band)[0, 1]
                 out["raw_band_corr"] = float(corr) if np.isfinite(corr) else np.nan
@@ -588,25 +572,25 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
 
                 for k in self._scalar_metric_keys():
                     key = k[0]
-                    br[key][beat_idx, branch_idx] = self._safe_nanmedian(
+                    br[key][beat_idx, branch_idx] = nanmedian(
                         np.asarray(br_vals[key], dtype=float)
                     )
 
                 for k in self._array_metric_keys():
                     key = k[0]
-                    br[key][beat_idx, branch_idx, :] = self._safe_nanmedian_array(
+                    br[key][beat_idx, branch_idx, :] = nanmedian(
                         np.asarray(br_arr_vals[key], dtype=float), axis=0
                     )
 
             for k in self._scalar_metric_keys():
                 key = k[0]
-                gl[key][beat_idx] = self._safe_nanmedian(
+                gl[key][beat_idx] = nanmedian(
                     np.asarray(gl_vals[key], dtype=float)
                 )
 
             for k in self._array_metric_keys():
                 key = k[0]
-                gl[key][beat_idx, :] = self._safe_nanmedian_array(
+                gl[key][beat_idx, :] = nanmedian(
                     np.asarray(gl_arr_vals[key], dtype=float), axis=0
                 )
 
@@ -674,13 +658,13 @@ class AbsoluteWaveformMetrics(ProcessPipeline):
 
                 for k in self._qc_metric_keys():
                     key = k[0]
-                    br[key][beat_idx, branch_idx] = self._safe_nanmedian(
+                    br[key][beat_idx, branch_idx] = nanmedian(
                         np.asarray(br_vals[key], dtype=float)
                     )
 
             for k in self._qc_metric_keys():
                 key = k[0]
-                gl[key][beat_idx] = self._safe_nanmedian(
+                gl[key][beat_idx] = nanmedian(
                     np.asarray(gl_vals[key], dtype=float)
                 )
 

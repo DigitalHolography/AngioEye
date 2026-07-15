@@ -11,7 +11,10 @@ SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from input_output import ANGIOEYE_PROCESSING_ROOT  # noqa: E402
+from input_output import (  # noqa: E402
+    ANGIOEYE_PROCESSING_ROOT,
+    ANGIOEYE_SIGNALS_ROOT,
+)
 from pipeline_engine import run_pipeline_file, run_postprocesses  # noqa: E402
 from pipelines import ProcessResult  # noqa: E402
 
@@ -63,6 +66,7 @@ class PipelineEngineTests(unittest.TestCase):
             self.assertTrue(first_output.exists())
             with h5py.File(first_output, "r") as h5:
                 self.assertIn(f"{ANGIOEYE_PROCESSING_ROOT}/demo/value", h5)
+                self.assertIn(ANGIOEYE_SIGNALS_ROOT, h5)
 
     def test_run_pipeline_file_formats_pipeline_failures(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -101,6 +105,57 @@ class PipelineEngineTests(unittest.TestCase):
                 self.assertNotIn("eyeflow", h5file)
             with h5py.File(persisted_output, "r") as h5file:
                 self.assertIn("eyeflow", h5file)
+
+    def test_signals_are_copied_without_persisting_the_eye_flow_source(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            input_path = tmp_path / "sample.h5"
+            expected_signals = {
+                "artery/raw": [1.0, 2.0, 3.0],
+                "artery/bandlimited": [4.0, 5.0, 6.0],
+                "vein/raw": [7.0, 8.0, 9.0],
+                "vein/bandlimited": [10.0, 11.0, 12.0],
+            }
+            source_paths = {
+                "artery/raw": (
+                    "/Artery/VelocityPerBeat/VelocitySignalPerBeat/value"
+                ),
+                "artery/bandlimited": (
+                    "/Artery/VelocityPerBeat/VelocitySignalPerBeatBandLimited/value"
+                ),
+                "vein/raw": "/Vein/VelocityPerBeat/VelocitySignalPerBeat/value",
+                "vein/bandlimited": (
+                    "/Vein/VelocityPerBeat/VelocitySignalPerBeatBandLimited/value"
+                ),
+            }
+            with h5py.File(input_path, "w") as h5file:
+                h5file.create_dataset("eyeflow", data=[99.0])
+                for signal_name, source_path in source_paths.items():
+                    h5file.create_dataset(
+                        source_path,
+                        data=expected_signals[signal_name],
+                    )
+
+            with mock.patch(
+                "input_output.hdf5_io.copy_signal_datasets",
+                side_effect=AssertionError(
+                    "signal datasets should be captured from the pipeline input pass"
+                ),
+            ):
+                output_path = run_pipeline_file(
+                    input_path,
+                    [_PipelineDescriptor()],
+                    tmp_path / "outputs",
+                    persist_source=False,
+                )
+
+            with h5py.File(output_path, "r") as h5file:
+                self.assertIn(ANGIOEYE_SIGNALS_ROOT, h5file)
+                self.assertNotIn("eyeflow", h5file)
+                for signal_name, expected in expected_signals.items():
+                    signal_path = f"{ANGIOEYE_SIGNALS_ROOT}/{signal_name}"
+                    self.assertIn(signal_path, h5file)
+                    self.assertEqual(expected, h5file[signal_path][()].tolist())
 
     def test_run_postprocesses_propagates_metadata_failures(self):
         calls: list[str] = []

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import h5py
 import numpy as np
@@ -13,8 +14,7 @@ from input_output.hdf5_schema import find_pipeline_group
 from postprocess.core.grouped_batch import build_group_order, extract_group_name
 
 from .dataclasses import Metric
-from .metrics import GREATER, LESS, METRIC_PANEL, REPRESENTATIONS, VESSEL_TYPES
-
+from .metrics import GREATER, LESS, METRIC_PANEL, VESSEL_TYPES
 
 CONTROL_NAME_HINTS = (
     "control",
@@ -106,23 +106,32 @@ def calibrate_metrics_from_processed_files(
             f"pathology={pathology_group!r}; available={sorted(grouped)}"
         )
 
+    control_values = _metric_values_for_panel(
+        grouped[control_group],
+        panel,
+        vessel_types=tuple(dict.fromkeys((optimize_vessel_type, *VESSEL_TYPES))),
+        representation=optimize_representation,
+        aggregation=aggregation,
+    )
+    pathology_values = _metric_values_for_panel(
+        grouped[pathology_group],
+        panel,
+        vessel_types=(optimize_vessel_type,),
+        representation=optimize_representation,
+        aggregation=aggregation,
+    )
+
     calibrated: dict[str, Metric] = {}
     stats: list[SplitStats] = []
 
     for metric_key, metric in panel.items():
-        x0 = _metric_values_for_files(
-            grouped[control_group],
-            metric,
-            vessel_type=optimize_vessel_type,
-            representation=optimize_representation,
-            aggregation=aggregation,
+        x0 = control_values.get(
+            (metric_key, optimize_vessel_type),
+            _EMPTY_VALUES,
         )
-        x1 = _metric_values_for_files(
-            grouped[pathology_group],
-            metric,
-            vessel_type=optimize_vessel_type,
-            representation=optimize_representation,
-            aggregation=aggregation,
+        x1 = pathology_values.get(
+            (metric_key, optimize_vessel_type),
+            _EMPTY_VALUES,
         )
         if x0.size == 0 or x1.size == 0:
             # Metric absent or non-finite in at least one cohort: it cannot be
@@ -140,12 +149,9 @@ def calibrate_metrics_from_processed_files(
         # the control cohort for every scored vessel type.
         control_std_by_vessel: dict[str, float] = {}
         for vessel_type in VESSEL_TYPES:
-            vessel_control = _metric_values_for_files(
-                grouped[control_group],
-                metric,
-                vessel_type=vessel_type,
-                representation=optimize_representation,
-                aggregation=aggregation,
+            vessel_control = control_values.get(
+                (metric_key, vessel_type),
+                _EMPTY_VALUES,
             )
             control_std_by_vessel[vessel_type] = _robust_std(vessel_control)
 
@@ -164,7 +170,9 @@ def calibrate_metrics_from_processed_files(
                 representation=optimize_representation,
                 threshold=float(split["threshold"]),
                 direction=int(split["direction"]),
-                direction_label="GREATER" if int(split["direction"]) == GREATER else "LESS",
+                direction_label="GREATER"
+                if int(split["direction"]) == GREATER
+                else "LESS",
                 control_std=float(control_std),
                 sensitivity=float(split["sensitivity"]),
                 specificity=float(split["specificity"]),
@@ -221,40 +229,17 @@ def _infer_control_group(groups: list[str]) -> str:
     )
 
 
-def _metric_values_for_files(
-    file_paths: Iterable[Path],
-    metric: Metric,
-    *,
-    vessel_type: str,
-    representation: str,
-    aggregation: str,
-) -> np.ndarray:
-    values: list[float] = []
-    for file_path in file_paths:
-        value = _read_metric_value(file_path, metric, vessel_type, representation)
-        if value is None:
-            continue
-        finite = np.asarray(value, dtype=float).ravel()
-        finite = finite[np.isfinite(finite)]
-        if finite.size == 0:
-            continue
-        if aggregation == "median":
-            values.append(float(np.nanmedian(finite)))
-        elif aggregation == "mean":
-            values.append(float(np.nanmean(finite)))
-        elif aggregation == "max":
-            values.append(float(np.nanmax(finite)))
-        else:
-            raise ValueError(f"Unknown aggregation={aggregation!r}")
-    return np.asarray(values, dtype=float)
+_EMPTY_VALUES = np.asarray([], dtype=float)
 
 
-def _read_metric_value(
+def iter_metric_values(
     file_path: Path,
-    metric: Metric,
-    vessel_type: str,
+    metric_panel: dict[str, Metric],
+    *,
+    vessel_types: Sequence[str],
     representation: str,
-) -> Any | None:
+) -> Iterator[tuple[str, str, Any | None]]:
+    """Yield a panel's metric values while opening one HDF5 file only once."""
     with h5py.File(file_path, "r") as h5:
         source_group = find_pipeline_group(h5, "waveform_shape_metrics")
         if source_group is None:
@@ -262,25 +247,93 @@ def _read_metric_value(
                 "Expected 'waveform_shape_metrics' pipeline group not found "
                 f"in {file_path}"
             )
-        derived_paths = metric.derived_paths(vessel_type, representation)
-        if derived_paths is None:
-            return read_dataset(
-                source_group,
-                metric.path(vessel_type, representation),
-                default=None,
-            )
-        numerator = read_dataset(source_group, derived_paths[0], default=None)
-        denominator = read_dataset(source_group, derived_paths[1], default=None)
-        if numerator is None or denominator is None:
-            return None
-        numerator = np.asarray(numerator, dtype=float)
-        denominator = np.asarray(denominator, dtype=float)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            return np.where(
-                np.isfinite(denominator) & (denominator != 0),
-                numerator / denominator,
-                np.nan,
-            )
+
+        for vessel_type in vessel_types:
+            for metric_key, metric in metric_panel.items():
+                yield (
+                    metric_key,
+                    vessel_type,
+                    _read_metric_value(
+                        source_group,
+                        metric,
+                        vessel_type,
+                        representation,
+                    ),
+                )
+
+
+def _metric_values_for_panel(
+    file_paths: Iterable[Path],
+    metric_panel: dict[str, Metric],
+    *,
+    vessel_types: Sequence[str],
+    representation: str,
+    aggregation: str,
+) -> dict[tuple[str, str], np.ndarray]:
+    """Collect an entire panel with one HDF5 open per processed file."""
+    values: dict[tuple[str, str], list[float]] = {
+        (metric_key, vessel_type): []
+        for metric_key in metric_panel
+        for vessel_type in vessel_types
+    }
+    for file_path in file_paths:
+        for metric_key, vessel_type, value in iter_metric_values(
+            file_path,
+            metric_panel,
+            vessel_types=vessel_types,
+            representation=representation,
+        ):
+            aggregated = _aggregate_metric_value(value, aggregation)
+            if aggregated is not None:
+                values[(metric_key, vessel_type)].append(aggregated)
+
+    return {
+        key: np.asarray(metric_values, dtype=float)
+        for key, metric_values in values.items()
+    }
+
+
+def _aggregate_metric_value(value: Any | None, aggregation: str) -> float | None:
+    if value is None:
+        return None
+    finite = np.asarray(value, dtype=float).ravel()
+    finite = finite[np.isfinite(finite)]
+    if finite.size == 0:
+        return None
+    if aggregation == "median":
+        return float(np.nanmedian(finite))
+    if aggregation == "mean":
+        return float(np.nanmean(finite))
+    if aggregation == "max":
+        return float(np.nanmax(finite))
+    raise ValueError(f"Unknown aggregation={aggregation!r}")
+
+
+def _read_metric_value(
+    source_group: h5py.Group,
+    metric: Metric,
+    vessel_type: str,
+    representation: str,
+) -> Any | None:
+    derived_paths = metric.derived_paths(vessel_type, representation)
+    if derived_paths is None:
+        return read_dataset(
+            source_group,
+            metric.path(vessel_type, representation),
+            default=None,
+        )
+    numerator = read_dataset(source_group, derived_paths[0], default=None)
+    denominator = read_dataset(source_group, derived_paths[1], default=None)
+    if numerator is None or denominator is None:
+        return None
+    numerator = np.asarray(numerator, dtype=float)
+    denominator = np.asarray(denominator, dtype=float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.where(
+            np.isfinite(denominator) & (denominator != 0),
+            numerator / denominator,
+            np.nan,
+        )
 
 
 def _robust_std(values: np.ndarray) -> float:
@@ -298,7 +351,9 @@ def _best_one_dimensional_split(
     x0 = control_values[np.isfinite(control_values)]
     x1 = pathology_values[np.isfinite(pathology_values)]
     if x0.size == 0 or x1.size == 0:
-        raise ValueError("Cannot optimize split with an empty control or pathology group.")
+        raise ValueError(
+            "Cannot optimize split with an empty control or pathology group."
+        )
 
     all_values = np.sort(np.unique(np.concatenate([x0, x1])))
     if all_values.size == 1:

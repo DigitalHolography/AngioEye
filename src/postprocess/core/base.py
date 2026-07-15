@@ -1,10 +1,24 @@
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Literal, TypeAlias
 
 from dependency_utils import find_missing_dependencies
 
 POSTPROCESS_REGISTRY: dict[str, type["BatchPostprocess"]] = {}
+PostprocessInputMethod: TypeAlias = Literal[
+    "single_file",
+    "file_batch",
+    "cohort_batch",
+    "zip_batch",
+]
+DEFAULT_INPUT_METHODS: tuple[PostprocessInputMethod, ...] = (
+    "single_file",
+    "file_batch",
+    "cohort_batch",
+    "zip_batch",
+)
+_VALID_INPUT_METHODS = set(DEFAULT_INPUT_METHODS)
 
 
 def registerPostprocess(
@@ -12,16 +26,21 @@ def registerPostprocess(
     description: str = "",
     required_deps: list[str] | None = None,
     required_pipelines: list[str] | None = None,
+    # Each inner list is an OR group; separate inner lists are ANDed.
     required_pipeline_options: list[list[str]] | None = None,
+    required_option: str | list[str] | None = None,
+    input_methods: list[PostprocessInputMethod] | None = None,
     visibility: str = "visible",
 ):
     def decorator(target):
         requires = required_deps or []
+        supported_input_methods = normalize_input_methods(input_methods)
         pipeline_options = normalize_required_pipeline_options(
             required_pipelines=required_pipelines,
             required_pipeline_options=required_pipeline_options,
         )
         pipelines = flatten_required_pipeline_options(pipeline_options)
+        options = normalize_required_options(required_option)
         missing = find_missing_dependencies(requires)
 
         if isinstance(target, type):
@@ -30,6 +49,8 @@ def registerPostprocess(
             target.requires = requires
             target.required_pipelines = pipelines
             target.required_pipeline_options = pipeline_options
+            target.required_option = options
+            target.input_methods = supported_input_methods
             target.missing_deps = missing
             target.available = len(missing) == 0
             target.visibility = visibility
@@ -44,12 +65,32 @@ def registerPostprocess(
             missing_deps=missing,
             required_pipelines=pipelines,
             required_pipeline_options=pipeline_options,
+            required_option=options,
+            input_methods=supported_input_methods,
             visibility=visibility,
         )
         POSTPROCESS_REGISTRY[name] = postprocess_cls
         return target
 
     return decorator
+
+
+def normalize_input_methods(
+    input_methods: list[PostprocessInputMethod] | None,
+) -> list[PostprocessInputMethod]:
+    if input_methods is None:
+        return list(DEFAULT_INPUT_METHODS)
+    if not input_methods:
+        raise ValueError("input_methods must include at least one supported method.")
+
+    normalized: list[PostprocessInputMethod] = []
+    for method in input_methods:
+        if method not in _VALID_INPUT_METHODS:
+            valid = ", ".join(DEFAULT_INPUT_METHODS)
+            raise ValueError(f"Unknown postprocess input method '{method}'. Valid: {valid}.")
+        if method not in normalized:
+            normalized.append(method)
+    return normalized
 
 
 def normalize_required_pipeline_options(
@@ -59,13 +100,29 @@ def normalize_required_pipeline_options(
 ) -> list[list[str]]:
     if required_pipeline_options is not None:
         return [
-            list(dict.fromkeys(option))
-            for option in required_pipeline_options
-            if option
+            list(dict.fromkeys(option_group))
+            for option_group in required_pipeline_options
+            if option_group
         ]
     if required_pipelines:
-        return [list(dict.fromkeys(required_pipelines))]
+        return [
+            [pipeline_name]
+            for pipeline_name in dict.fromkeys(required_pipelines)
+        ]
     return []
+
+
+def normalize_required_options(
+    required_option: str | list[str] | None,
+) -> list[str]:
+    if required_option is None:
+        return []
+    options = (
+        [required_option]
+        if isinstance(required_option, str)
+        else required_option
+    )
+    return list(dict.fromkeys(option for option in options if option))
 
 
 def flatten_required_pipeline_options(
@@ -87,11 +144,23 @@ def required_pipeline_options_for(obj: object) -> tuple[tuple[str, ...], ...]:
     return (required,) if required else ()
 
 
+def required_options_for(obj: object) -> tuple[str, ...]:
+    options = getattr(obj, "required_option", None)
+    if options is None:
+        options = getattr(obj, "required_options", ())
+    if isinstance(options, str):
+        return (options,)
+    return tuple(option for option in options if option)
+
+
 def format_required_pipeline_options(obj: object) -> str:
     groups = []
-    for option in required_pipeline_options_for(obj):
-        groups.append(" + ".join(option))
-    return " or ".join(groups)
+    for option_group in required_pipeline_options_for(obj):
+        formatted_group = " or ".join(option_group)
+        groups.append(
+            f"({formatted_group})" if len(option_group) > 1 else formatted_group
+        )
+    return " and ".join(groups)
 
 
 def _build_function_postprocess(
@@ -103,6 +172,8 @@ def _build_function_postprocess(
     missing_deps: list[str],
     required_pipelines: list[str],
     required_pipeline_options: list[list[str]],
+    required_option: list[str],
+    input_methods: list[PostprocessInputMethod],
     visibility: str,
 ) -> type["FunctionPostprocess"]:
     class RegisteredFunctionPostprocess(FunctionPostprocess):
@@ -119,6 +190,8 @@ def _build_function_postprocess(
     RegisteredFunctionPostprocess.available = len(missing_deps) == 0
     RegisteredFunctionPostprocess.required_pipelines = required_pipelines
     RegisteredFunctionPostprocess.required_pipeline_options = required_pipeline_options
+    RegisteredFunctionPostprocess.required_option = required_option
+    RegisteredFunctionPostprocess.input_methods = input_methods
     RegisteredFunctionPostprocess.missing_pipelines = []
     RegisteredFunctionPostprocess.visibility = visibility
     return RegisteredFunctionPostprocess
@@ -133,6 +206,7 @@ class PostprocessContext:
     zip_outputs: bool
     input_h5_paths: tuple[Path, ...] = ()
     idle_callback: Callable[[], None] | None = None
+    record_timing: Callable[[str, float], None] | None = None
 
 
 @dataclass
@@ -151,6 +225,10 @@ class PostprocessDescriptor:
     missing_deps: list[str] = field(default_factory=list)
     required_pipelines: list[str] = field(default_factory=list)
     required_pipeline_options: list[list[str]] = field(default_factory=list)
+    required_option: list[str] = field(default_factory=list)
+    input_methods: list[PostprocessInputMethod] = field(
+        default_factory=lambda: list(DEFAULT_INPUT_METHODS)
+    )
     missing_pipelines: list[str] = field(default_factory=list)
     postprocess_cls: type["BatchPostprocess"] | None = None
     error_msg: str = ""
@@ -164,6 +242,8 @@ class PostprocessDescriptor:
                 missing_deps=self.missing_deps,
                 required_pipelines=self.required_pipelines,
                 required_pipeline_options=self.required_pipeline_options,
+                required_option=self.required_option,
+                input_methods=self.input_methods,
                 missing_pipelines=self.missing_pipelines,
                 visibility=self.visibility,
             )
@@ -178,6 +258,8 @@ class BatchPostprocess:
     requires: list[str]
     required_pipelines: list[str]
     required_pipeline_options: list[list[str]]
+    required_option: list[str]
+    input_methods: list[PostprocessInputMethod]
     missing_pipelines: list[str]
     visibility: str = "visible"
 
@@ -207,6 +289,8 @@ class MissingPostprocess(BatchPostprocess):
         missing_deps: list[str],
         required_pipelines: list[str],
         required_pipeline_options: list[list[str]],
+        required_option: list[str],
+        input_methods: list[PostprocessInputMethod],
         missing_pipelines: list[str],
         visibility: str = "visible",
     ) -> None:
@@ -216,6 +300,8 @@ class MissingPostprocess(BatchPostprocess):
         self.requires = missing_deps
         self.required_pipelines = required_pipelines
         self.required_pipeline_options = required_pipeline_options
+        self.required_option = required_option
+        self.input_methods = input_methods
         self.missing_pipelines = missing_pipelines
         self.visibility = visibility
 

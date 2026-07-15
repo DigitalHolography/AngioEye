@@ -282,3 +282,17 @@ class AppSettingsStore:
             if isinstance(default_batch_execution, dict)
             else {}
         )
+
+    def load_postprocess_batching(self) -> dict[str, Any]:
+        postprocess_batching = self.load().get("postprocess_batching")
+        if isinstance(postprocess_batching, dict):
+            return postprocess_batching
+
+        default_postprocess_batching = self.load_defaults().get(
+            "postprocess_batching"
+        )
+        return (
+            default_postprocess_batching
+            if isinstance(default_postprocess_batching, dict)
+            else {}
+        )

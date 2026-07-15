@@ -34,8 +34,10 @@ class ZipBatchSettings(BatchExecutionSettings):
         batch_size: int | None = None,
         staging_workers: int | None = None,
         process_workers: int | None = None,
+        thread_workers_per_process: int | None = None,
         *,
         extract_workers: int | None = None,
+        thread_workers: int | None = None,
     ) -> None:
         if staging_workers is None:
             staging_workers = (
@@ -47,10 +49,15 @@ class ZipBatchSettings(BatchExecutionSettings):
             batch_size = default_batch_size()
         if process_workers is None:
             process_workers = DEFAULT_PROCESS_WORKERS
+        if thread_workers_per_process is None:
+            thread_workers_per_process = (
+                thread_workers if thread_workers is not None else batch_size
+            )
         super().__init__(
             batch_size=batch_size,
             staging_workers=staging_workers,
             process_workers=process_workers,
+            thread_workers_per_process=thread_workers_per_process,
         )
 
 

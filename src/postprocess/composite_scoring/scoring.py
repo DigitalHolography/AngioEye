@@ -8,6 +8,7 @@ import numpy as np
 
 from input_output.hdf5_io import MetricsTree, append_metrics_trees_to_h5, read_dataset
 from input_output.hdf5_schema import ANGIOEYE_POSTPROCESS_ROOT, find_pipeline_group
+from math_utils import nanmax
 
 from .dataclasses import Metric, MetricContributionRecord, ScoreRecord
 from .metrics import METRICS, PLOT_VESSEL_TYPE, POSTPROCESS_GROUP, REPRESENTATIONS, VESSEL_TYPES
@@ -140,7 +141,7 @@ def _metric_z(value: Any, metric: Metric, vessel_type: str) -> float:
 
     deviation = metric.direction * (values - metric.threshold)
     z_values = np.maximum(0.0, deviation / sigma0)
-    return float(np.nanmax(z_values))
+    return float(nanmax(z_values))
 
 
 def _read_metric_or_ratio(

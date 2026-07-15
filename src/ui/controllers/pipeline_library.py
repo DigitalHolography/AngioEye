@@ -111,14 +111,17 @@ class PipelineLibraryController(LibraryController):
         for child in self.app.pipeline_library_inner.winfo_children():
             child.destroy()
         self.app.pipeline_visibility_vars = {}
-        self.configure_library_columns(self.app.pipeline_library_inner)
+        self.configure_library_columns(
+            self.app.pipeline_library_inner,
+            row_count=len(rows) + 1,
+        )
 
         selected_header = ttk.Label(self.app.pipeline_library_inner, text="Selected")
         selected_header.grid(row=0, column=0, sticky="w", pady=(0, 6))
         status_header = ttk.Label(self.app.pipeline_library_inner, text="Status")
         status_header.grid(
             row=0,
-            column=1,
+            column=2,
             sticky="w",
             padx=self._STATUS_COLUMN_PADDING,
             pady=(0, 6),
@@ -150,7 +153,7 @@ class PipelineLibraryController(LibraryController):
             )
             status.grid(
                 row=idx,
-                column=1,
+                column=2,
                 sticky="w",
                 padx=self._STATUS_COLUMN_PADDING,
                 pady=(0, 6),

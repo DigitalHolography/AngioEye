@@ -7,15 +7,18 @@ from pathlib import Path
 from pipelines import load_pipeline_catalog
 
 from .core.base import (
+    DEFAULT_INPUT_METHODS,
     POSTPROCESS_REGISTRY,
     BatchPostprocess,
     MissingPostprocess,
     PostprocessContext,
     PostprocessDescriptor,
+    PostprocessInputMethod,
     PostprocessResult,
     format_required_pipeline_options,
-    required_pipeline_options_for,
     registerPostprocess,
+    required_options_for,
+    required_pipeline_options_for,
 )
 
 
@@ -84,6 +87,8 @@ def _discover_postprocesses() -> tuple[
             missing_deps=cls.missing_deps,
             required_pipelines=getattr(cls, "required_pipelines", []),
             required_pipeline_options=[list(option) for option in pipeline_options],
+            required_option=list(getattr(cls, "required_option", ())),
+            input_methods=getattr(cls, "input_methods", list(DEFAULT_INPUT_METHODS)),
             missing_pipelines=missing_pipelines,
             postprocess_cls=cls,
             error_msg=(
@@ -113,13 +118,19 @@ def _missing_pipeline_names_for_options(
 ) -> list[str]:
     if not pipeline_options:
         return []
-    if any(set(option).issubset(available_pipeline_names) for option in pipeline_options):
-        return []
+    unsatisfied_groups = [
+        option_group
+        for option_group in pipeline_options
+        if not any(
+            pipeline_name in available_pipeline_names
+            for pipeline_name in option_group
+        )
+    ]
     return sorted(
         {
             pipeline_name
-            for option in pipeline_options
-            for pipeline_name in option
+            for option_group in unsatisfied_groups
+            for pipeline_name in option_group
             if pipeline_name not in available_pipeline_names
         }
     )
@@ -147,11 +158,14 @@ for _name, _cls in _EXPORTED_POSTPROCESS_CLASSES.items():
 
 __all__ = [
     "BatchPostprocess",
+    "DEFAULT_INPUT_METHODS",
     "MissingPostprocess",
     "PostprocessContext",
     "PostprocessDescriptor",
+    "PostprocessInputMethod",
     "PostprocessResult",
     "format_required_pipeline_options",
+    "required_options_for",
     "required_pipeline_options_for",
     "registerPostprocess",
     "load_postprocess_catalog",
