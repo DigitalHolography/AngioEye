@@ -165,41 +165,6 @@ def extract_metrics(h5_path):
     return results
 
 
-def analyze_zip(zip_path):
-    all_results = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        with zipfile.ZipFile(zip_path, "r") as z:
-            z.extractall(tmpdir)
-
-        for root, _, files in os.walk(tmpdir):
-            h5_files = sorted(f for f in files if f.endswith(".h5"))
-            if not h5_files:
-                continue
-
-            group_name = os.path.basename(root)
-            if root == tmpdir:
-                group_name = "all"
-
-            for file in h5_files:
-                filepath = os.path.join(root, file)
-                metrics = extract_metrics(filepath)
-
-                for mode, vessel_dict in metrics.items():
-                    for vessel, metric_dict in vessel_dict.items():
-                        for metric_name, values in metric_dict.items():
-                            all_results[mode][vessel][metric_name].append(
-                                {
-                                    "file": file,
-                                    "group": group_name,
-                                    "median": values["median"],
-                                    "std": values["std"],
-                                    "vessel": vessel,
-                                }
-                            )
-
-    return dict(all_results)
-
 
 def choose_zip():
     root = Tk()
@@ -314,12 +279,12 @@ def dataframe_to_html_table(
     <style>
     .image-thumbnail {
         width: 100%;
+        max-width: 900px;
         border: 1px solid #cccccc;
         border-radius: 8px;
         cursor: pointer;
         outline: none;
     }
-
     .image-thumbnail:focus,
     .image-thumbnail:active {
         outline: none;
@@ -927,11 +892,9 @@ def generate_metric_tables_html(zip_path, output_dir="html"):
 
 def save_dashboard(
     zip_path,
-    export_png_dir="export_png",
-    export_eps_dir="export_eps",
-    output_dir="html",
+    output_dir="HTML summary",
 ):
-    del export_png_dir, export_eps_dir
+
     generate_metric_tables_html(
         zip_path,
         output_dir=output_dir,
@@ -940,7 +903,7 @@ def save_dashboard(
     replace_folder_in_zip(
         zip_path,
         output_dir,
-        arc_folder="html",
+        arc_folder="HTML summary",
     )
 
     if os.path.isdir(output_dir):

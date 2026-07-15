@@ -1,5 +1,6 @@
 ﻿import os
 import shutil
+from pathlib import Path
 from collections import defaultdict
 from tkinter import Tk, filedialog
 import h5py
@@ -40,19 +41,24 @@ METHOD_MARKERS_WINDKESSEL = {
 }
 
 
-def _run_optional_eps_export(export_func, output_dir: str) -> bool:
+def _run_optional_eps_export(export_func, output_dir: str | Path) -> bool:
+    output_dir = Path(output_dir)
+
     try:
         export_func()
     except ModuleNotFoundError as exc:
         if exc.name != POSTSCRIPT_BACKEND_MODULE:
             raise
-        if os.path.isdir(output_dir):
+
+        if output_dir.is_dir():
             shutil.rmtree(output_dir)
+
         print(
             "[WARN] EPS export skipped because the Matplotlib PostScript backend "
             f"'{POSTSCRIPT_BACKEND_MODULE}' is unavailable in this build."
         )
         return False
+
     return True
 
 
@@ -86,7 +92,7 @@ def extract_windkessel_rows_from_h5(h5_path, group_name):
                 for v in values:
                     rows.append(
                         {
-                            "file": os.path.basename(h5_path),
+                            "file": Path(h5_path).name,
                             "group": group_name,
                             "method": method,
                             "metric": metric,
@@ -285,18 +291,19 @@ def plot_windkessel_metric_for_method(df, metric, method, out_path):
 
 
 def export_windkessel_figures(zip_path, out_dir, format="png"):
-    os.makedirs(out_dir, exist_ok=True)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     df = analyze_zip_windkessel(zip_path)
 
     if df.empty:
-        print("Aucune donnÃ©e Windkessel trouvÃ©e dans le zip.")
+        print("Aucune donnÃ©e Windkessel trouvée dans le zip.")
         return
 
     for metric in METRICS_WINDKESSEL:
         for method in METHODS_WINDKESSEL:
             filename = f"windkessel_{metric}_{method}.{format}"
-            out_path = os.path.join(out_dir, filename)
+            out_path = out_dir / filename
 
             plot_windkessel_metric_for_method(
                 df,
@@ -306,7 +313,7 @@ def export_windkessel_figures(zip_path, out_dir, format="png"):
             )
 
     if format == "png":
-        csv_path = os.path.join(out_dir, "windkessel_values.csv")
+        csv_path = out_dir / "windkessel_values.csv"
         df.to_csv(csv_path, index=False)
 
 
@@ -978,7 +985,8 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
 def export_selected_metric(
     all_results, zip_path, out_dir, format="png", show_group_illustrations=True, vessel="artery", mode="bandlimited"
 ):
-    os.makedirs(out_dir, exist_ok=True)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     if mode == "all":
         modes_to_process = VALID_MODE
@@ -1119,7 +1127,7 @@ def export_selected_metric(
                             chosen = rep_file.get(g, None)
                             path = h5_index.get(g, {}).get(chosen, None) if chosen else None
 
-                            if path and os.path.exists(path):
+                            if path and Path(path).exists():
                                 support = extract_graphics_support(
                                     path,
                                     vessel=vessel,
@@ -1162,14 +1170,10 @@ def export_selected_metric(
                             ax_empty = fig.add_subplot(right[r, c])
                             ax_empty.axis("off")
                     if format == "png":
-                        png_path = os.path.join(
-                            out_dir, f"{metric}_{current_mode}_{vessel}.png"
-                        )
+                        png_path = out_dir / f"{metric}_{current_mode}_{vessel}.png"
                         fig.savefig(png_path, bbox_inches="tight")
                     if format == "eps":
-                        eps_path = os.path.join(
-                            out_dir, f"{metric}_{current_mode}_{vessel}.eps"
-                        )
+                        eps_path = out_dir / f"{metric}_{current_mode}_{vessel}.eps"
                         fig.savefig(eps_path, bbox_inches="tight")
 
                     plt.close(fig)
@@ -1295,24 +1299,32 @@ def analyze_zip(zip_path):
 
 
 def save_dashboard(all_results, zip_path, single_group):
-    # -----------------------------
-    # export PNGs
-    # -----------------------------
-    png_dir = "export_png"
-    eps_dir = "export_eps"
 
-    reset_output_dir(png_dir)
-    reset_output_dir(eps_dir)
+    out_dir = Path("group comparison (Dashboard) - Waveform Shape Metrics")
 
-    # --- Windkessel ---
-    export_windkessel_figures(zip_path, png_dir, format="png")
+    png_dir = out_dir / "PNG"
+    eps_dir = out_dir / "EPS"
 
+    reset_output_dir(out_dir)
+
+    # --- Windkessel PNG ---
+    export_windkessel_figures(
+        zip_path,
+        png_dir,
+        format="png"
+    )
+
+    # --- Windkessel EPS ---
     eps_supported = _run_optional_eps_export(
-        lambda: export_windkessel_figures(zip_path, eps_dir, format="eps"),
+        lambda: export_windkessel_figures(
+            zip_path,
+            eps_dir,
+            format="eps"
+        ),
         eps_dir,
     )
 
-    # --- Metrics illustrations ---
+    # --- Metrics PNG ---
     export_selected_metric(
         all_results,
         zip_path,
@@ -1322,9 +1334,7 @@ def save_dashboard(all_results, zip_path, single_group):
         mode="bandlimited"
     )
 
-    replace_folder_in_zip(zip_path, png_dir, arc_folder="export_png")
-
-    # --- EPS ---
+    # --- Metrics EPS ---
     if eps_supported:
         eps_supported = _run_optional_eps_export(
             lambda: export_selected_metric(
@@ -1338,14 +1348,14 @@ def save_dashboard(all_results, zip_path, single_group):
             eps_dir,
         )
 
-    if eps_supported:
-        replace_folder_in_zip(zip_path, eps_dir, arc_folder="export_eps")
+    replace_folder_in_zip(
+        zip_path,
+        out_dir,
+        arc_folder="group comparison (Dashboard) - Waveform Shape Metrics"
+    )
 
-    if os.path.isdir(png_dir):
-        shutil.rmtree(png_dir)
-
-    if os.path.isdir(eps_dir):
-        shutil.rmtree(eps_dir)
+    if out_dir.is_dir():
+        shutil.rmtree(out_dir)
 
 
 if __name__ == "__main__":
