@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -10,6 +10,26 @@ import numpy as np
 
 UTF8_STRING_DTYPE = h5py.string_dtype(encoding="utf-8")
 GroupCache = dict[str, h5py.Group]
+
+_SIGNAL_DATASET_PATHS = (
+    (
+        "artery/raw",
+        "/Artery/VelocityPerBeat/VelocitySignalPerBeat/value",
+    ),
+    (
+        "artery/bandlimited",
+        "/Artery/VelocityPerBeat/VelocitySignalPerBeatBandLimited/value",
+    ),
+    (
+        "vein/raw",
+        "/Vein/VelocityPerBeat/VelocitySignalPerBeat/value",
+    ),
+    (
+        "vein/bandlimited",
+        "/Vein/VelocityPerBeat/VelocitySignalPerBeatBandLimited/value",
+    ),
+)
+SignalDatasets = Mapping[str, np.ndarray]
 
 
 @dataclass
@@ -46,17 +66,75 @@ def copy_h5_contents(source_file: Path | str | None, dest: h5py.File) -> None:
             src.copy(src[key], dest, name=key)
 
 
+def copy_signal_datasets(
+    source_file: Path | str | None,
+    dest: h5py.File,
+) -> None:
+    """Copy the canonical EyeFlow arterial and venous signals into an output H5.
+
+    The signals are intentionally copied independently of ``persist_source`` so
+    pipeline outputs retain the waveform inputs needed by downstream consumers
+    without retaining the complete EyeFlow file.
+    """
+    if not source_file:
+        write_signal_datasets({}, dest)
+        return
+
+    src_path = Path(source_file)
+    if not src_path.exists():
+        write_signal_datasets({}, dest)
+        return
+
+    with open_h5(src_path, "r") as src:
+        write_signal_datasets(read_signal_datasets(src), dest)
+
+
+def read_signal_datasets(source: h5py.Group | h5py.File) -> dict[str, np.ndarray]:
+    """Read the canonical EyeFlow signals from an already-open HDF5 file."""
+    signals: dict[str, np.ndarray] = {}
+    for destination_path, source_path in _SIGNAL_DATASET_PATHS:
+        source_dataset = source.get(source_path)
+        if isinstance(source_dataset, h5py.Dataset):
+            signals[destination_path] = np.asarray(source_dataset)
+    return signals
+
+
+def write_signal_datasets(
+    signal_datasets: SignalDatasets,
+    dest: h5py.File,
+) -> None:
+    """Write canonical signals under the AngioEye Signals group."""
+    if "/AngioEye/Signals" in dest:
+        del dest["/AngioEye/Signals"]
+    signals_group = dest.require_group("/AngioEye/Signals")
+    for destination_path, _ in _SIGNAL_DATASET_PATHS:
+        data = signal_datasets.get(destination_path)
+        if data is None:
+            continue
+
+        parts = destination_path.split("/")
+        parent = signals_group
+        for part in parts[:-1]:
+            parent = parent.require_group(part)
+        parent.create_dataset(parts[-1], data=data)
+
+
 def create_h5_file(
     path: Path | str,
     *,
     source_file: Path | str | None = None,
     persist_source: bool = False,
+    signal_datasets: SignalDatasets | None = None,
 ) -> Path:
     out_path = Path(path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open_h5(out_path, "w") as h5file:
         if persist_source:
             copy_h5_contents(source_file, h5file)
+        if signal_datasets is None:
+            copy_signal_datasets(source_file, h5file)
+        else:
+            write_signal_datasets(signal_datasets, h5file)
         if source_file:
             h5file.attrs["source_file"] = str(source_file)
     return out_path
