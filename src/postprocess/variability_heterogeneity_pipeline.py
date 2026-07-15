@@ -78,7 +78,7 @@ class VariabilityHeterogeneityPostprocess(BatchPostprocess):
                 "No compatible by-segment metrics were found for the variability/heterogeneity tables."
             )
 
-        table_dir = output_dir / "latex_tables"
+        table_dir = output_dir / "Variability and heterogeneity"
         if table_dir.exists():
             shutil.rmtree(table_dir)
 
@@ -91,8 +91,12 @@ class VariabilityHeterogeneityPostprocess(BatchPostprocess):
         )
 
         created_paths = [str(path) for path in table_paths]
-        summary = (
-            f"Generated {len(table_paths)} variability/heterogeneity table file(s)."
-        )
-        return PostprocessResult(summary=summary, generated_paths=created_paths)
 
+        summary = (
+            f"Generated {len(created_paths)} variability/heterogeneity file(s)."
+        )
+
+        return PostprocessResult(
+            summary=summary,
+            generated_paths=created_paths,
+        )
