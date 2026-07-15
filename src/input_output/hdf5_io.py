@@ -50,12 +50,12 @@ def create_h5_file(
     path: Path | str,
     *,
     source_file: Path | str | None = None,
-    trim_source: bool = False,
+    persist_source: bool = False,
 ) -> Path:
     out_path = Path(path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open_h5(out_path, "w") as h5file:
-        if not trim_source:
+        if persist_source:
             copy_h5_contents(source_file, h5file)
         if source_file:
             h5file.attrs["source_file"] = str(source_file)

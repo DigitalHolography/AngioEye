@@ -95,11 +95,11 @@ class AppSettingsTests(unittest.TestCase):
 
             self.assertEqual(store.load_ui_mode(), "minimal")
 
-    def test_load_trim_h5source_defaults_to_true(self) -> None:
+    def test_load_persist_source_defaults_to_false(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             store = AppSettingsStore(Path(tmp_dir) / "settings.json")
 
-            self.assertTrue(store.load_trim_h5source())
+            self.assertFalse(store.load_persist_source())
 
     def test_load_uses_default_template_when_user_settings_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -166,13 +166,13 @@ class AppSettingsTests(unittest.TestCase):
 
             self.assertEqual(store.load_ui_mode(), "advanced")
 
-    def test_store_round_trips_trim_h5source(self) -> None:
+    def test_store_round_trips_persist_source(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             store = AppSettingsStore(Path(tmp_dir) / "settings.json")
 
-            store.save_trim_h5source(False)
+            store.save_persist_source(True)
 
-            self.assertFalse(store.load_trim_h5source())
+            self.assertTrue(store.load_persist_source())
 
     def test_load_batch_execution_reads_settings_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

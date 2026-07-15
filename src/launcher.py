@@ -62,9 +62,13 @@ def _call_entry(
     return entry(*args, **kwargs)
 
 
-def main() -> Any:
+def main(argv: list[str] | None = None) -> Any:
+    """Launch the GUI without arguments and the CLI otherwise."""
     multiprocessing.freeze_support()
     _disable_windows_platform_wmi()
+    args = list(sys.argv[1:] if argv is None else argv)
+    if args:
+        return _call_entry("cli", "cli.py", "main", args)
     return _call_entry("angio_eye", "angio_eye.py", "main")
 
 
