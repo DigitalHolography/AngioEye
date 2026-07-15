@@ -67,9 +67,3 @@ requirements-optional.txt
 # Local agent guidance
 AGENTS.md
 codex-*.md
-
-# Scripts
-src/postprocess/utils/composing_score.py
-src/postprocess/utils/variability_heterogeneity_branch_dashboard.py
-src/postprocess/utils/variability_utils.py
-src/postprocess/composing_score_pipeline.py
