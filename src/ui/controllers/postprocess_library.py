@@ -8,6 +8,7 @@ from postprocess import (
     PostprocessDescriptor,
     format_required_pipeline_options,
     load_postprocess_catalog,
+    required_options_for,
 )
 
 from ..widgets import _Tooltip, ellipsize_text
@@ -61,6 +62,20 @@ class PostprocessLibraryController(LibraryController):
         self.app.postprocess_visibility = visibility
         if changed:
             self.persist_visibility()
+        self._enforce_required_options(rows)
+
+    def _enforce_required_options(self, rows) -> None:
+        if not any(
+            self.app.postprocess_visibility.get(postprocess.name, False)
+            and postprocess.available
+            and "persist_eyeflow_data" in required_options_for(postprocess)
+            for postprocess in rows
+        ):
+            return
+        persist_var = getattr(self.app, "_persist_eyeflow_data", None)
+        if persist_var is not None and not bool(persist_var.get()):
+            persist_var.set(True)
+            self.app._persist_source_preference()
 
     def persist_visibility(self) -> None:
         try:
@@ -81,6 +96,7 @@ class PostprocessLibraryController(LibraryController):
             return
         self.app.postprocess_visibility[name] = visible
         self.persist_visibility()
+        self._enforce_required_options(self.app.postprocess_rows)
         self.update_summary()
 
     def set_all(self, visible: bool) -> None:
@@ -98,6 +114,7 @@ class PostprocessLibraryController(LibraryController):
         for name, var in self.app.postprocess_visibility_vars.items():
             var.set(self.app.postprocess_visibility.get(name, False))
         self.persist_visibility()
+        self._enforce_required_options(self.app.postprocess_rows)
         self.update_summary()
 
     def select_all(self) -> None:
@@ -116,29 +133,47 @@ class PostprocessLibraryController(LibraryController):
         )
 
     def status_text(self, postprocess: PostprocessDescriptor) -> str:
-        if not postprocess.available:
-            if postprocess.missing_pipelines:
-                return f"Missing pipelines: {', '.join(postprocess.missing_pipelines)}"
-            if postprocess.missing_deps:
-                return f"Missing deps: {', '.join(postprocess.missing_deps)}"
-            return "Unavailable"
+        required_parts: list[str] = []
         required_pipelines = format_required_pipeline_options(postprocess)
         if required_pipelines:
-            return f"Requires: {required_pipelines}"
+            required_parts.append(required_pipelines)
+        required_options = self.format_required_options(postprocess)
+        if required_options:
+            required_parts.append(f"option {required_options}")
+
+        if not postprocess.available:
+            status: str
+            if postprocess.missing_pipelines:
+                status = f"Missing pipelines: {', '.join(postprocess.missing_pipelines)}"
+            elif postprocess.missing_deps:
+                status = f"Missing deps: {', '.join(postprocess.missing_deps)}"
+            else:
+                status = "Unavailable"
+            if required_parts:
+                return f"{status}; Requires: {'; '.join(required_parts)}"
+            return status
+        if required_parts:
+            return f"Requires: {'; '.join(required_parts)}"
         return "Available"
 
     def populate(self, rows: list[PostprocessDescriptor]) -> None:
         for child in self.app.postprocess_library_inner.winfo_children():
             child.destroy()
         self.app.postprocess_visibility_vars = {}
-        self.configure_library_columns(self.app.postprocess_library_inner)
+        self.configure_library_columns(
+            self.app.postprocess_library_inner,
+            row_count=len(rows) + 1,
+        )
 
-        selected_header = ttk.Label(self.app.postprocess_library_inner, text="Selected")
+        selected_header = ttk.Label(
+            self.app.postprocess_library_inner,
+            text="Selected",
+        )
         selected_header.grid(row=0, column=0, sticky="w", pady=(0, 6))
         status_header = ttk.Label(self.app.postprocess_library_inner, text="Status")
         status_header.grid(
             row=0,
-            column=1,
+            column=2,
             sticky="w",
             padx=self._STATUS_COLUMN_PADDING,
             pady=(0, 6),
@@ -175,7 +210,7 @@ class PostprocessLibraryController(LibraryController):
             )
             status.grid(
                 row=idx,
-                column=1,
+                column=2,
                 sticky="w",
                 padx=self._STATUS_COLUMN_PADDING,
                 pady=(0, 6),

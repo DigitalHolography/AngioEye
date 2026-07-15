@@ -3,27 +3,37 @@ import shutil
 from collections import defaultdict
 from pathlib import Path
 from tkinter import Tk, filedialog
-import h5py
 import numpy as np
 import pandas as pd
-from math_utils import nanmad, nanmean, nanmedian, nanpercentile, nanstd, nanvar
+from math_utils import (
+    auc_from_scores,
+    best_threshold_sensitivity_specificity_cumulative_sweep,
+    clean_values,
+    cohen_d,
+    compute_axis_statistics,
+    mann_whitney_pvalue,
+    mean_difference_ci95,
+    nanmean,
+    nanmedian_or_nan,
+    nanstd,
+    overlap_from_cohen_d,
+    summarize_values,
+)
 
 import matplotlib
 
 matplotlib.use("Agg", force=True)
 import matplotlib.pyplot as plt
 
-try:
-    from scipy.stats import mannwhitneyu, norm
-except ImportError as exc:
-    raise ImportError(
-        "This script requires scipy for Mann-Whitney tests. Install it with: pip install scipy"
-    ) from exc
-
 from input_output.archive_io import replace_folder_in_zip
 from input_output.hdf5_io import MetricsTree, iter_h5_arrays
 
-from ..core.grouped_batch import extract_group_name, iter_grouped_h5_files_in_zip
+from ..core.grouped_batch import iter_grouped_h5_files_in_zip
+
+
+best_threshold_sensitivity_specificity = (
+    best_threshold_sensitivity_specificity_cumulative_sweep
+)
 
 
 SEGMENT_METRIC_FOLDERS = (
@@ -213,125 +223,6 @@ def iter_segment_metrics(
     )
 
 
-def extract_segment_metric(h5_path, metric_name, mode=SEGMENT_MODE):
-    for _metric_name, arr in iter_segment_metrics(
-        h5_path,
-        (metric_name,),
-        mode=mode,
-    ):
-        return arr
-    return None
-
-
-# -----------------------------------------------------------------------------
-# Robust 1D statistics
-# -----------------------------------------------------------------------------
-
-
-def finite_1d(x):
-    x = np.asarray(x, dtype=float)
-    return x[np.isfinite(x)]
-
-
-def iqr_1d(x):
-    x = finite_1d(x)
-    if x.size == 0:
-        return np.nan
-    q25 = nanpercentile(x, 25)
-    q75 = nanpercentile(x, 75)
-    return float(q75 - q25)
-
-
-def mad_1d(x):
-    x = finite_1d(x)
-    if x.size == 0:
-        return np.nan
-    return float(nanmad(x))
-
-
-def cv_1d(x, eps=EPS):
-    x = finite_1d(x)
-    if x.size == 0:
-        return np.nan
-    mu = nanmean(x)
-    sd = nanstd(x, ddof=1) if x.size > 1 else 0.0
-    return float(sd / (np.abs(mu) + eps))
-
-
-def median_1d(x):
-    x = finite_1d(x)
-    if x.size == 0:
-        return np.nan
-    return float(nanmedian(x))
-
-
-def std_1d(x):
-    x = finite_1d(x)
-    if x.size == 0:
-        return np.nan
-    return float(nanstd(x, ddof=1) if x.size > 1 else 0.0)
-
-
-def nanmedian_or_nan(x):
-    x = np.asarray(x, dtype=float)
-    if np.any(np.isfinite(x)):
-        return float(nanmedian(x))
-    return np.nan
-
-
-def clean_values(values):
-    x = np.asarray(values, dtype=float)
-    return x[np.isfinite(x)]
-
-
-def _compute_axis_statistics(values, axis, eps=EPS):
-    """Compute robust statistics for every slice along one matrix axis."""
-    values = np.asarray(values, dtype=float)
-    if values.ndim != 2:
-        raise ValueError("Axis statistics require a two-dimensional array.")
-
-    samples = np.moveaxis(values, axis, -1)
-    samples = np.where(np.isfinite(samples), samples, np.nan)
-    result_size = samples.shape[0]
-    result = {
-        name: np.full(result_size, np.nan, dtype=float)
-        for name in ("median", "std", "iqr", "mad", "cv")
-    }
-
-    if result_size == 0 or samples.shape[1] == 0:
-        return result
-
-    counts = np.sum(np.isfinite(samples), axis=1)
-    valid = counts > 0
-    if not np.any(valid):
-        return result
-
-    valid_samples = samples[valid]
-    valid_counts = counts[valid]
-    medians = nanmedian(valid_samples, axis=1)
-    quartiles = nanpercentile(valid_samples, (25, 75), axis=1)
-    means = nanmean(valid_samples, axis=1)
-
-    stds = np.zeros(len(valid_samples), dtype=float)
-    multiple_values = valid_counts > 1
-    if np.any(multiple_values):
-        stds[multiple_values] = nanstd(
-            valid_samples[multiple_values],
-            axis=1,
-            ddof=1,
-        )
-
-    result["median"][valid] = medians
-    result["std"][valid] = stds
-    result["iqr"][valid] = quartiles[1] - quartiles[0]
-    result["mad"][valid] = nanmedian(
-        np.abs(valid_samples - medians[:, np.newaxis]),
-        axis=1,
-    )
-    result["cv"][valid] = stds / (np.abs(means) + eps)
-    return result
-
-
 # -----------------------------------------------------------------------------
 # Per-file higher-order metrics
 # -----------------------------------------------------------------------------
@@ -378,8 +269,8 @@ def compute_file_higher_metrics_from_segment_array(arr, eps=EPS):
 
     segment_count = arr.shape[1] * arr.shape[2]
     beat_by_segment = arr.reshape(arr.shape[0], segment_count)
-    spatial = _compute_axis_statistics(beat_by_segment, axis=1, eps=eps)
-    temporal = _compute_axis_statistics(beat_by_segment, axis=0, eps=eps)
+    spatial = compute_axis_statistics(beat_by_segment, axis=1, eps=eps)
+    temporal = compute_axis_statistics(beat_by_segment, axis=0, eps=eps)
 
     return {
         "MED_seg_medbeat": nanmedian_or_nan(spatial["median"]),
@@ -438,11 +329,6 @@ def variability_tree_from_blocks(blocks):
     )
 
 
-def write_variability_tree(file_path):
-    blocks = compute_file_higher_metric_blocks(file_path)
-    return variability_tree_from_blocks(blocks)
-
-
 # -----------------------------------------------------------------------------
 # Zip analysis
 # -----------------------------------------------------------------------------
@@ -470,39 +356,6 @@ def analyze_zip(zip_path, metrics=INPUT_METRICS, mode=SEGMENT_MODE):
             mode=mode,
         )
         add_file_blocks_to_results(results, grouped_file.group_name, blocks)
-
-    return results
-
-
-def analyze_files(file_paths, output_dir, metrics=INPUT_METRICS, mode=SEGMENT_MODE):
-    """
-    Analyze already-extracted/processed HDF5 outputs directly.
-
-    This avoids creating a temporary ZIP and repeatedly extracting members during
-    AngioEye postprocessing runs.
-    """
-    output_dir = Path(output_dir).expanduser().resolve()
-    records = []
-    for file_path in file_paths:
-        path = Path(file_path).expanduser().resolve()
-        records.append(
-            (
-                extract_group_name(path.parent, output_dir),
-                path.name,
-                path,
-            )
-        )
-
-    records.sort(key=lambda item: (item[0], extract_sort_key(item[1])))
-    results = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
-
-    for group_name, _file_name, file_path in records:
-        blocks = compute_file_higher_metric_blocks(
-            file_path,
-            metrics=metrics,
-            mode=mode,
-        )
-        add_file_blocks_to_results(results, group_name, blocks)
 
     return results
 
@@ -723,40 +576,6 @@ def combine_variability_score(
     values = nanmean(matrix, axis=1)
     return clean_values(values)
 
-
-
-def summarize_values(values):
-    x = clean_values(values)
-    if x.size == 0:
-        return {
-            "n": 0,
-            "mean": np.nan,
-            "std": np.nan,
-            "median": np.nan,
-            "iqr": np.nan,
-        }
-
-    return {
-        "n": int(x.size),
-        "mean": float(nanmean(x)),
-        "std": float(nanstd(x, ddof=1) if x.size > 1 else 0.0),
-        "median": float(nanmedian(x)),
-        "iqr": float(nanpercentile(x, 75) - nanpercentile(x, 25)),
-    }
-
-
-def mann_whitney_pvalue(control_values, group_values):
-    x = clean_values(control_values)
-    y = clean_values(group_values)
-
-    if x.size == 0 or y.size == 0:
-        return np.nan
-
-    try:
-        res = mannwhitneyu(x, y, alternative="two-sided", method="auto")
-        return float(res.pvalue)
-    except ValueError:
-        return np.nan
 
 
 def build_variability_ranking_table(
@@ -1140,155 +959,6 @@ def build_descriptor_pvalue_summary_table(
             "Mean p-value",
         ]
     ]
-
-
-def cohen_d(control_values, group_values):
-    """
-    Cohen's d using pooled standard deviation.
-
-    Positive values mean that the compared group has a larger mean than control.
-    """
-    x = clean_values(control_values)
-    y = clean_values(group_values)
-
-    if x.size < 2 or y.size < 2:
-        return np.nan
-
-    sx = nanstd(x, ddof=1)
-    sy = nanstd(y, ddof=1)
-    pooled_var = ((x.size - 1) * sx**2 + (y.size - 1) * sy**2) / (x.size + y.size - 2)
-
-    if pooled_var <= 0 or not np.isfinite(pooled_var):
-        return np.nan
-
-    return float((nanmean(y) - nanmean(x)) / np.sqrt(pooled_var))
-
-
-def mean_difference_ci95(control_values, group_values):
-    """
-    Approximate 95% CI for the mean difference group - control.
-    """
-    x = clean_values(control_values)
-    y = clean_values(group_values)
-
-    if x.size < 2 or y.size < 2:
-        return np.nan, np.nan, np.nan
-
-    diff = float(nanmean(y) - nanmean(x))
-    se = np.sqrt(nanvar(x, ddof=1) / x.size + nanvar(y, ddof=1) / y.size)
-
-    if not np.isfinite(se):
-        return diff, np.nan, np.nan
-
-    return diff, float(diff - 1.96 * se), float(diff + 1.96 * se)
-
-
-
-def auc_from_scores(control_values, group_values):
-    """
-    ROC AUC computed from Mann-Whitney ranks.
-
-    AUC is oriented so that higher scores predict the compared group.
-    If AUC < 0.5, the separability is in the opposite direction; for practical
-    discrimination strength, use max(AUC, 1 - AUC).
-    """
-    x = clean_values(control_values)
-    y = clean_values(group_values)
-
-    if x.size == 0 or y.size == 0:
-        return np.nan
-
-    try:
-        u = mannwhitneyu(y, x, alternative="two-sided", method="auto").statistic
-        return float(u / (x.size * y.size))
-    except ValueError:
-        return np.nan
-
-
-def best_threshold_sensitivity_specificity_cumulative_sweep(
-    control_values,
-    group_values,
-    *,
-    evaluate_both_directions=False,
-):
-    """Find the Youden-optimal threshold with one sorted cumulative sweep.
-
-    By default, classification direction follows the cohort medians, matching
-    ``best_threshold_sensitivity_specificity``. When ``evaluate_both_directions``
-    is true, the opposite direction is also evaluated and selected only when its
-    Youden index is strictly better.
-    """
-    x = clean_values(control_values)
-    y = clean_values(group_values)
-
-    if x.size == 0 or y.size == 0:
-        return np.nan, np.nan, np.nan, "NA"
-
-    scores = np.concatenate([x, y])
-    labels = np.concatenate(
-        [
-            np.zeros(x.size, dtype=np.int64),
-            np.ones(y.size, dtype=np.int64),
-        ]
-    )
-    order = np.argsort(scores, kind="stable")
-    sorted_scores = scores[order]
-    sorted_labels = labels[order]
-    values, starts, counts = np.unique(
-        sorted_scores,
-        return_index=True,
-        return_counts=True,
-    )
-
-    if values.size == 1:
-        return float(values[0]), np.nan, np.nan, "NA"
-
-    group_counts = np.add.reduceat(sorted_labels, starts)
-    control_counts = counts - group_counts
-    cumulative_group = np.cumsum(group_counts)[:-1]
-    cumulative_control = np.cumsum(control_counts)[:-1]
-    thresholds = (values[:-1] + values[1:]) / 2.0
-
-    def best_for_direction(direction):
-        if direction == ">=":
-            true_positive = y.size - cumulative_group
-            true_negative = cumulative_control
-        else:
-            true_positive = cumulative_group
-            true_negative = x.size - cumulative_control
-
-        sensitivity = true_positive / y.size
-        specificity = true_negative / x.size
-        youden = sensitivity + specificity - 1.0
-        best_index = int(np.argmax(youden))
-        return (
-            float(youden[best_index]),
-            float(thresholds[best_index]),
-            float(sensitivity[best_index]),
-            float(specificity[best_index]),
-            direction,
-        )
-
-    preferred_direction = ">=" if nanmedian(y) >= nanmedian(x) else "<="
-    best = best_for_direction(preferred_direction)
-
-    if evaluate_both_directions:
-        opposite_direction = "<=" if preferred_direction == ">=" else ">="
-        opposite = best_for_direction(opposite_direction)
-        if opposite[0] > best[0]:
-            best = opposite
-
-    _, threshold, sensitivity, specificity, direction = best
-    return threshold, sensitivity, specificity, direction
-
-
-def overlap_from_cohen_d(d):
-    """
-    Gaussian equal-variance overlap approximation: OVL = 2 Phi(-|d|/2).
-    """
-    if d is None or not np.isfinite(d):
-        return np.nan
-    return float(2.0 * norm.cdf(-abs(float(d)) / 2.0))
 
 
 def format_decision_rule(threshold, direction, group_name, digits=4):

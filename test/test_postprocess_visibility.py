@@ -129,6 +129,53 @@ class PostprocessVisibilityTests(unittest.TestCase):
             postprocess_base.POSTPROCESS_REGISTRY.clear()
             postprocess_base.POSTPROCESS_REGISTRY.update(original_registry)
 
+    def test_register_postprocess_propagates_required_option(self) -> None:
+        original_registry = postprocess_base.POSTPROCESS_REGISTRY.copy()
+        postprocess_base.POSTPROCESS_REGISTRY.clear()
+        try:
+            @registerPostprocess(
+                name="Persistent Function",
+                required_option=["persist_eyeflow_data"],
+            )
+            def persistent_function(_context):
+                return PostprocessResult()
+
+            registered = postprocess_base.POSTPROCESS_REGISTRY["Persistent Function"]
+            self.assertEqual(["persist_eyeflow_data"], registered.required_option)
+
+            descriptor = PostprocessDescriptor(
+                name=registered.name,
+                description=registered.description,
+                available=True,
+                postprocess_cls=registered,
+                required_option=list(registered.required_option),
+            )
+            self.assertEqual(
+                ["persist_eyeflow_data"],
+                descriptor.instantiate().required_option,
+            )
+        finally:
+            postprocess_base.POSTPROCESS_REGISTRY.clear()
+            postprocess_base.POSTPROCESS_REGISTRY.update(original_registry)
+
+    def test_postprocess_required_option_is_shown_in_tooltip_and_status(self) -> None:
+        postprocess = PostprocessDescriptor(
+            name="Variability",
+            description="Build variability tables.",
+            available=True,
+            required_option=["persist_eyeflow_data"],
+        )
+        controller = PostprocessLibraryController(SimpleNamespace())
+
+        self.assertIn(
+            "Requires options: persist_eyeflow_data",
+            controller.descriptor_tooltip_text(postprocess),
+        )
+        self.assertEqual(
+            "Requires: option persist_eyeflow_data",
+            controller.status_text(postprocess),
+        )
+
     def test_postprocess_library_register_filters_hidden_rows(self) -> None:
         available = [
             PostprocessDescriptor(

@@ -12,6 +12,7 @@ from input_output import (
     holo_input_status,
     is_hdf5_path,
 )
+from postprocess import required_options_for
 from workflows import (
     HoloInputContext,
     WorkflowCallbacks,
@@ -153,6 +154,13 @@ class RunTabController(ViewController):
         selection = self.collect_work_selection()
         if selection is None:
             return
+
+        if any(
+            "persist_eyeflow_data" in required_options_for(postprocess)
+            for postprocess in selection.postprocesses
+        ) and not self.persist_source():
+            self.app._persist_eyeflow_data.set(True)
+            self.persist_source_preference()
 
         self.app._reset_batch_output("Starting batch run...\n")
         self.set_minimal_status_color(None)

@@ -170,6 +170,47 @@ def _prepare_workflow_workspace(
     )
 
 
+def reset_zip_workflow_output_dir(
+    output_dir: Path,
+    *,
+    protected_paths: Iterable[Path] = (),
+) -> None:
+    """Remove stale results before writing a ZIP-input workflow output.
+
+    ZIP-input workflows use a dedicated result directory by default, so an
+    existing directory represents results from an earlier run.  Clear its
+    contents rather than allowing files from that run to be mixed with the
+    current results.  A source ZIP is protected when it lives inside the
+    selected output directory so an explicit, overlapping output selection
+    cannot delete the input before processing starts.
+    """
+    output_dir = output_dir.expanduser().resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    protected = {
+        path.expanduser().resolve()
+        for path in protected_paths
+    }
+
+    def remove_entry(path: Path) -> None:
+        if path.resolve() in protected:
+            return
+        if path.is_symlink() or not path.is_dir():
+            path.unlink()
+            return
+        if any(
+            protected_path == path.resolve()
+            or path.resolve() in protected_path.parents
+            for protected_path in protected
+        ):
+            for child in path.iterdir():
+                remove_entry(child)
+            return
+        shutil.rmtree(path)
+
+    for child in output_dir.iterdir():
+        remove_entry(child)
+
+
 def run_filesystem_workflow(
     *,
     inputs: Iterable[Path],
@@ -284,6 +325,10 @@ def run_zip_workflow(
     on_zip_error: Callable[[str], None] | None = None,
     idle_callback: IdleCallback | None = None,
 ) -> RunWorkflowResult:
+    reset_zip_workflow_output_dir(
+        base_output_dir,
+        protected_paths=(zip_path,),
+    )
     workspace = _prepare_workflow_workspace(
         base_output_dir=base_output_dir,
         zip_outputs=zip_outputs,

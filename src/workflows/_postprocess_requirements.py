@@ -109,6 +109,30 @@ def missing_required_pipeline_errors(
     return errors
 
 
+def missing_required_option_errors(
+    *,
+    postprocesses: Sequence[object],
+    persist_source: bool,
+) -> list[str]:
+    if persist_source:
+        return []
+
+    errors: list[str] = []
+    for postprocess in postprocesses:
+        required_options = _required_options_for(postprocess)
+        for option in required_options:
+            if option == "persist_eyeflow_data":
+                errors.append(
+                    f"{postprocess.name} requires the Persist Eyeflow Data option; "
+                    "add --keep-source."
+                )
+            else:
+                errors.append(
+                    f"{postprocess.name} requires workflow option: {option}"
+                )
+    return errors
+
+
 def _pipeline_options(
     *,
     required_pipelines: Sequence[str],
@@ -126,6 +150,15 @@ def _pipeline_options_for(obj: object) -> tuple[tuple[str, ...], ...]:
         return tuple(tuple(option) for option in options if option)
     required = tuple(getattr(obj, "required_pipelines", ()))
     return tuple((pipeline_name,) for pipeline_name in required)
+
+
+def _required_options_for(obj: object) -> tuple[str, ...]:
+    options = getattr(obj, "required_option", None)
+    if options is None:
+        options = getattr(obj, "required_options", ())
+    if isinstance(options, str):
+        return (options,)
+    return tuple(option for option in options if option)
 
 
 def _format_pipeline_options(

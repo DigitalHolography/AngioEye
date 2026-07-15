@@ -17,6 +17,7 @@ from .core.base import (
     PostprocessResult,
     format_required_pipeline_options,
     registerPostprocess,
+    required_options_for,
     required_pipeline_options_for,
 )
 
@@ -86,6 +87,7 @@ def _discover_postprocesses() -> tuple[
             missing_deps=cls.missing_deps,
             required_pipelines=getattr(cls, "required_pipelines", []),
             required_pipeline_options=[list(option) for option in pipeline_options],
+            required_option=list(getattr(cls, "required_option", ())),
             input_methods=getattr(cls, "input_methods", list(DEFAULT_INPUT_METHODS)),
             missing_pipelines=missing_pipelines,
             postprocess_cls=cls,
@@ -163,6 +165,7 @@ __all__ = [
     "PostprocessInputMethod",
     "PostprocessResult",
     "format_required_pipeline_options",
+    "required_options_for",
     "required_pipeline_options_for",
     "registerPostprocess",
     "load_postprocess_catalog",

@@ -91,6 +91,7 @@ def _zip_html_relative_parent(output_dir, processed_file, source_relative_path):
     ),
     required_deps=["matplotlib>=3.8", "pandas>=2.1", "plotly>=5.18"],
     required_pipelines=["waveform_shape_metrics"],
+    required_option=["persist_eyeflow_data"],
     input_methods=["single_file", "file_batch", "cohort_batch", "zip_batch"],
 )
 class WaveformMetricSummaryTablesPostprocess(BatchPostprocess):

@@ -11,6 +11,16 @@ SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+import input_output.hdf5_io as hdf5_io  # noqa: E402
+from math_utils import (  # noqa: E402
+    cv_1d,
+    finite_1d,
+    iqr_1d,
+    mad_1d,
+    median_1d,
+    nanmedian_or_nan,
+    std_1d,
+)
 from postprocess.utils import (  # noqa: E402
     variability_heterogeneity_dashboard as dashboard,
 )
@@ -19,12 +29,12 @@ from postprocess.utils import (  # noqa: E402
 def _reference_axis_statistics(slices, eps):
     stats = {name: [] for name in ("median", "std", "iqr", "mad", "cv")}
     for values in slices:
-        finite = dashboard.finite_1d(values)
-        stats["median"].append(dashboard.median_1d(finite))
-        stats["std"].append(dashboard.std_1d(finite))
-        stats["iqr"].append(dashboard.iqr_1d(finite))
-        stats["mad"].append(dashboard.mad_1d(finite))
-        stats["cv"].append(dashboard.cv_1d(finite, eps=eps))
+        finite = finite_1d(values)
+        stats["median"].append(median_1d(finite))
+        stats["std"].append(std_1d(finite))
+        stats["iqr"].append(iqr_1d(finite))
+        stats["mad"].append(mad_1d(finite))
+        stats["cv"].append(cv_1d(finite, eps=eps))
     return {name: np.asarray(values, dtype=float) for name, values in stats.items()}
 
 
@@ -46,15 +56,15 @@ def _reference_higher_metrics(arr, eps=dashboard.EPS):
         eps,
     )
     return {
-        "MED_seg_medbeat": dashboard.nanmedian_or_nan(spatial["median"]),
-        "STD_seg_medbeat": dashboard.nanmedian_or_nan(spatial["std"]),
-        "IQR_seg_medbeat": dashboard.nanmedian_or_nan(spatial["iqr"]),
-        "MAD_seg_medbeat": dashboard.nanmedian_or_nan(spatial["mad"]),
-        "CV_seg_medbeat": dashboard.nanmedian_or_nan(spatial["cv"]),
-        "STD_beat_medseg": dashboard.nanmedian_or_nan(temporal["std"]),
-        "IQR_beat_medseg": dashboard.nanmedian_or_nan(temporal["iqr"]),
-        "MAD_beat_medseg": dashboard.nanmedian_or_nan(temporal["mad"]),
-        "CV_beat_medseg": dashboard.nanmedian_or_nan(temporal["cv"]),
+        "MED_seg_medbeat": nanmedian_or_nan(spatial["median"]),
+        "STD_seg_medbeat": nanmedian_or_nan(spatial["std"]),
+        "IQR_seg_medbeat": nanmedian_or_nan(spatial["iqr"]),
+        "MAD_seg_medbeat": nanmedian_or_nan(spatial["mad"]),
+        "CV_seg_medbeat": nanmedian_or_nan(spatial["cv"]),
+        "STD_beat_medseg": nanmedian_or_nan(temporal["std"]),
+        "IQR_beat_medseg": nanmedian_or_nan(temporal["iqr"]),
+        "MAD_beat_medseg": nanmedian_or_nan(temporal["mad"]),
+        "CV_beat_medseg": nanmedian_or_nan(temporal["cv"]),
     }
 
 
@@ -103,7 +113,7 @@ class SegmentMetricExtractionTests(unittest.TestCase):
 
             with (
                 mock.patch.object(
-                    dashboard.h5py,
+                    hdf5_io.h5py,
                     "File",
                     wraps=real_h5_file,
                 ) as open_h5,
