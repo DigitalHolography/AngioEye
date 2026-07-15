@@ -1,5 +1,18 @@
 import numpy as np
 
+from math_utils import (
+    harmonic_pack as build_harmonic_pack,
+    nanargmax,
+    nanargmin,
+    nanmax,
+    nanmean,
+    nanmedian,
+    nanmin,
+    nanstd,
+    nansum,
+    rfft_normalized,
+)
+
 from .core.base import ProcessPipeline, ProcessResult, registerPipeline, with_attrs
 
 
@@ -101,18 +114,6 @@ class ArterialSegExample(ProcessPipeline):
         x = np.asarray(x, dtype=float)
         return np.where(np.isfinite(x), np.maximum(x, 0.0), np.nan)
 
-    @staticmethod
-    def _safe_nanmean(x: np.ndarray) -> float:
-        if x.size == 0 or not np.any(np.isfinite(x)):
-            return np.nan
-        return float(np.nanmean(x))
-
-    @staticmethod
-    def _safe_nanmedian(x: np.ndarray) -> float:
-        if x.size == 0 or not np.any(np.isfinite(x)):
-            return np.nan
-        return float(np.nanmedian(x))
-
     def _denoise_segment_block(self, v_block: np.ndarray) -> tuple[np.ndarray, dict]:
         """
         Apply morphology-preserving denoising independently to each
@@ -147,7 +148,7 @@ class ArterialSegExample(ProcessPipeline):
                     if not self._denoise_has_enough_valid_samples(finite_count, n_time):
                         status_code[index] = 2
                         continue
-                    if float(np.nanstd(pulse)) <= self.eps:
+                    if float(nanstd(pulse)) <= self.eps:
                         status_code[index] = 3
                         out[:, beat_idx, branch_idx, radius_idx] = np.where(
                             finite_mask, pulse, np.nan
@@ -507,11 +508,10 @@ class ArterialSegExample(ProcessPipeline):
         return y
 
     def _denoise_harmonic_lowpass(self, pulse: np.ndarray) -> np.ndarray:
-        spectrum = np.fft.rfft(np.asarray(pulse, dtype=float))
-        max_harmonic = min(int(self.denoise_harmonic_count), spectrum.size - 1)
-        truncated = np.zeros_like(spectrum)
-        truncated[: max_harmonic + 1] = spectrum[: max_harmonic + 1]
-        return np.fft.irfft(truncated, n=pulse.size)
+        pack = build_harmonic_pack(
+            np.asarray(pulse, dtype=float), self.denoise_harmonic_count, axis=0
+        )
+        return pack["vb"]
 
     def _denoise_gaussian_smooth(self, pulse: np.ndarray) -> np.ndarray:
         sigma = float(self.denoise_gaussian_sigma_samples)
@@ -546,8 +546,8 @@ class ArterialSegExample(ProcessPipeline):
         finite = np.isfinite(original)
         if not np.any(finite):
             return candidate
-        vmin = float(np.nanmin(original))
-        vmax = float(np.nanmax(original))
+        vmin = float(nanmin(original))
+        vmax = float(nanmax(original))
         span = max(vmax - vmin, self.eps)
         margin = 0.05 * span
         out = np.asarray(candidate, dtype=float).copy()
@@ -647,7 +647,7 @@ class ArterialSegExample(ProcessPipeline):
             return np.nan
 
         vv = np.asarray(v, dtype=float)
-        vmax = float(np.nanmax(vv))
+        vmax = float(nanmax(vv))
         if (not np.isfinite(vmax)) or vmax <= 0:
             return np.nan
 
@@ -711,7 +711,7 @@ class ArterialSegExample(ProcessPipeline):
         if n < 3:
             return np.nan
 
-        X = np.fft.rfft(vv)
+        X = rfft_normalized(vv, axis=0)
         P = np.abs(X) ** 2
         if P.size < 3:
             return np.nan
@@ -722,32 +722,6 @@ class ArterialSegExample(ProcessPipeline):
             return np.nan
 
         return float(E_LF / E_HF)
-
-    def _harmonic_pack(self, v: np.ndarray, Tbeat: float) -> dict:
-        """
-        Compute complex harmonic coefficients Vn for n=0..H, with H=min(H_MAX, n_rfft-1),
-        and synthesize band-limited waveform vb(t) using harmonics 0..H.
-        """
-        if (not np.isfinite(Tbeat)) or Tbeat <= 0:
-            return {"V": None, "H": 0, "vb": None, "Vfull": None}
-
-        if v.size == 0 or not np.any(np.isfinite(v)):
-            return {"V": None, "H": 0, "vb": None, "Vfull": None}
-
-        vv = np.where(np.isfinite(v), v, 0.0)
-        n = vv.size
-        if n < 2:
-            return {"V": None, "H": 0, "vb": None, "Vfull": None}
-
-        Vfull = np.fft.rfft(vv) / float(n)
-        H = int(min(self.H_MAX, Vfull.size - 1))
-        V = Vfull[: H + 1].copy()
-
-        Vtrunc = np.zeros_like(Vfull)
-        Vtrunc[: H + 1] = V
-        vb = np.fft.irfft(Vtrunc * float(n), n=n)
-
-        return {"V": V, "H": H, "vb": vb, "Vfull": Vfull}
 
     def _higher_harmonic_rolloff_metrics(self, V: np.ndarray) -> dict:
         """
@@ -779,7 +753,7 @@ class ArterialSegExample(ProcessPipeline):
 
         power = np.abs(V[2 : H + 1]) ** 2
         power = np.where(np.isfinite(power), power, np.nan)
-        s = float(np.nansum(power))
+        s = float(nansum(power))
         if (not np.isfinite(s)) or s <= 0:
             return out
 
@@ -842,10 +816,10 @@ class ArterialSegExample(ProcessPipeline):
         if not np.any(np.isfinite(v)):
             return np.nan
         x = np.where(np.isfinite(v), v, np.nan)
-        rms = float(np.sqrt(self._safe_nanmean(x * x)))
+        rms = float(np.sqrt(nanmean(x * x)))
         if rms <= 0:
             return np.nan
-        return float(np.nanmax(x) / rms)
+        return float(nanmax(x) / rms)
 
     def _phase_organization_metrics(self, V: np.ndarray, Tbeat: float) -> dict:
         """
@@ -926,8 +900,8 @@ class ArterialSegExample(ProcessPipeline):
         vals_over_T = np.asarray(
             [dphi / (2.0 * np.pi * n) for n, dphi, _ in selected], dtype=float
         )
-        center = float(np.nanmedian(vals_over_T))
-        spread = float(np.nanmedian(np.abs(vals_over_T - center)))
+        center = float(nanmedian(vals_over_T))
+        spread = float(nanmedian(np.abs(vals_over_T - center)))
 
         out["t_phi_over_T"] = center
         out["s_phi_over_T"] = spread
@@ -997,8 +971,8 @@ class ArterialSegExample(ProcessPipeline):
         if v.size == 0 or not np.any(np.isfinite(v)):
             return np.nan, np.nan, -1, -1
 
-        idx_peak = int(np.nanargmax(v))
-        idx_min = int(np.nanargmin(v))
+        idx_peak = int(nanargmax(v))
+        idx_min = int(nanargmin(v))
 
         return float(idx_peak / v.size), float(idx_min / v.size), idx_peak, idx_min
 
@@ -1017,7 +991,7 @@ class ArterialSegExample(ProcessPipeline):
         ):
             return np.nan, np.nan, np.nan, np.nan
 
-        meanv = self._safe_nanmean(v)
+        meanv = nanmean(v)
         if (not np.isfinite(meanv)) or meanv <= 0:
             return np.nan, np.nan, np.nan, np.nan
 
@@ -1026,11 +1000,11 @@ class ArterialSegExample(ProcessPipeline):
         if not np.any(np.isfinite(dvdt)):
             return np.nan, np.nan, np.nan, np.nan
 
-        idx_up = int(np.nanargmax(dvdt))
-        idx_down = int(np.nanargmin(dvdt))
+        idx_up = int(nanargmax(dvdt))
+        idx_down = int(nanargmin(dvdt))
 
-        s_up = float(np.nanmax(dvdt))
-        s_down = float(np.nanmin(dvdt))
+        s_up = float(nanmax(dvdt))
+        s_down = float(nanmin(dvdt))
 
         return (
             float(Tbeat * s_up / (meanv + self.eps)),
@@ -1046,7 +1020,7 @@ class ArterialSegExample(ProcessPipeline):
         if v.size == 0 or not np.any(np.isfinite(v)):
             return np.nan
 
-        meanv = self._safe_nanmean(v)
+        meanv = nanmean(v)
         if (not np.isfinite(meanv)) or meanv <= 0:
             return np.nan
 
@@ -1055,7 +1029,7 @@ class ArterialSegExample(ProcessPipeline):
             return np.nan
 
         tail = np.asarray(v[k0:k1], dtype=float)
-        vend = self._safe_nanmean(tail)
+        vend = nanmean(tail)
         if (not np.isfinite(vend)) or vend < 0:
             return np.nan
 
@@ -1165,7 +1139,7 @@ class ArterialSegExample(ProcessPipeline):
             return np.nan
         z = (t - mu_t) / (sigma_t + self.eps)
         return float(
-            np.nansum(np.where(np.isfinite(v), v, 0.0) * (z**3)) / (m0 + self.eps)
+            nansum(np.where(np.isfinite(v), v, 0.0) * (z**3)) / (m0 + self.eps)
         )
 
     def _derivative_energy_slope(self, v: np.ndarray, Tbeat: float, m0: float) -> float:
@@ -1204,9 +1178,9 @@ class ArterialSegExample(ProcessPipeline):
             return {}
 
         tail = np.asarray(v[k0:k1], dtype=float)
-        vend = self._safe_nanmean(tail)
+        vend = nanmean(tail)
         vv = np.where(np.isfinite(v), v, np.nan)
-        m0_sum = float(np.nansum(vv))
+        m0_sum = float(nansum(vv))
         if m0_sum <= 0:
             return {}
 
@@ -1214,9 +1188,9 @@ class ArterialSegExample(ProcessPipeline):
         dt = Tbeat / n
         m0 = float(m0_sum * dt)
 
-        vmax = float(np.nanmax(vv))
-        vmin = float(np.nanmin(vv))
-        vmean = float(np.nanmean(vv))
+        vmax = float(nanmax(vv))
+        vmin = float(nanmin(vv))
+        vmean = float(nanmean(vv))
 
         d_full = np.concatenate(
             ([0.0], np.cumsum(np.where(np.isfinite(vv), vv, 0.0)) / m0_sum)
@@ -1232,7 +1206,9 @@ class ArterialSegExample(ProcessPipeline):
         dvdt_norm = (Tbeat**3 / ((m0 + self.eps) ** 2)) * (dvdt**2)
         d2vdt2_norm = (Tbeat**5 / ((m0 + self.eps) ** 2)) * (d2vdt2**2)
 
-        hp = self._harmonic_pack(vv, Tbeat)
+        hp = build_harmonic_pack(
+            np.where(np.isfinite(vv), vv, 0.0), self.H_MAX, axis=0
+        )
         V = hp["V"]
         vb = hp["vb"]
         H = int(hp["H"])
@@ -1259,11 +1235,11 @@ class ArterialSegExample(ProcessPipeline):
             power_h = power[1 : H + 1]
             mags_h = mags[1 : H + 1]
 
-            power_sum = float(np.nansum(power_h))
-            mag_sum = float(np.nansum(mags_h))
+            power_sum = float(nansum(power_h))
+            mag_sum = float(nansum(mags_h))
 
             E_total = power_sum
-            E_low = float(np.nansum(power[1 : self.H_LOW_MAX + 1]))
+            E_low = float(nansum(power[1 : self.H_LOW_MAX + 1]))
 
             if np.isfinite(power_sum) and power_sum > 0:
                 harmonic_energy_weights[0:H] = power_h / (power_sum + self.eps)
@@ -1442,20 +1418,20 @@ class ArterialSegExample(ProcessPipeline):
             return {k[0]: np.nan for k in self._metric_keys()}
 
         vv = np.where(np.isfinite(v), v, np.nan)
-        m0 = float(np.nansum(vv))
+        m0 = float(nansum(vv))
         if m0 <= 0:
             return {k[0]: np.nan for k in self._metric_keys()}
 
         dt = Tbeat / n
         t = np.arange(n, dtype=float) * dt
 
-        m1 = float(np.nansum(vv * t))
+        m1 = float(nansum(vv * t))
         mu_t = m1 / m0
         mu_t_over_T = mu_t / Tbeat
 
-        vmax = float(np.nanmax(vv))
-        vmin = float(np.nanmin(vv))
-        meanv = float(self._safe_nanmean(vv))
+        vmax = float(nanmax(vv))
+        vmin = float(nanmin(vv))
+        meanv = float(nanmean(vv))
 
         if vmax <= 0:
             RI = np.nan
@@ -1472,18 +1448,18 @@ class ArterialSegExample(ProcessPipeline):
 
         k_R_VTI = int(np.ceil(n * self.ratio_R_VTI))
         k_R_VTI = max(0, min(n, k_R_VTI))
-        D1_R_VTI = float(np.nansum(vv[:k_R_VTI])) if k_R_VTI > 0 else np.nan
-        D2_R_VTI = float(np.nansum(vv[k_R_VTI:])) if k_R_VTI < n else np.nan
+        D1_R_VTI = float(nansum(vv[:k_R_VTI])) if k_R_VTI > 0 else np.nan
+        D2_R_VTI = float(nansum(vv[k_R_VTI:])) if k_R_VTI < n else np.nan
         R_VTI = D1_R_VTI / (D2_R_VTI + self.eps)
 
         k_sf = int(np.ceil(n * self.ratio_SF_VTI))
         k_sf = max(0, min(n, k_sf))
-        D1_sf = float(np.nansum(vv[:k_sf])) if k_sf > 0 else np.nan
-        D2_sf = float(np.nansum(vv[k_sf:])) if k_sf < n else np.nan
+        D1_sf = float(nansum(vv[:k_sf])) if k_sf > 0 else np.nan
+        D2_sf = float(nansum(vv[k_sf:])) if k_sf < n else np.nan
         SF_VTI = D1_sf / (D1_sf + D2_sf + self.eps)
 
         dtau = t - mu_t
-        m2 = float(np.nansum(vv * (dtau**2)))
+        m2 = float(nansum(vv * (dtau**2)))
         sigma_t = np.sqrt(m2 / m0 + self.eps)
         sigma_t_over_T = sigma_t / Tbeat
 
@@ -1505,7 +1481,9 @@ class ArterialSegExample(ProcessPipeline):
 
         E_LF_over_E_HF = self._spectral_ratio_LF_over_HF(vv, Tbeat)
 
-        hp = self._harmonic_pack(vv, Tbeat)
+        hp = build_harmonic_pack(
+            np.where(np.isfinite(vv), vv, 0.0), self.H_MAX, axis=0
+        )
         vb = hp["vb"]
 
         CF = self._crest_factor(vv)
@@ -1824,13 +1802,13 @@ class ArterialSegExample(ProcessPipeline):
 
                 for k in self._metric_keys():
                     key = k[0]
-                    br[key][beat_idx, branch_idx] = self._safe_nanmedian(
+                    br[key][beat_idx, branch_idx] = nanmedian(
                         np.asarray(br_vals[key], dtype=float)
                     )
 
             for k in self._metric_keys():
                 key = k[0]
-                gl[key][beat_idx] = self._safe_nanmedian(
+                gl[key][beat_idx] = nanmedian(
                     np.asarray(gl_vals[key], dtype=float)
                 )
 

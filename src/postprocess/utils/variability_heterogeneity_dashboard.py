@@ -6,6 +6,7 @@ from tkinter import Tk, filedialog
 import h5py
 import numpy as np
 import pandas as pd
+from math_utils import nanmad, nanmean, nanmedian, nanpercentile, nanstd, nanvar
 
 import matplotlib
 
@@ -236,8 +237,8 @@ def iqr_1d(x):
     x = finite_1d(x)
     if x.size == 0:
         return np.nan
-    q25 = np.nanpercentile(x, 25)
-    q75 = np.nanpercentile(x, 75)
+    q25 = nanpercentile(x, 25)
+    q75 = nanpercentile(x, 75)
     return float(q75 - q25)
 
 
@@ -245,16 +246,15 @@ def mad_1d(x):
     x = finite_1d(x)
     if x.size == 0:
         return np.nan
-    med = np.nanmedian(x)
-    return float(np.nanmedian(np.abs(x - med)))
+    return float(nanmad(x))
 
 
 def cv_1d(x, eps=EPS):
     x = finite_1d(x)
     if x.size == 0:
         return np.nan
-    mu = np.nanmean(x)
-    sd = np.nanstd(x, ddof=1) if x.size > 1 else 0.0
+    mu = nanmean(x)
+    sd = nanstd(x, ddof=1) if x.size > 1 else 0.0
     return float(sd / (np.abs(mu) + eps))
 
 
@@ -262,20 +262,20 @@ def median_1d(x):
     x = finite_1d(x)
     if x.size == 0:
         return np.nan
-    return float(np.nanmedian(x))
+    return float(nanmedian(x))
 
 
 def std_1d(x):
     x = finite_1d(x)
     if x.size == 0:
         return np.nan
-    return float(np.nanstd(x, ddof=1) if x.size > 1 else 0.0)
+    return float(nanstd(x, ddof=1) if x.size > 1 else 0.0)
 
 
 def nanmedian_or_nan(x):
     x = np.asarray(x, dtype=float)
     if np.any(np.isfinite(x)):
-        return float(np.nanmedian(x))
+        return float(nanmedian(x))
     return np.nan
 
 
@@ -308,14 +308,14 @@ def _compute_axis_statistics(values, axis, eps=EPS):
 
     valid_samples = samples[valid]
     valid_counts = counts[valid]
-    medians = np.nanmedian(valid_samples, axis=1)
-    quartiles = np.nanpercentile(valid_samples, (25, 75), axis=1)
-    means = np.nanmean(valid_samples, axis=1)
+    medians = nanmedian(valid_samples, axis=1)
+    quartiles = nanpercentile(valid_samples, (25, 75), axis=1)
+    means = nanmean(valid_samples, axis=1)
 
     stds = np.zeros(len(valid_samples), dtype=float)
     multiple_values = valid_counts > 1
     if np.any(multiple_values):
-        stds[multiple_values] = np.nanstd(
+        stds[multiple_values] = nanstd(
             valid_samples[multiple_values],
             axis=1,
             ddof=1,
@@ -324,7 +324,7 @@ def _compute_axis_statistics(values, axis, eps=EPS):
     result["median"][valid] = medians
     result["std"][valid] = stds
     result["iqr"][valid] = quartiles[1] - quartiles[0]
-    result["mad"][valid] = np.nanmedian(
+    result["mad"][valid] = nanmedian(
         np.abs(valid_samples - medians[:, np.newaxis]),
         axis=1,
     )
@@ -552,8 +552,8 @@ def format_mean_std(values, digits=3):
     if x.size == 0:
         return "NA"
 
-    mu = np.nanmean(x)
-    sd = np.nanstd(x, ddof=1) if x.size > 1 else 0.0
+    mu = nanmean(x)
+    sd = nanstd(x, ddof=1) if x.size > 1 else 0.0
     return f"{mu:.{digits}f} $\\pm$ {sd:.{digits}f}"
 
 
@@ -720,7 +720,7 @@ def combine_variability_score(
         return np.asarray([], dtype=float)
 
     matrix = np.vstack([x[:min_len] for x in arrays]).T
-    values = np.nanmean(matrix, axis=1)
+    values = nanmean(matrix, axis=1)
     return clean_values(values)
 
 
@@ -738,10 +738,10 @@ def summarize_values(values):
 
     return {
         "n": int(x.size),
-        "mean": float(np.nanmean(x)),
-        "std": float(np.nanstd(x, ddof=1) if x.size > 1 else 0.0),
-        "median": float(np.nanmedian(x)),
-        "iqr": float(np.nanpercentile(x, 75) - np.nanpercentile(x, 25)),
+        "mean": float(nanmean(x)),
+        "std": float(nanstd(x, ddof=1) if x.size > 1 else 0.0),
+        "median": float(nanmedian(x)),
+        "iqr": float(nanpercentile(x, 75) - nanpercentile(x, 25)),
     }
 
 
@@ -1154,14 +1154,14 @@ def cohen_d(control_values, group_values):
     if x.size < 2 or y.size < 2:
         return np.nan
 
-    sx = np.nanstd(x, ddof=1)
-    sy = np.nanstd(y, ddof=1)
+    sx = nanstd(x, ddof=1)
+    sy = nanstd(y, ddof=1)
     pooled_var = ((x.size - 1) * sx**2 + (y.size - 1) * sy**2) / (x.size + y.size - 2)
 
     if pooled_var <= 0 or not np.isfinite(pooled_var):
         return np.nan
 
-    return float((np.nanmean(y) - np.nanmean(x)) / np.sqrt(pooled_var))
+    return float((nanmean(y) - nanmean(x)) / np.sqrt(pooled_var))
 
 
 def mean_difference_ci95(control_values, group_values):
@@ -1174,8 +1174,8 @@ def mean_difference_ci95(control_values, group_values):
     if x.size < 2 or y.size < 2:
         return np.nan, np.nan, np.nan
 
-    diff = float(np.nanmean(y) - np.nanmean(x))
-    se = np.sqrt(np.nanvar(x, ddof=1) / x.size + np.nanvar(y, ddof=1) / y.size)
+    diff = float(nanmean(y) - nanmean(x))
+    se = np.sqrt(nanvar(x, ddof=1) / x.size + nanvar(y, ddof=1) / y.size)
 
     if not np.isfinite(se):
         return diff, np.nan, np.nan
@@ -1269,7 +1269,7 @@ def best_threshold_sensitivity_specificity_cumulative_sweep(
             direction,
         )
 
-    preferred_direction = ">=" if np.nanmedian(y) >= np.nanmedian(x) else "<="
+    preferred_direction = ">=" if nanmedian(y) >= nanmedian(x) else "<="
     best = best_for_direction(preferred_direction)
 
     if evaluate_both_directions:

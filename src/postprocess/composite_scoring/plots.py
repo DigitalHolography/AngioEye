@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import numpy as np
+from math_utils import nanmax, nanmin, nanpercentile
 
 from input_output import png_output_dir
 from input_output.hdf5_schema import safe_h5_key
@@ -96,7 +97,7 @@ def _plot_score_violin_by_cohort(
         if values.size == 0:
             continue
 
-        if values.size > 1 and float(np.nanmax(values) - np.nanmin(values)) > 0:
+        if values.size > 1 and float(nanmax(values) - nanmin(values)) > 0:
             parts = ax.violinplot(
                 [values],
                 positions=[position],
@@ -139,7 +140,7 @@ def _plot_score_violin_by_cohort(
             zorder=4,
         )
 
-        q1, median, q3 = np.percentile(values, [25, 50, 75])
+        q1, median, q3 = nanpercentile(values, [25, 50, 75])
         ax.vlines(position, q1, q3, color="black", linewidth=2.0, zorder=5)
         ax.scatter(
             [position],

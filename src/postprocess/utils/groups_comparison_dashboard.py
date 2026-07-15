@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 from matplotlib import gridspec
 from matplotlib.ticker import FormatStrFormatter
+from math_utils import nanargmax, nanargmin, nanmax, nanmean, nanmedian, nanstd, nansum
 from input_output.hdf5_io import find_first_existing_path, read_array
 from input_output.hdf5_schema import pipeline_path_candidates
 from input_output.archive_io import (
@@ -483,11 +484,11 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
         if not np.isfinite(eta_h):
             # fallback si le support ne donne pas directement la mÃ©trique
             resid = (
-                np.nansum((sig - vb[: len(sig)]) ** 2)
+                nansum((sig - vb[: len(sig)]) ** 2)
                 if len(vb) == len(sig)
                 else np.nan
             )
-            denom = np.nansum((sig - np.nanmean(sig)) ** 2)
+            denom = nansum((sig - nanmean(sig)) ** 2)
             eta_h = 1.0 - resid / max(denom, EPS)
 
         ax.plot(tau, sig, linewidth=3, color=main_color, label="signal")
@@ -588,8 +589,8 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
             0.5, tau, sig, y0=0.0, color="#000000", linestyles="--", linewidth=1
         )
 
-        d1 = float(np.nansum(sig[tau < 0.5]))
-        d2 = float(np.nansum(sig[tau >= 0.5]))
+        d1 = float(nansum(sig[tau < 0.5]))
+        d2 = float(nansum(sig[tau >= 0.5]))
         info_box([rf"$D_1={d1:.3g} , D_2={d2:.3g}$", rf"$R_{{VTI}}={ratio:.3f}$"])
         ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v(t) \: (mm/s)$", fontsize=14, labelpad=12)
@@ -619,8 +620,8 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
             tau_k, tau, sig, y0=0.0, color="#000000", linestyles="--", linewidth=1
         )
 
-        d1 = float(np.nansum(sig[tau < tau_k]))
-        dtot = float(np.nansum(sig))
+        d1 = float(nansum(sig[tau < tau_k]))
+        dtot = float(nansum(sig))
         info_box([rf"$D_1={d1:.3g} , D_1 + D_2={dtot:.3g}$", rf"$SF_{{VTI}}={sf:.3f}$"])
         ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v(t) \: (mm/s)$", fontsize=14, labelpad=12)
@@ -673,7 +674,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
 
     elif metric == "S_rise":
         s_rise = float(support["S_rise"])
-        idx = int(np.nanargmax(dvdt))
+        idx = int(nanargmax(dvdt))
 
         ax.plot(tau, sig, linewidth=3, color=main_color)
         vline_to_curve(
@@ -685,7 +686,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
 
     elif metric == "S_fall":
         s_fall = float(support["S_fall"])
-        idx = int(np.nanargmin(dvdt))
+        idx = int(nanargmin(dvdt))
 
         ax.plot(tau, sig, linewidth=3, color=main_color)
         vline_to_curve(
@@ -735,8 +736,8 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
     
     elif metric == "CF":
         cf = float(support["CF"])
-        vmax = float(np.nanmax(vb))
-        rms = float(np.sqrt(np.nanmean(vb**2)))
+        vmax = float(nanmax(vb))
+        rms = float(np.sqrt(nanmean(vb**2)))
         vb_tau = np.linspace(0.0, 1.0, len(vb), endpoint=False)
 
         ax.plot(vb_tau, vb, linewidth=3, color=main_color)
@@ -1215,8 +1216,8 @@ def extract_group_metrics(group, results_dict, prefix=""):
                 latex_formula = item.attrs.get("latex_formula", "")
 
                 results_dict[full_name] = {
-                    "median": float(np.nanmedian(data)),
-                    "std": float(np.nanstd(data)),
+                    "median": float(nanmedian(data)),
+                    "std": float(nanstd(data)),
                     "latex_formula": latex_formula,
                 }
 
@@ -1267,9 +1268,9 @@ def select_representative_file_per_group(df_metric: pd.DataFrame, value_col="med
         vals = gdf[value_col].astype(float).values
         if len(vals) == 0 or not np.any(np.isfinite(vals)):
             continue
-        med = float(np.nanmedian(vals))
+        med = float(nanmedian(vals))
         # index du patient le plus proche de la mÃ©diane
-        idx = int(np.nanargmin(np.abs(vals - med)))
+        idx = int(nanargmin(np.abs(vals - med)))
         rep[g] = gdf.iloc[idx]["file"]
 
     return rep

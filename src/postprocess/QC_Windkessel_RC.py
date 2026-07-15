@@ -6,6 +6,8 @@ from typing import Any
 import h5py
 import numpy as np
 
+from math_utils import nanmad, nanmean, nanmedian
+
 from input_output.hdf5_io import MetricsTree, append_metrics_trees_to_h5, read_dataset
 from input_output.hdf5_schema import ANGIOEYE_POSTPROCESS_ROOT, find_pipeline_group
 
@@ -123,20 +125,19 @@ class QCWindkesselRC(BatchPostprocess):
         x = np.asarray(x, dtype=float)
         if x.size == 0 or not np.any(np.isfinite(x)):
             return np.nan
-        return float(np.nanmedian(x))
+        return float(nanmedian(x))
 
     def _safe_mean(self, x) -> float:
         x = np.asarray(x, dtype=float)
         if x.size == 0 or not np.any(np.isfinite(x)):
             return np.nan
-        return float(np.nanmean(x))
+        return float(nanmean(x))
 
     def _safe_mad(self, x) -> float:
         x = np.asarray(x, dtype=float)
         if x.size == 0 or not np.any(np.isfinite(x)):
             return np.nan
-        med = float(np.nanmedian(x))
-        return float(np.nanmedian(np.abs(x - med)))
+        return float(nanmad(x))
 
     def _count_valid(self, x) -> int:
         x = np.asarray(x, dtype=float)

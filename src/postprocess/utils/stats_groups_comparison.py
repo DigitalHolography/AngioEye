@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 from matplotlib.ticker import FormatStrFormatter
 from tkinter import Tk, filedialog
+from math_utils import nanmedian, nanstd
 from input_output.hdf5_io import find_first_existing_path
 from input_output.hdf5_schema import pipeline_path_candidates
 from input_output.archive_io import (
@@ -149,8 +150,8 @@ def extract_group_metrics(group, results_dict, prefix=""):
                 data = np.array(item, dtype=float)
 
                 results_dict[full_name] = {
-                    "median": np.nanmedian(data),
-                    "std": np.nanstd(data),
+                    "median": nanmedian(data),
+                    "std": nanstd(data),
                 }
 
             except (ValueError, TypeError):
