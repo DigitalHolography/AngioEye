@@ -1,8 +1,8 @@
-﻿import os
-import shutil
-from pathlib import Path
+﻿import shutil
 from collections import defaultdict
+from pathlib import Path
 from tkinter import Tk, filedialog
+
 import h5py
 import matplotlib
 
@@ -12,14 +12,16 @@ import numpy as np
 import pandas as pd
 from matplotlib import gridspec
 from matplotlib.ticker import FormatStrFormatter
-from math_utils import nanargmax, nanargmin, nanmax, nanmean, nanmedian, nanstd, nansum
-from input_output.hdf5_io import find_first_existing_path, read_array
-from input_output.hdf5_schema import pipeline_path_candidates
+
 from input_output.archive_io import (
     extracted_zip_tree,
-    reset_output_dir,
     replace_folder_in_zip,
+    reset_output_dir,
 )
+from input_output.hdf5_io import find_first_existing_path, read_array
+from input_output.hdf5_schema import pipeline_path_candidates
+from math_utils import nanargmax, nanargmin, nanmax, nanmean, nanmedian, nanstd, nansum
+
 from ..core.grouped_batch import (
     build_group_order,
     build_grouped_h5_index,
@@ -201,6 +203,19 @@ def extract_graphics_support(h5_path, vessel="artery", mode="bandlimited"):
             out[current_mode] = mode_dict
 
     return out
+
+
+def _extract_graphics_support_cached(cache, h5_path, *, vessel, mode):
+    """Load each representative file/mode/vessel support block at most once."""
+    key = (str(h5_path), vessel, mode)
+    if key not in cache:
+        cache[key] = extract_graphics_support(
+            h5_path,
+            vessel=vessel,
+            mode=mode,
+        )
+    return cache[key]
+
 
 def analyze_zip_windkessel(zip_path):
     rows = []
@@ -999,6 +1014,7 @@ def export_selected_metric(
 
     with extracted_zip_tree(zip_path) as extracted_root:
         h5_index = build_grouped_h5_index(extracted_root)
+        support_cache = {}
 
         for current_mode in modes_to_process:
 
@@ -1132,7 +1148,8 @@ def export_selected_metric(
                             path = h5_index.get(g, {}).get(chosen, None) if chosen else None
 
                             if path and Path(path).exists():
-                                support = extract_graphics_support(
+                                support = _extract_graphics_support_cached(
+                                    support_cache,
                                     path,
                                     vessel=vessel,
                                     mode=current_mode,
