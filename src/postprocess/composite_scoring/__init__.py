@@ -6,10 +6,10 @@ from .run import run_composite_scoring
 @registerPostprocess(
     name="Composite Scoring",
     description=(
-        "Appends composite RWAS/RWAS4 scores from dimensionless retinal waveform "
-        "shape metrics and writes cohort score visualizations under png/."
+        "Appends WAS/WAS-c scores from automatically calibrated waveform "
+        "shape metrics and writes cohort score visualizations/reports."
     ),
-    required_deps=["matplotlib>=3.8"],
+    required_deps=["matplotlib>=3.8", "scipy>=1.10"],
     required_pipelines=["waveform_shape_metrics"],
 )
 def run(ctx: PostprocessContext) -> PostprocessResult:
