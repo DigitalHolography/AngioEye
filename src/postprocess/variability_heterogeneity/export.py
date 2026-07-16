@@ -151,46 +151,7 @@ def _export_statistical_tables(
 ):
     escaped_control = latex_escape_text(control_name)
     escaped_group = latex_escape_text(group_name)
-    frame = build_descriptor_pvalue_summary_table(
-        control_results,
-        group_results,
-        descriptor_map=descriptor_map,
-        control_name=control_name,
-        group_name=group_name,
-        metrics=selected_metrics,
-        digits=digits,
-    )
-    _write_table(
-        generated,
-        frame,
-        directory,
-        f"{pair}_{domain}_descriptor_pvalue_summary_{selected_suffix}",
-        f"{domain.capitalize()} descriptor-specific Mann-Whitney p-values "
-        f"between {escaped_control} and {escaped_group}",
-        f"tab:{pair}_{domain}_descriptor_pvalue_summary",
-        digits,
-    )
 
-    frame = build_group_separation_metrics_table(
-        control_results,
-        group_results,
-        higher_metrics=higher_metrics,
-        control_name=control_name,
-        group_name=group_name,
-        metrics=selected_metrics,
-        digits=digits,
-        evaluate_both_directions=evaluate_both_directions,
-    )
-    _write_table(
-        generated,
-        frame,
-        directory,
-        f"{pair}_{domain}_group_separation_metrics_{selected_suffix}",
-        f"{domain.capitalize()} group-separation metrics between "
-        f"{escaped_control} and {escaped_group}",
-        f"tab:{pair}_{domain}_group_separation_metrics",
-        digits,
-    )
 
     frame = build_auc_separability_ranking_table(
         control_results,
@@ -241,26 +202,7 @@ def export_group_tables_from_results(
     control_name = find_control_group(results)
     safe_control = safe_name(control_name)
     generated = []
-    generated.extend(
-        export_variability_value_plots(
-            results,
-            directories["spatial_fig"],
-            descriptor_map=SPATIAL_DESCRIPTOR_MAP,
-            domain_name="spatial",
-            metrics=SPATIAL_SELECTED_METRICS,
-        )
-    )
-    if idle_callback:
-        idle_callback()
-    generated.extend(
-        export_variability_value_plots(
-            results,
-            directories["temporal_fig"],
-            descriptor_map=TEMPORAL_DESCRIPTOR_MAP,
-            domain_name="temporal",
-            metrics=TEMPORAL_SELECTED_METRICS,
-        )
-    )
+
     if idle_callback:
         idle_callback()
 
@@ -313,28 +255,6 @@ def export_group_tables_from_results(
                 top_n,
                 digits,
             )
-            if domain == "temporal":
-                frame = build_mannwhitney_ranking_table(
-                    control_results,
-                    group_results,
-                    higher_metrics=columns,
-                    control_name=control_name,
-                    group_name=group_name,
-                    metrics=metrics,
-                    n=None,
-                    digits=digits,
-                )
-                _write_table(
-                    generated,
-                    frame,
-                    directory,
-                    f"{pair}_best_temporal_variability_mannwhitney",
-                    f"Best temporal variability metrics between "
-                    f"{latex_escape_text(control_name)} and "
-                    f"{latex_escape_text(group_name)}, ranked by Mann-Whitney p-value",
-                    f"tab:{pair}_best_temporal_mannwhitney",
-                    digits,
-                )
             _export_statistical_tables(
                 generated,
                 control_results,

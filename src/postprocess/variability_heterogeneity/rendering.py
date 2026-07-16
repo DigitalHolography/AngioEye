@@ -134,7 +134,7 @@ def save_html_report(output_dir, title="Variability Report"):
 body{font-family:Arial,sans-serif;margin:30px;background:#fafafa}h1{text-align:center}
 h2{margin-top:45px;border-bottom:2px solid #d9d9d9;padding-bottom:8px}
 table{border-collapse:collapse;width:100%;background:white;margin-bottom:40px}
-th{background:#e6e6e6;padding:8px}td{border:1px solid #ddd;padding:6px;text-align:center}
+th{background:#e6e6e6;padding:8px;text-align:center;vertical-align:middle}td{border:1px solid #ddd;padding:6px;text-align:center}
 tr:nth-child(even){background:#f5f5f5}.container{overflow-x:auto}
 .dashboard-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:18px;margin:20px 0 40px}
 .dashboard-card{background:#fff;border:1px solid #d8d8d8;border-radius:10px;padding:18px;text-decoration:none;color:#222}
