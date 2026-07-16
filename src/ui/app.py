@@ -73,7 +73,7 @@ class ProcessApp(
         self._minimal_logo_image: tk.PhotoImage | None = None
         self._minimal_title_font: tkfont.Font | None = None
         self._persist_eyeflow_data = tk.BooleanVar(
-            value=not self.settings_store.load_trim_h5source()
+            value=self.settings_store.load_persist_source()
         )
         self.run_controller = RunTabController(self)
         self.workflow_selection_controller = WorkflowSelectionController(self)
@@ -86,6 +86,9 @@ class ProcessApp(
         self._build_ui()
         self._install_drop_targets()
         self.batch_input_var.trace_add("write", self.run_controller.on_batch_paths_changed)
+        self.batch_input_var.trace_add(
+            "write", self.pipeline_library_controller.update_input_statuses
+        )
         self.batch_output_var.trace_add("write", self.run_controller.on_batch_paths_changed)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.pipeline_library_controller.register()

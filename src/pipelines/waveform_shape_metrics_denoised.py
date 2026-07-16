@@ -1,5 +1,18 @@
 import numpy as np
 
+from math_utils import (
+    harmonic_pack as build_harmonic_pack,
+    nanargmax,
+    nanargmin,
+    nanmax,
+    nanmean,
+    nanmedian,
+    nanmin,
+    nanstd,
+    nansum,
+    rfft_normalized,
+)
+
 from .core.base import ProcessPipeline, ProcessResult, registerPipeline, with_attrs
 
 
@@ -88,7 +101,7 @@ class ArterialSegExample(ProcessPipeline):
 
     denoise_min_valid_samples = 32
     denoise_min_valid_fraction = 0.50
-    denoise_harmonic_count = 8
+    denoise_harmonic_count = 12
     denoise_gaussian_sigma_samples = 1.25
     denoise_savgol_window = 9
     denoise_savgol_polyorder = 2
@@ -100,18 +113,6 @@ class ArterialSegExample(ProcessPipeline):
     def _rectify_keep_nan(x: np.ndarray) -> np.ndarray:
         x = np.asarray(x, dtype=float)
         return np.where(np.isfinite(x), np.maximum(x, 0.0), np.nan)
-
-    @staticmethod
-    def _safe_nanmean(x: np.ndarray) -> float:
-        if x.size == 0 or not np.any(np.isfinite(x)):
-            return np.nan
-        return float(np.nanmean(x))
-
-    @staticmethod
-    def _safe_nanmedian(x: np.ndarray) -> float:
-        if x.size == 0 or not np.any(np.isfinite(x)):
-            return np.nan
-        return float(np.nanmedian(x))
 
     def _denoise_segment_block(self, v_block: np.ndarray) -> tuple[np.ndarray, dict]:
         """
@@ -147,14 +148,14 @@ class ArterialSegExample(ProcessPipeline):
                     if not self._denoise_has_enough_valid_samples(finite_count, n_time):
                         status_code[index] = 2
                         continue
-                    if float(np.nanstd(pulse)) <= self.eps:
+                    if float(nanstd(pulse)) <= self.eps:
                         status_code[index] = 3
                         out[:, beat_idx, branch_idx, radius_idx] = np.where(
                             finite_mask, pulse, np.nan
                         )
                         continue
 
-                    denoised = self._denoise_pulse_1d(pulse)
+                    denoised = self._denoise_heartbeat_whittaker_1d(pulse)
                     out[:, beat_idx, branch_idx, radius_idx] = denoised
                     corr[index] = self._pearson_corr(pulse, denoised)
                     status_code[index] = 0
@@ -170,6 +171,158 @@ class ArterialSegExample(ProcessPipeline):
         return finite_count >= int(
             self.denoise_min_valid_samples
         ) and finite_count / float(n_time) >= float(self.denoise_min_valid_fraction)
+
+    def _mad_scale(self, x: np.ndarray) -> float:
+        x = np.asarray(x, dtype=float)
+        x = x[np.isfinite(x)]
+
+        if x.size == 0:
+            return np.nan
+
+        med = float(np.median(x))
+        mad = float(np.median(np.abs(x - med)))
+
+        return 1.4826 * mad
+
+    def _despike_by_derivative(
+        self,
+        x: np.ndarray,
+        threshold: float = 4.0,
+        window: int = 5,
+    ) -> np.ndarray:
+        """
+        Supprime les sauts locaux anormaux détectés sur la dérivée.
+
+        Utile pour les pics/chutes brutales comme ceux visibles sur ton signal.
+        """
+        x = np.asarray(x, dtype=float).copy()
+
+        if x.size < 5:
+            return x
+
+        if window % 2 == 0:
+            window += 1
+
+        dx = np.diff(x)
+        scale = self._mad_scale(dx)
+
+        if not np.isfinite(scale) or scale <= self.eps:
+            return x
+
+        bad_jump = np.abs(dx - np.nanmedian(dx)) > threshold * scale
+
+        bad_points = np.zeros(x.size, dtype=bool)
+        bad_points[1:] |= bad_jump
+        bad_points[:-1] |= bad_jump
+
+        if not np.any(bad_points):
+            return x
+
+        radius = window // 2
+        padded = np.pad(x, radius, mode="reflect")
+
+        out = x.copy()
+
+        for i in np.where(bad_points)[0]:
+            local = padded[i : i + window]
+            out[i] = float(np.median(local))
+
+        return out
+
+    def _whittaker_smooth_1d(
+        self,
+        y: np.ndarray,
+        lam: float = 100.0,
+        n_iter: int = 5,
+        robust_k: float = 3.0,
+    ) -> np.ndarray:
+        """
+        Robust Whittaker smoothing.
+
+        Minimise :
+            sum_i w_i (y_i - z_i)^2 + lambda * sum_i (Delta2 z_i)^2
+
+        Avantages :
+        - extrait une forme lisse de heartbeat
+        - moins sensible aux spikes que Wiener
+        - préserve mieux le timing global que Gaussian trop fort
+        """
+        y = np.asarray(y, dtype=float)
+
+        n = y.size
+        if n < 5:
+            return y.copy()
+
+        finite = np.isfinite(y)
+
+        if np.sum(finite) < 5:
+            return np.full_like(y, np.nan, dtype=float)
+
+        x_idx = np.arange(n, dtype=float)
+        yy = np.interp(x_idx, x_idx[finite], y[finite])
+
+        # Matrice de différence seconde D
+        D = np.zeros((n - 2, n), dtype=float)
+        for i in range(n - 2):
+            D[i, i] = 1.0
+            D[i, i + 1] = -2.0
+            D[i, i + 2] = 1.0
+
+        penalty = float(lam) * (D.T @ D)
+
+        w = np.ones(n, dtype=float)
+        z = yy.copy()
+
+        for _ in range(int(n_iter)):
+            W = np.diag(w)
+            A = W + penalty
+            b = w * yy
+
+            try:
+                z = np.linalg.solve(A, b)
+            except np.linalg.LinAlgError:
+                z = np.linalg.lstsq(A, b, rcond=None)[0]
+
+            residual = yy - z
+            scale = self._mad_scale(residual)
+
+            if not np.isfinite(scale) or scale <= self.eps:
+                break
+
+            r = np.abs(residual) / (scale + self.eps)
+
+            # Poids robustes : les gros résidus influencent moins le fit.
+            w = 1.0 / (1.0 + (r / robust_k) ** 2)
+
+            # On garde les NaN originaux hors du fit.
+            w[~finite] = 0.0
+
+        z[~finite] = np.nan
+        return z
+
+    def _preserve_positive_area(
+        self,
+        original: np.ndarray,
+        filtered: np.ndarray,
+    ) -> np.ndarray:
+        original = np.asarray(original, dtype=float)
+        filtered = np.asarray(filtered, dtype=float).copy()
+
+        original_pos = np.maximum(original, 0.0)
+        filtered_pos = np.maximum(filtered, 0.0)
+
+        m0_original = float(np.nansum(original_pos))
+        m0_filtered = float(np.nansum(filtered_pos))
+
+        if (
+            not np.isfinite(m0_original)
+            or not np.isfinite(m0_filtered)
+            or m0_original <= self.eps
+            or m0_filtered <= self.eps
+        ):
+            return filtered
+
+        return filtered * (m0_original / m0_filtered)
 
     def _hampel_filter_1d(
         self,
@@ -229,9 +382,10 @@ class ArterialSegExample(ProcessPipeline):
         harmonic = self._denoise_harmonic_lowpass(robust)
         gaussian = self._denoise_gaussian_smooth(robust)
         savgol = self._denoise_savgol_smooth(robust)
+        wiener = self._denoise_wiener_1d(robust)
 
         # 3. Combinaison orientée morphologie
-        denoised = 0.25 * harmonic + 0.15 * gaussian + 0.60 * savgol
+        denoised = (harmonic + wiener) / 2
 
         # 4. Protection contre les overshoots
         denoised = self._clip_to_input_range(denoised, pulse)
@@ -241,12 +395,123 @@ class ArterialSegExample(ProcessPipeline):
 
         return denoised
 
+    def _denoise_heartbeat_whittaker_1d(
+        self,
+        pulse: np.ndarray,
+        lam: float = 100.0,
+        derivative_threshold: float = 4.0,
+        robust_k: float = 3.0,
+        preserve_area: bool = True,
+    ) -> np.ndarray:
+        """
+        Filtre orienté heartbeat.
+
+        Étapes :
+        1. interpolation des NaN
+        2. suppression des sauts aberrants sur la dérivée
+        3. smoothing robuste Whittaker
+        4. conservation de l'aire positive
+        5. clipping dans la plage du signal original
+        6. restauration des NaN originaux
+        """
+        pulse = np.asarray(pulse, dtype=float)
+        finite_mask = np.isfinite(pulse)
+
+        if pulse.size < 5 or np.sum(finite_mask) < 5:
+            return np.full_like(pulse, np.nan, dtype=float)
+
+        x = np.arange(pulse.size, dtype=float)
+        filled = np.interp(x, x[finite_mask], pulse[finite_mask])
+
+        despiked = self._despike_by_derivative(
+            filled,
+            threshold=derivative_threshold,
+            window=5,
+        )
+
+        filtered = self._whittaker_smooth_1d(
+            despiked,
+            lam=lam,
+            n_iter=5,
+            robust_k=robust_k,
+        )
+
+        if preserve_area:
+            filtered = self._preserve_positive_area(filled, filtered)
+
+        filtered = self._clip_to_input_range(filtered, pulse)
+
+        filtered[~finite_mask] = np.nan
+
+        return filtered
+
+    def _denoise_wiener_1d(
+        self,
+        pulse: np.ndarray,
+        window: int = 7,
+        noise_power: float | None = None,
+    ) -> np.ndarray:
+        """
+        Filtre de Wiener local 1D.
+
+        Principe :
+        - estime moyenne et variance locales
+        - estime le bruit global si noise_power=None
+        - applique un shrinkage local :
+                y = mu + gain * (x - mu)
+            avec
+                gain = max(var - noise, 0) / (var + eps)
+
+        Avantage :
+        - lisse les zones localement bruitées
+        - préserve mieux les transitions qu'un gaussien global
+        - ne dépend pas d'une hypothèse périodique comme la FFT
+        """
+        x = np.asarray(pulse, dtype=float)
+
+        if x.size < 3:
+            return x.copy()
+
+        if window % 2 == 0:
+            window += 1
+
+        window = max(3, min(window, x.size if x.size % 2 == 1 else x.size - 1))
+        radius = window // 2
+
+        padded = np.pad(x, radius, mode="reflect")
+
+        local_mean = np.empty_like(x, dtype=float)
+        local_var = np.empty_like(x, dtype=float)
+
+        for i in range(x.size):
+            local = padded[i : i + window]
+            local_mean[i] = float(np.mean(local))
+            local_var[i] = float(np.var(local))
+
+        if noise_power is None:
+            # Estimation robuste du bruit via les différences successives.
+            dx = np.diff(x)
+            mad = np.median(np.abs(dx - np.median(dx)))
+            sigma = 1.4826 * mad / np.sqrt(2.0)
+
+            if np.isfinite(sigma) and sigma > self.eps:
+                noise_power = float(sigma * sigma)
+            else:
+                noise_power = float(np.nanmedian(local_var))
+
+        if not np.isfinite(noise_power) or noise_power <= 0:
+            return x.copy()
+
+        gain = np.maximum(local_var - noise_power, 0.0) / (local_var + self.eps)
+        y = local_mean + gain * (x - local_mean)
+
+        return y
+
     def _denoise_harmonic_lowpass(self, pulse: np.ndarray) -> np.ndarray:
-        spectrum = np.fft.rfft(np.asarray(pulse, dtype=float))
-        max_harmonic = min(int(self.denoise_harmonic_count), spectrum.size - 1)
-        truncated = np.zeros_like(spectrum)
-        truncated[: max_harmonic + 1] = spectrum[: max_harmonic + 1]
-        return np.fft.irfft(truncated, n=pulse.size)
+        pack = build_harmonic_pack(
+            np.asarray(pulse, dtype=float), self.denoise_harmonic_count, axis=0
+        )
+        return pack["vb"]
 
     def _denoise_gaussian_smooth(self, pulse: np.ndarray) -> np.ndarray:
         sigma = float(self.denoise_gaussian_sigma_samples)
@@ -281,8 +546,8 @@ class ArterialSegExample(ProcessPipeline):
         finite = np.isfinite(original)
         if not np.any(finite):
             return candidate
-        vmin = float(np.nanmin(original))
-        vmax = float(np.nanmax(original))
+        vmin = float(nanmin(original))
+        vmax = float(nanmax(original))
         span = max(vmax - vmin, self.eps)
         margin = 0.05 * span
         out = np.asarray(candidate, dtype=float).copy()
@@ -382,7 +647,7 @@ class ArterialSegExample(ProcessPipeline):
             return np.nan
 
         vv = np.asarray(v, dtype=float)
-        vmax = float(np.nanmax(vv))
+        vmax = float(nanmax(vv))
         if (not np.isfinite(vmax)) or vmax <= 0:
             return np.nan
 
@@ -446,7 +711,7 @@ class ArterialSegExample(ProcessPipeline):
         if n < 3:
             return np.nan
 
-        X = np.fft.rfft(vv)
+        X = rfft_normalized(vv, axis=0)
         P = np.abs(X) ** 2
         if P.size < 3:
             return np.nan
@@ -457,32 +722,6 @@ class ArterialSegExample(ProcessPipeline):
             return np.nan
 
         return float(E_LF / E_HF)
-
-    def _harmonic_pack(self, v: np.ndarray, Tbeat: float) -> dict:
-        """
-        Compute complex harmonic coefficients Vn for n=0..H, with H=min(H_MAX, n_rfft-1),
-        and synthesize band-limited waveform vb(t) using harmonics 0..H.
-        """
-        if (not np.isfinite(Tbeat)) or Tbeat <= 0:
-            return {"V": None, "H": 0, "vb": None, "Vfull": None}
-
-        if v.size == 0 or not np.any(np.isfinite(v)):
-            return {"V": None, "H": 0, "vb": None, "Vfull": None}
-
-        vv = np.where(np.isfinite(v), v, 0.0)
-        n = vv.size
-        if n < 2:
-            return {"V": None, "H": 0, "vb": None, "Vfull": None}
-
-        Vfull = np.fft.rfft(vv) / float(n)
-        H = int(min(self.H_MAX, Vfull.size - 1))
-        V = Vfull[: H + 1].copy()
-
-        Vtrunc = np.zeros_like(Vfull)
-        Vtrunc[: H + 1] = V
-        vb = np.fft.irfft(Vtrunc * float(n), n=n)
-
-        return {"V": V, "H": H, "vb": vb, "Vfull": Vfull}
 
     def _higher_harmonic_rolloff_metrics(self, V: np.ndarray) -> dict:
         """
@@ -514,7 +753,7 @@ class ArterialSegExample(ProcessPipeline):
 
         power = np.abs(V[2 : H + 1]) ** 2
         power = np.where(np.isfinite(power), power, np.nan)
-        s = float(np.nansum(power))
+        s = float(nansum(power))
         if (not np.isfinite(s)) or s <= 0:
             return out
 
@@ -577,10 +816,10 @@ class ArterialSegExample(ProcessPipeline):
         if not np.any(np.isfinite(v)):
             return np.nan
         x = np.where(np.isfinite(v), v, np.nan)
-        rms = float(np.sqrt(self._safe_nanmean(x * x)))
+        rms = float(np.sqrt(nanmean(x * x)))
         if rms <= 0:
             return np.nan
-        return float(np.nanmax(x) / rms)
+        return float(nanmax(x) / rms)
 
     def _phase_organization_metrics(self, V: np.ndarray, Tbeat: float) -> dict:
         """
@@ -661,8 +900,8 @@ class ArterialSegExample(ProcessPipeline):
         vals_over_T = np.asarray(
             [dphi / (2.0 * np.pi * n) for n, dphi, _ in selected], dtype=float
         )
-        center = float(np.nanmedian(vals_over_T))
-        spread = float(np.nanmedian(np.abs(vals_over_T - center)))
+        center = float(nanmedian(vals_over_T))
+        spread = float(nanmedian(np.abs(vals_over_T - center)))
 
         out["t_phi_over_T"] = center
         out["s_phi_over_T"] = spread
@@ -732,8 +971,8 @@ class ArterialSegExample(ProcessPipeline):
         if v.size == 0 or not np.any(np.isfinite(v)):
             return np.nan, np.nan, -1, -1
 
-        idx_peak = int(np.nanargmax(v))
-        idx_min = int(np.nanargmin(v))
+        idx_peak = int(nanargmax(v))
+        idx_min = int(nanargmin(v))
 
         return float(idx_peak / v.size), float(idx_min / v.size), idx_peak, idx_min
 
@@ -752,7 +991,7 @@ class ArterialSegExample(ProcessPipeline):
         ):
             return np.nan, np.nan, np.nan, np.nan
 
-        meanv = self._safe_nanmean(v)
+        meanv = nanmean(v)
         if (not np.isfinite(meanv)) or meanv <= 0:
             return np.nan, np.nan, np.nan, np.nan
 
@@ -761,11 +1000,11 @@ class ArterialSegExample(ProcessPipeline):
         if not np.any(np.isfinite(dvdt)):
             return np.nan, np.nan, np.nan, np.nan
 
-        idx_up = int(np.nanargmax(dvdt))
-        idx_down = int(np.nanargmin(dvdt))
+        idx_up = int(nanargmax(dvdt))
+        idx_down = int(nanargmin(dvdt))
 
-        s_up = float(np.nanmax(dvdt))
-        s_down = float(np.nanmin(dvdt))
+        s_up = float(nanmax(dvdt))
+        s_down = float(nanmin(dvdt))
 
         return (
             float(Tbeat * s_up / (meanv + self.eps)),
@@ -781,7 +1020,7 @@ class ArterialSegExample(ProcessPipeline):
         if v.size == 0 or not np.any(np.isfinite(v)):
             return np.nan
 
-        meanv = self._safe_nanmean(v)
+        meanv = nanmean(v)
         if (not np.isfinite(meanv)) or meanv <= 0:
             return np.nan
 
@@ -790,7 +1029,7 @@ class ArterialSegExample(ProcessPipeline):
             return np.nan
 
         tail = np.asarray(v[k0:k1], dtype=float)
-        vend = self._safe_nanmean(tail)
+        vend = nanmean(tail)
         if (not np.isfinite(vend)) or vend < 0:
             return np.nan
 
@@ -900,7 +1139,7 @@ class ArterialSegExample(ProcessPipeline):
             return np.nan
         z = (t - mu_t) / (sigma_t + self.eps)
         return float(
-            np.nansum(np.where(np.isfinite(v), v, 0.0) * (z**3)) / (m0 + self.eps)
+            nansum(np.where(np.isfinite(v), v, 0.0) * (z**3)) / (m0 + self.eps)
         )
 
     def _derivative_energy_slope(self, v: np.ndarray, Tbeat: float, m0: float) -> float:
@@ -939,9 +1178,9 @@ class ArterialSegExample(ProcessPipeline):
             return {}
 
         tail = np.asarray(v[k0:k1], dtype=float)
-        vend = self._safe_nanmean(tail)
+        vend = nanmean(tail)
         vv = np.where(np.isfinite(v), v, np.nan)
-        m0_sum = float(np.nansum(vv))
+        m0_sum = float(nansum(vv))
         if m0_sum <= 0:
             return {}
 
@@ -949,9 +1188,9 @@ class ArterialSegExample(ProcessPipeline):
         dt = Tbeat / n
         m0 = float(m0_sum * dt)
 
-        vmax = float(np.nanmax(vv))
-        vmin = float(np.nanmin(vv))
-        vmean = float(np.nanmean(vv))
+        vmax = float(nanmax(vv))
+        vmin = float(nanmin(vv))
+        vmean = float(nanmean(vv))
 
         d_full = np.concatenate(
             ([0.0], np.cumsum(np.where(np.isfinite(vv), vv, 0.0)) / m0_sum)
@@ -967,7 +1206,9 @@ class ArterialSegExample(ProcessPipeline):
         dvdt_norm = (Tbeat**3 / ((m0 + self.eps) ** 2)) * (dvdt**2)
         d2vdt2_norm = (Tbeat**5 / ((m0 + self.eps) ** 2)) * (d2vdt2**2)
 
-        hp = self._harmonic_pack(vv, Tbeat)
+        hp = build_harmonic_pack(
+            np.where(np.isfinite(vv), vv, 0.0), self.H_MAX, axis=0
+        )
         V = hp["V"]
         vb = hp["vb"]
         H = int(hp["H"])
@@ -994,11 +1235,11 @@ class ArterialSegExample(ProcessPipeline):
             power_h = power[1 : H + 1]
             mags_h = mags[1 : H + 1]
 
-            power_sum = float(np.nansum(power_h))
-            mag_sum = float(np.nansum(mags_h))
+            power_sum = float(nansum(power_h))
+            mag_sum = float(nansum(mags_h))
 
             E_total = power_sum
-            E_low = float(np.nansum(power[1 : self.H_LOW_MAX + 1]))
+            E_low = float(nansum(power[1 : self.H_LOW_MAX + 1]))
 
             if np.isfinite(power_sum) and power_sum > 0:
                 harmonic_energy_weights[0:H] = power_h / (power_sum + self.eps)
@@ -1177,20 +1418,20 @@ class ArterialSegExample(ProcessPipeline):
             return {k[0]: np.nan for k in self._metric_keys()}
 
         vv = np.where(np.isfinite(v), v, np.nan)
-        m0 = float(np.nansum(vv))
+        m0 = float(nansum(vv))
         if m0 <= 0:
             return {k[0]: np.nan for k in self._metric_keys()}
 
         dt = Tbeat / n
         t = np.arange(n, dtype=float) * dt
 
-        m1 = float(np.nansum(vv * t))
+        m1 = float(nansum(vv * t))
         mu_t = m1 / m0
         mu_t_over_T = mu_t / Tbeat
 
-        vmax = float(np.nanmax(vv))
-        vmin = float(np.nanmin(vv))
-        meanv = float(self._safe_nanmean(vv))
+        vmax = float(nanmax(vv))
+        vmin = float(nanmin(vv))
+        meanv = float(nanmean(vv))
 
         if vmax <= 0:
             RI = np.nan
@@ -1207,18 +1448,18 @@ class ArterialSegExample(ProcessPipeline):
 
         k_R_VTI = int(np.ceil(n * self.ratio_R_VTI))
         k_R_VTI = max(0, min(n, k_R_VTI))
-        D1_R_VTI = float(np.nansum(vv[:k_R_VTI])) if k_R_VTI > 0 else np.nan
-        D2_R_VTI = float(np.nansum(vv[k_R_VTI:])) if k_R_VTI < n else np.nan
+        D1_R_VTI = float(nansum(vv[:k_R_VTI])) if k_R_VTI > 0 else np.nan
+        D2_R_VTI = float(nansum(vv[k_R_VTI:])) if k_R_VTI < n else np.nan
         R_VTI = D1_R_VTI / (D2_R_VTI + self.eps)
 
         k_sf = int(np.ceil(n * self.ratio_SF_VTI))
         k_sf = max(0, min(n, k_sf))
-        D1_sf = float(np.nansum(vv[:k_sf])) if k_sf > 0 else np.nan
-        D2_sf = float(np.nansum(vv[k_sf:])) if k_sf < n else np.nan
+        D1_sf = float(nansum(vv[:k_sf])) if k_sf > 0 else np.nan
+        D2_sf = float(nansum(vv[k_sf:])) if k_sf < n else np.nan
         SF_VTI = D1_sf / (D1_sf + D2_sf + self.eps)
 
         dtau = t - mu_t
-        m2 = float(np.nansum(vv * (dtau**2)))
+        m2 = float(nansum(vv * (dtau**2)))
         sigma_t = np.sqrt(m2 / m0 + self.eps)
         sigma_t_over_T = sigma_t / Tbeat
 
@@ -1240,7 +1481,9 @@ class ArterialSegExample(ProcessPipeline):
 
         E_LF_over_E_HF = self._spectral_ratio_LF_over_HF(vv, Tbeat)
 
-        hp = self._harmonic_pack(vv, Tbeat)
+        hp = build_harmonic_pack(
+            np.where(np.isfinite(vv), vv, 0.0), self.H_MAX, axis=0
+        )
         vb = hp["vb"]
 
         CF = self._crest_factor(vv)
@@ -1559,13 +1802,13 @@ class ArterialSegExample(ProcessPipeline):
 
                 for k in self._metric_keys():
                     key = k[0]
-                    br[key][beat_idx, branch_idx] = self._safe_nanmedian(
+                    br[key][beat_idx, branch_idx] = nanmedian(
                         np.asarray(br_vals[key], dtype=float)
                     )
 
             for k in self._metric_keys():
                 key = k[0]
-                gl[key][beat_idx] = self._safe_nanmedian(
+                gl[key][beat_idx] = nanmedian(
                     np.asarray(gl_vals[key], dtype=float)
                 )
 

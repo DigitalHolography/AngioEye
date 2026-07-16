@@ -5,6 +5,7 @@ from tkinter import ttk
 
 from app_settings import normalize_pipeline_visibility
 from pipelines import PipelineDescriptor, load_pipeline_catalog
+from workflows.pipeline_readiness import pipeline_input_status
 
 from ..widgets import _Tooltip
 from .library import LibraryController
@@ -102,23 +103,45 @@ class PipelineLibraryController(LibraryController):
 
     def status_text(self, pipeline: PipelineDescriptor) -> str:
         if pipeline.available:
+            run_controller = getattr(self.app, "run_controller", None)
+            selection_provider = getattr(
+                run_controller,
+                "collect_input_selection",
+                None,
+            )
+            if callable(selection_provider):
+                return (
+                    pipeline_input_status(pipeline, selection_provider())
+                    or "Available"
+                )
             return "Available"
         if pipeline.missing_deps:
             return f"Missing deps: {', '.join(pipeline.missing_deps)}"
         return "Unavailable"
 
+    def update_input_statuses(self, *_args) -> None:
+        status_labels = getattr(self, "_status_labels", {})
+        for pipeline in getattr(self.app, "pipeline_rows", []):
+            label = status_labels.get(pipeline.name)
+            if label is not None:
+                label.configure(text=self.status_text(pipeline))
+
     def populate(self, rows: list[PipelineDescriptor]) -> None:
         for child in self.app.pipeline_library_inner.winfo_children():
             child.destroy()
         self.app.pipeline_visibility_vars = {}
-        self.configure_library_columns(self.app.pipeline_library_inner)
+        self._status_labels = {}
+        self.configure_library_columns(
+            self.app.pipeline_library_inner,
+            row_count=len(rows) + 1,
+        )
 
         selected_header = ttk.Label(self.app.pipeline_library_inner, text="Selected")
         selected_header.grid(row=0, column=0, sticky="w", pady=(0, 6))
         status_header = ttk.Label(self.app.pipeline_library_inner, text="Status")
         status_header.grid(
             row=0,
-            column=1,
+            column=2,
             sticky="w",
             padx=self._STATUS_COLUMN_PADDING,
             pady=(0, 6),
@@ -150,12 +173,13 @@ class PipelineLibraryController(LibraryController):
             )
             status.grid(
                 row=idx,
-                column=1,
+                column=2,
                 sticky="w",
                 padx=self._STATUS_COLUMN_PADDING,
                 pady=(0, 6),
             )
             self.bind_mousewheel(status, self.app.pipeline_library_canvas)
+            self._status_labels[pipeline.name] = status
 
             tip_text = self.descriptor_tooltip_text(pipeline)
             if tip_text:

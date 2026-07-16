@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "AngioEye"
-version = "1.20.1"
+version = "1.21.0"
 description = "Cohort-analysis engine for retinal Doppler holography"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -47,8 +47,6 @@ dev = ["ruff", "pre-commit", "pyinstaller"]
 [project.scripts]
 # This allows users to simply type 'angioeye' in their terminal
 angioeye = "launcher:main"
-angioeye-cli = "launcher:cli_main"
-build-installer = "scripts.build_installer:main"
 
 lint-tool = "scripts.ruff_linter:main"
 

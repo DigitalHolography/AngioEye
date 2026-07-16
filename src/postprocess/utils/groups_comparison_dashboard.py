@@ -1,20 +1,27 @@
-﻿import os
-import shutil
+﻿import shutil
 from collections import defaultdict
+from pathlib import Path
 from tkinter import Tk, filedialog
+
 import h5py
+import matplotlib
+
+matplotlib.use("Agg", force=True)
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib import gridspec
 from matplotlib.ticker import FormatStrFormatter
-from input_output.hdf5_io import find_first_existing_path, read_array
-from input_output.hdf5_schema import pipeline_path_candidates
+
 from input_output.archive_io import (
     extracted_zip_tree,
-    reset_output_dir,
     replace_folder_in_zip,
+    reset_output_dir,
 )
+from input_output.hdf5_io import find_first_existing_path, read_array
+from input_output.hdf5_schema import pipeline_path_candidates
+from math_utils import nanargmax, nanargmin, nanmax, nanmean, nanmedian, nanstd, nansum
+
 from ..core.grouped_batch import (
     build_group_order,
     build_grouped_h5_index,
@@ -40,19 +47,24 @@ METHOD_MARKERS_WINDKESSEL = {
 }
 
 
-def _run_optional_eps_export(export_func, output_dir: str) -> bool:
+def _run_optional_eps_export(export_func, output_dir: str | Path) -> bool:
+    output_dir = Path(output_dir)
+
     try:
         export_func()
     except ModuleNotFoundError as exc:
         if exc.name != POSTSCRIPT_BACKEND_MODULE:
             raise
-        if os.path.isdir(output_dir):
+
+        if output_dir.is_dir():
             shutil.rmtree(output_dir)
+
         print(
             "[WARN] EPS export skipped because the Matplotlib PostScript backend "
             f"'{POSTSCRIPT_BACKEND_MODULE}' is unavailable in this build."
         )
         return False
+
     return True
 
 
@@ -86,7 +98,7 @@ def extract_windkessel_rows_from_h5(h5_path, group_name):
                 for v in values:
                     rows.append(
                         {
-                            "file": os.path.basename(h5_path),
+                            "file": Path(h5_path).name,
                             "group": group_name,
                             "method": method,
                             "metric": metric,
@@ -192,6 +204,19 @@ def extract_graphics_support(h5_path, vessel="artery", mode="bandlimited"):
 
     return out
 
+
+def _extract_graphics_support_cached(cache, h5_path, *, vessel, mode):
+    """Load each representative file/mode/vessel support block at most once."""
+    key = (str(h5_path), vessel, mode)
+    if key not in cache:
+        cache[key] = extract_graphics_support(
+            h5_path,
+            vessel=vessel,
+            mode=mode,
+        )
+    return cache[key]
+
+
 def analyze_zip_windkessel(zip_path):
     rows = []
 
@@ -285,18 +310,19 @@ def plot_windkessel_metric_for_method(df, metric, method, out_path):
 
 
 def export_windkessel_figures(zip_path, out_dir, format="png"):
-    os.makedirs(out_dir, exist_ok=True)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     df = analyze_zip_windkessel(zip_path)
 
     if df.empty:
-        print("Aucune donnÃ©e Windkessel trouvÃ©e dans le zip.")
+        print("Aucune donnÃ©e Windkessel trouvée dans le zip.")
         return
 
     for metric in METRICS_WINDKESSEL:
         for method in METHODS_WINDKESSEL:
             filename = f"windkessel_{metric}_{method}.{format}"
-            out_path = os.path.join(out_dir, filename)
+            out_path = out_dir / filename
 
             plot_windkessel_metric_for_method(
                 df,
@@ -306,7 +332,7 @@ def export_windkessel_figures(zip_path, out_dir, format="png"):
             )
 
     if format == "png":
-        csv_path = os.path.join(out_dir, "windkessel_values.csv")
+        csv_path = out_dir / "windkessel_values.csv"
         df.to_csv(csv_path, index=False)
 
 
@@ -473,11 +499,11 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
         if not np.isfinite(eta_h):
             # fallback si le support ne donne pas directement la mÃ©trique
             resid = (
-                np.nansum((sig - vb[: len(sig)]) ** 2)
+                nansum((sig - vb[: len(sig)]) ** 2)
                 if len(vb) == len(sig)
                 else np.nan
             )
-            denom = np.nansum((sig - np.nanmean(sig)) ** 2)
+            denom = nansum((sig - nanmean(sig)) ** 2)
             eta_h = 1.0 - resid / max(denom, EPS)
 
         ax.plot(tau, sig, linewidth=3, color=main_color, label="signal")
@@ -578,8 +604,8 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
             0.5, tau, sig, y0=0.0, color="#000000", linestyles="--", linewidth=1
         )
 
-        d1 = float(np.nansum(sig[tau < 0.5]))
-        d2 = float(np.nansum(sig[tau >= 0.5]))
+        d1 = float(nansum(sig[tau < 0.5]))
+        d2 = float(nansum(sig[tau >= 0.5]))
         info_box([rf"$D_1={d1:.3g} , D_2={d2:.3g}$", rf"$R_{{VTI}}={ratio:.3f}$"])
         ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v(t) \: (mm/s)$", fontsize=14, labelpad=12)
@@ -609,8 +635,8 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
             tau_k, tau, sig, y0=0.0, color="#000000", linestyles="--", linewidth=1
         )
 
-        d1 = float(np.nansum(sig[tau < tau_k]))
-        dtot = float(np.nansum(sig))
+        d1 = float(nansum(sig[tau < tau_k]))
+        dtot = float(nansum(sig))
         info_box([rf"$D_1={d1:.3g} , D_1 + D_2={dtot:.3g}$", rf"$SF_{{VTI}}={sf:.3f}$"])
         ax.set_xlabel(r"rectified time : t/T", fontsize=14)
         ax.set_ylabel(r"$v(t) \: (mm/s)$", fontsize=14, labelpad=12)
@@ -663,7 +689,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
 
     elif metric == "S_rise":
         s_rise = float(support["S_rise"])
-        idx = int(np.nanargmax(dvdt))
+        idx = int(nanargmax(dvdt))
 
         ax.plot(tau, sig, linewidth=3, color=main_color)
         vline_to_curve(
@@ -675,7 +701,7 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
 
     elif metric == "S_fall":
         s_fall = float(support["S_fall"])
-        idx = int(np.nanargmin(dvdt))
+        idx = int(nanargmin(dvdt))
 
         ax.plot(tau, sig, linewidth=3, color=main_color)
         vline_to_curve(
@@ -725,8 +751,8 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
     
     elif metric == "CF":
         cf = float(support["CF"])
-        vmax = float(np.nanmax(vb))
-        rms = float(np.sqrt(np.nanmean(vb**2)))
+        vmax = float(nanmax(vb))
+        rms = float(np.sqrt(nanmean(vb**2)))
         vb_tau = np.linspace(0.0, 1.0, len(vb), endpoint=False)
 
         ax.plot(vb_tau, vb, linewidth=3, color=main_color)
@@ -978,7 +1004,8 @@ def plot_metric_illustration(ax, metric, support, path=None, vessel="artery"):
 def export_selected_metric(
     all_results, zip_path, out_dir, format="png", show_group_illustrations=True, vessel="artery", mode="bandlimited"
 ):
-    os.makedirs(out_dir, exist_ok=True)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     if mode == "all":
         modes_to_process = VALID_MODE
@@ -987,6 +1014,7 @@ def export_selected_metric(
 
     with extracted_zip_tree(zip_path) as extracted_root:
         h5_index = build_grouped_h5_index(extracted_root)
+        support_cache = {}
 
         for current_mode in modes_to_process:
 
@@ -1119,8 +1147,9 @@ def export_selected_metric(
                             chosen = rep_file.get(g, None)
                             path = h5_index.get(g, {}).get(chosen, None) if chosen else None
 
-                            if path and os.path.exists(path):
-                                support = extract_graphics_support(
+                            if path and Path(path).exists():
+                                support = _extract_graphics_support_cached(
+                                    support_cache,
                                     path,
                                     vessel=vessel,
                                     mode=current_mode,
@@ -1162,14 +1191,10 @@ def export_selected_metric(
                             ax_empty = fig.add_subplot(right[r, c])
                             ax_empty.axis("off")
                     if format == "png":
-                        png_path = os.path.join(
-                            out_dir, f"{metric}_{current_mode}_{vessel}.png"
-                        )
+                        png_path = out_dir / f"{metric}_{current_mode}_{vessel}.png"
                         fig.savefig(png_path, bbox_inches="tight")
                     if format == "eps":
-                        eps_path = os.path.join(
-                            out_dir, f"{metric}_{current_mode}_{vessel}.eps"
-                        )
+                        eps_path = out_dir / f"{metric}_{current_mode}_{vessel}.eps"
                         fig.savefig(eps_path, bbox_inches="tight")
 
                     plt.close(fig)
@@ -1208,8 +1233,8 @@ def extract_group_metrics(group, results_dict, prefix=""):
                 latex_formula = item.attrs.get("latex_formula", "")
 
                 results_dict[full_name] = {
-                    "median": float(np.nanmedian(data)),
-                    "std": float(np.nanstd(data)),
+                    "median": float(nanmedian(data)),
+                    "std": float(nanstd(data)),
                     "latex_formula": latex_formula,
                 }
 
@@ -1260,9 +1285,9 @@ def select_representative_file_per_group(df_metric: pd.DataFrame, value_col="med
         vals = gdf[value_col].astype(float).values
         if len(vals) == 0 or not np.any(np.isfinite(vals)):
             continue
-        med = float(np.nanmedian(vals))
+        med = float(nanmedian(vals))
         # index du patient le plus proche de la mÃ©diane
-        idx = int(np.nanargmin(np.abs(vals - med)))
+        idx = int(nanargmin(np.abs(vals - med)))
         rep[g] = gdf.iloc[idx]["file"]
 
     return rep
@@ -1295,24 +1320,32 @@ def analyze_zip(zip_path):
 
 
 def save_dashboard(all_results, zip_path, single_group):
-    # -----------------------------
-    # export PNGs
-    # -----------------------------
-    png_dir = "export_png"
-    eps_dir = "export_eps"
 
-    reset_output_dir(png_dir)
-    reset_output_dir(eps_dir)
+    out_dir = Path("group comparison (Dashboard) - Waveform Shape Metrics")
 
-    # --- Windkessel ---
-    export_windkessel_figures(zip_path, png_dir, format="png")
+    png_dir = out_dir / "PNG"
+    eps_dir = out_dir / "EPS"
 
+    reset_output_dir(out_dir)
+
+    # --- Windkessel PNG ---
+    export_windkessel_figures(
+        zip_path,
+        png_dir,
+        format="png"
+    )
+
+    # --- Windkessel EPS ---
     eps_supported = _run_optional_eps_export(
-        lambda: export_windkessel_figures(zip_path, eps_dir, format="eps"),
+        lambda: export_windkessel_figures(
+            zip_path,
+            eps_dir,
+            format="eps"
+        ),
         eps_dir,
     )
 
-    # --- Metrics illustrations ---
+    # --- Metrics PNG ---
     export_selected_metric(
         all_results,
         zip_path,
@@ -1322,9 +1355,7 @@ def save_dashboard(all_results, zip_path, single_group):
         mode="bandlimited"
     )
 
-    replace_folder_in_zip(zip_path, png_dir, arc_folder="export_png")
-
-    # --- EPS ---
+    # --- Metrics EPS ---
     if eps_supported:
         eps_supported = _run_optional_eps_export(
             lambda: export_selected_metric(
@@ -1338,14 +1369,14 @@ def save_dashboard(all_results, zip_path, single_group):
             eps_dir,
         )
 
-    if eps_supported:
-        replace_folder_in_zip(zip_path, eps_dir, arc_folder="export_eps")
+    replace_folder_in_zip(
+        zip_path,
+        out_dir,
+        arc_folder="group comparison (Dashboard) - Waveform Shape Metrics"
+    )
 
-    if os.path.isdir(png_dir):
-        shutil.rmtree(png_dir)
-
-    if os.path.isdir(eps_dir):
-        shutil.rmtree(eps_dir)
+    if out_dir.is_dir():
+        shutil.rmtree(out_dir)
 
 
 if __name__ == "__main__":

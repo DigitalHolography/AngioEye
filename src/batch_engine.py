@@ -54,6 +54,7 @@ class BatchExecutionSettings:
     batch_size: int = field(default_factory=default_batch_size)
     staging_workers: int = field(default_factory=default_staging_workers)
     process_workers: int = DEFAULT_PROCESS_WORKERS
+    thread_workers_per_process: int = field(default_factory=default_batch_size)
 
     @classmethod
     def from_settings(
@@ -77,7 +78,16 @@ class BatchExecutionSettings:
                 "process_workers",
                 DEFAULT_PROCESS_WORKERS,
             ),
+            thread_workers_per_process=settings_int(
+                settings,
+                "thread_workers_per_process",
+                settings_int(settings, "thread_workers", batch_size),
+            ),
         )
+
+    @property
+    def thread_workers(self) -> int:
+        return self.thread_workers_per_process
 
     @classmethod
     def from_app_settings(cls) -> BatchExecutionSettings:

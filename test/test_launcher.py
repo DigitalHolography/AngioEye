@@ -2,6 +2,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_DIR) not in sys.path:
@@ -74,6 +75,25 @@ class LauncherTests(unittest.TestCase):
                 sys.modules.pop("fallback_entry", None)
 
             self.assertEqual("installed", result)
+
+    def test_main_launches_gui_without_arguments(self) -> None:
+        with mock.patch.object(launcher, "_call_entry", return_value="gui") as call:
+            result = launcher.main([])
+
+        self.assertEqual("gui", result)
+        call.assert_called_once_with("angio_eye", "angio_eye.py", "main")
+
+    def test_main_launches_cli_with_arguments(self) -> None:
+        with mock.patch.object(launcher, "_call_entry", return_value="cli") as call:
+            result = launcher.main(["--list-pipelines"])
+
+        self.assertEqual("cli", result)
+        call.assert_called_once_with(
+            "cli",
+            "cli.py",
+            "main",
+            ["--list-pipelines"],
+        )
 
 
 if __name__ == "__main__":

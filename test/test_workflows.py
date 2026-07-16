@@ -24,6 +24,7 @@ from workflows import (  # noqa: E402
     prepare_run_inputs,
     run_filesystem_workflow,
     run_holo_workflow,
+    run_zip_workflow,
 )
 from workflows._standard_pipeline_runs import (  # noqa: E402
     run_filesystem_pipeline_run,
@@ -32,6 +33,7 @@ from workflows._standard_pipeline_runs import (  # noqa: E402
 from workflows._postprocess_requirements import (  # noqa: E402
     compatible_postprocess_files,
     missing_required_pipeline_errors,
+    missing_required_option_errors,
 )
 
 
@@ -50,6 +52,34 @@ def process_pool_run_pipeline_file(
 
 
 class PostprocessRequirementTests(unittest.TestCase):
+    def test_required_persist_option_is_reported(self):
+        postprocess = type(
+            "Postprocess",
+            (),
+            {
+                "name": "Variability",
+                "required_option": ["persist_eyeflow_data"],
+            },
+        )()
+
+        self.assertEqual(
+            [
+                "Variability requires the Persist Eyeflow Data option; "
+                "add --keep-source."
+            ],
+            missing_required_option_errors(
+                postprocesses=(postprocess,),
+                persist_source=False,
+            ),
+        )
+        self.assertEqual(
+            [],
+            missing_required_option_errors(
+                postprocesses=(postprocess,),
+                persist_source=True,
+            ),
+        )
+
     def test_selected_required_pipeline_keeps_processed_outputs(self):
         processed_output = Path("new_result.h5")
         input_h5 = Path("input.h5")
@@ -90,8 +120,10 @@ class PostprocessRequirementTests(unittest.TestCase):
                 "waveform_shape_metrics_denoised",
             ),
             required_pipeline_options=(
-                ("waveform_shape_metrics",),
-                ("waveform_shape_metrics_denoised",),
+                (
+                    "waveform_shape_metrics",
+                    "waveform_shape_metrics_denoised",
+                ),
             ),
             selected_pipeline_names=("waveform_shape_metrics",),
         )
@@ -99,25 +131,38 @@ class PostprocessRequirementTests(unittest.TestCase):
         self.assertEqual((processed_output,), result.files)
         self.assertEqual((), result.skipped)
 
-    def test_alternative_required_pipeline_errors_accept_either_selection(self):
+    def test_pipeline_option_groups_require_each_group(self):
         postprocess = type(
             "Postprocess",
             (),
             {
                 "name": "Variability",
                 "required_pipeline_options": (
-                    ("waveform_shape_metrics",),
-                    ("waveform_shape_metrics_denoised",),
+                    ("one", "one_alternative"),
+                    ("two", "two_alternative"),
                 ),
             },
         )()
 
         errors = missing_required_pipeline_errors(
             postprocesses=(postprocess,),
-            selected_pipeline_names=("waveform_shape_metrics",),
+            selected_pipeline_names=("one_alternative", "two"),
         )
 
         self.assertEqual([], errors)
+
+        errors = missing_required_pipeline_errors(
+            postprocesses=(postprocess,),
+            selected_pipeline_names=("one",),
+        )
+
+        self.assertEqual(
+            [
+                "Variability requires pipeline data: "
+                "(one or one_alternative) and (two or two_alternative)"
+            ],
+            errors,
+        )
 
 
 class FilesystemWorkflowTests(unittest.TestCase):
@@ -314,6 +359,60 @@ class FilesystemWorkflowTests(unittest.TestCase):
                     for message in logs
                 )
             )
+
+
+class ZipWorkflowOutputTests(unittest.TestCase):
+    def test_zip_workflow_removes_stale_output_tree_before_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            zip_path = tmp_path / "inputs.zip"
+            with zipfile.ZipFile(zip_path, "w") as archive:
+                archive.writestr("sample.h5", "h5")
+
+            output_dir = tmp_path / "outputs"
+            stale_dir = output_dir / "unzipped_output"
+            stale_dir.mkdir(parents=True)
+            (stale_dir / "old-result.txt").write_text("old", encoding="utf-8")
+            (output_dir / "stale.txt").write_text("old", encoding="utf-8")
+
+            def run_pipeline_file(
+                _h5_path,
+                _pipelines,
+                output_root,
+                output_relative_parent=Path("."),
+                output_filename=None,
+            ):
+                target_dir = output_root / output_relative_parent
+                target_dir.mkdir(parents=True, exist_ok=True)
+                output_path = target_dir / (output_filename or "sample_result.h5")
+                output_path.write_text("result", encoding="utf-8")
+                return output_path
+
+            result = run_zip_workflow(
+                zip_path=zip_path,
+                members=list_h5_members(zip_path),
+                member_count=1,
+                pipelines=[object()],
+                postprocesses=[],
+                selected_pipeline_names=["Demo"],
+                base_output_dir=output_dir,
+                zip_outputs=False,
+                zip_name="outputs.zip",
+                settings=ZipBatchSettings(batch_size=1),
+                run_pipeline_file=run_pipeline_file,
+                run_postprocesses=lambda *args, **kwargs: None,
+                zip_output_dir=lambda *_args, **_kwargs: output_dir / "outputs.zip",
+                log=lambda _message: None,
+                advance_progress=lambda _units: None,
+                start_final_progress=lambda _units, _status: None,
+                set_status=lambda _status: None,
+                make_zip_progress_callback=lambda: None,
+            )
+
+            self.assertFalse(result.zip_failed)
+            self.assertFalse(stale_dir.exists())
+            self.assertFalse((output_dir / "stale.txt").exists())
+            self.assertTrue(any(output_dir.rglob("sample_pipelines_result.h5")))
 
 
 class ZipPipelineParallelismTests(unittest.TestCase):
@@ -628,7 +727,7 @@ class WorkflowDispatchTests(unittest.TestCase):
             "base_output_dir": tmp_path / "outputs",
             "zip_outputs": False,
             "zip_name": "outputs.zip",
-            "trim_source": True,
+            "persist_source": True,
             "zip_output_dir": lambda folder, target_path=None, progress_callback=None: (
                 target_path or folder / "outputs.zip"
             ),

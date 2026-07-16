@@ -4,6 +4,8 @@ import matplotlib.pyplot as plt
 # import matplotlib.pyplot as plt
 import numpy as np
 from scipy.interpolate import interp1d
+
+from math_utils import fft, ifft, irfft, nanargmax, nanmax, nanmean, rfft, rfftfreq
 from scipy.optimize import curve_fit
 from scipy.special import jv
 
@@ -81,79 +83,57 @@ def extract_v_profile_meas(dataset, num_interp_points_x):
                 )
                 dataset_x[t_idx, :, branch_idx, radii_idx] = v_interp
 
-                v_fft = np.fft.rfft(np.asarray(v_interp), n=num_interp_points_x)
+                v_fft = rfft(v_interp, n=num_interp_points_x, axis=0)
                 v_profile_fft[t_idx, :, branch_idx, radii_idx] = v_fft
 
                 v_meas = np.zeros_like(v_fft)
                 v_meas[1] = v_fft[1]
-                v_profile_meas_n1[t_idx, :, branch_idx, radii_idx] = np.fft.irfft(
-                    v_meas
-                )
+                v_profile_meas_n1[t_idx, :, branch_idx, radii_idx] = irfft(v_meas)
 
                 v_meas_dc = np.zeros_like(v_fft)
                 v_meas_dc[0] = v_fft[0]
-                v_profile_meas_dc[t_idx, :, branch_idx, radii_idx] = np.fft.irfft(
-                    v_meas_dc
-                )
+                v_profile_meas_dc[t_idx, :, branch_idx, radii_idx] = irfft(v_meas_dc)
 
                 ratio_map[branch_idx, radii_idx] = ratio
 
     return dataset_x, v_profile_fft, v_profile_meas_n1, v_profile_meas_dc, ratio_map
 
 
-def registration_velocity_profile(dataset):
-    n_t, n_x, n_branches, n_radii = dataset.shape
-    center_idx = n_x // 2 - 1
-    side_len = center_idx
+def decompose_velocity_profile(dataset):
 
-    dataset_x_aligned = np.full_like(dataset, np.nan)
-    out = np.full(n_x, np.nan)
+    dataset = np.asarray(dataset, dtype=float)
+    dataset_flipped = dataset[:, ::-1, :, :]
 
-    for branch_idx in range(n_branches):
-        for radii_idx in range(n_radii):
-            for t_idx in range(n_t):
-                profile = np.asarray(dataset[t_idx, :, branch_idx, radii_idx])
+    dataset_x_symmetric = 0.5 * (
+        dataset + dataset_flipped
+    )
 
-                if np.all(np.isnan(profile)):
-                    return out
+    dataset_x_antisymmetric = 0.5 * (
+        dataset - dataset_flipped
+    )
 
-                peak_idx = np.nanargmax(profile)
-                peak_value = profile[peak_idx]
+    invalid_profiles = np.all(
+        np.isnan(dataset),
+        axis=1,
+        keepdims=True,
+    )
 
-                out[center_idx] = peak_value
-                out[center_idx + 1] = peak_value
+    dataset_x_symmetric = np.where(
+        invalid_profiles,
+        np.nan,
+        dataset_x_symmetric,
+    )
 
-                for k in range(1, side_len + 1):
-                    if peak_idx - k >= 0:
-                        out[center_idx - k] = profile[peak_idx - k]
-                    else:
-                        out[center_idx - k] = profile[peak_idx + k]
+    dataset_x_antisymmetric = np.where(
+        invalid_profiles,
+        np.nan,
+        dataset_x_antisymmetric,
+    )
 
-                    if peak_idx + k < n_x:
-                        out[center_idx + 1 + k] = profile[peak_idx + k]
-                    else:
-                        out[center_idx + 1 + k] = profile[peak_idx - k]
-
-                if out[0] > out[1]:
-                    out[0] = 0.8 * out[1]
-
-                if out[-1] > out[-2]:
-                    out[-1] = 0.8 * out[-2]
-
-                for k in range(1, len(out) - 1):
-                    if k < center_idx:
-                        if not (out[k - 1] <= out[k] <= out[k + 1]):
-                            out[k] = 0.5 * (out[k - 1] + out[k + 1])
-
-                    elif k > center_idx + 1:
-                        if not (out[k - 1] >= out[k] >= out[k + 1]):
-                            out[k] = 0.5 * (out[k - 1] + out[k + 1])
-
-                out = np.maximum(out, 0)
-
-                dataset_x_aligned[t_idx, :, branch_idx, radii_idx] = out
-
-    return dataset_x_aligned
+    return (
+        dataset_x_symmetric,
+        dataset_x_antisymmetric,
+    )
 
 
 # v_profile_meas_extraction
@@ -208,18 +188,16 @@ def extract_v_pulse_meas(dataset, num_interp_points_t):
                     v_pulse=v_pulse,
                 )
 
-                v_fft = np.fft.rfft(np.asarray(v_interp), n=num_interp_points_t)
+                v_fft = rfft(v_interp, n=num_interp_points_t, axis=0)
                 v_pulse_fft[:, x_idx, branch_idx, radii_idx] = v_fft
 
                 v_meas = np.zeros_like(v_fft)
                 v_meas[1] = v_fft[1]
-                v_pulse_meas_n1[:, x_idx, branch_idx, radii_idx] = np.fft.irfft(v_meas)
+                v_pulse_meas_n1[:, x_idx, branch_idx, radii_idx] = irfft(v_meas)
 
                 v_meas_dc = np.zeros_like(v_fft)
                 v_meas_dc[0] = v_fft[0]
-                v_pulse_meas_dc[:, x_idx, branch_idx, radii_idx] = np.fft.irfft(
-                    v_meas_dc
-                )
+                v_pulse_meas_dc[:, x_idx, branch_idx, radii_idx] = irfft(v_meas_dc)
 
     return v_pulse_fft, v_pulse_meas_n1, v_pulse_meas_dc
 
@@ -459,7 +437,7 @@ def generate_harmonic_flow_profile(V, segment_data, ratio_map):
                 Q_n[n, branch, circle] = Qn[n]
                 Tau_n[n, branch, circle] = taun[n]
 
-    v_model = np.fft.irfft(v_model_fft * num_interp_points_t, axis=0)
+    v_model = irfft(v_model_fft * num_interp_points_t, axis=0)
 
     return (
         v_model,
@@ -468,163 +446,6 @@ def generate_harmonic_flow_profile(V, segment_data, ratio_map):
         Q_n,
         Tau_n,
     )
-
-
-def calculate_cn(
-    Qn,
-    min_valid_segments=5,
-):
-    n_freq, n_branch, n_circle = Qn.shape
-
-    delta_z = len_seg * pixel_size
-    z = np.arange(n_circle) * delta_z
-
-    c_n = np.full((n_freq, n_branch), np.nan)
-    k_n = np.full((n_freq, n_branch), np.nan)
-
-    eps = 1e-12
-
-    for n in range(1, n_freq):
-        omega_n = n * omega_0
-
-        for branch in range(n_branch):
-            Q = Qn[n, branch, :]
-
-            valid_mask = np.abs(Q) > eps
-
-            if np.count_nonzero(valid_mask) < min_valid_segments:
-                continue
-
-            phase = np.unwrap(np.angle(Q))
-
-            z_valid = z[valid_mask]
-            phase_valid = phase[valid_mask]
-
-            if len(z_valid) < min_valid_segments:
-                continue
-
-            slope, _ = np.polyfit(
-                z_valid,
-                phase_valid,
-                1,
-            )
-
-            kn = -slope
-
-            if np.isfinite(kn) and np.abs(kn) > 1e-12:
-                c_n[n, branch] = omega_n / kn
-                k_n[n, branch] = kn
-
-    return c_n
-
-
-def calculate_cg(
-    Qn,
-    min_valid_segments=5,
-):
-    n_freq, n_branch, n_circle = Qn.shape
-
-    delta_z = len_seg * pixel_size
-    z = np.arange(n_circle) * delta_z
-
-    T0 = 1 / f0
-    dt = T0 / num_interp_points_t
-
-    Q_puls = np.fft.irfft(
-        Qn * num_interp_points_t,
-        n=num_interp_points_t,
-        axis=0,
-    )
-
-    c_g = np.full(n_branch, np.nan)
-    tau_g = np.full(n_branch, np.nan)
-
-    eps = 1e-12
-
-    for branch in range(n_branch):
-        Q_branch = Q_puls[:, branch, :]
-
-        amp = np.max(np.abs(Q_branch), axis=0)
-        valid_mask = amp > eps
-
-        if np.count_nonzero(valid_mask) < min_valid_segments:
-            continue
-
-        valid_indices = np.where(valid_mask)[0]
-
-        ref_circle = valid_indices[0]
-        Q_ref = Q_branch[:, ref_circle]
-        Q_ref = Q_ref - np.mean(Q_ref)
-
-        delay = np.full(n_circle, np.nan)
-
-        for circle in valid_indices:
-            Q = Q_branch[:, circle]
-            Q = Q - np.mean(Q)
-
-            corr = np.fft.ifft(np.fft.fft(Q) * np.conj(np.fft.fft(Q_ref))).real
-
-            best_lag = np.argmax(corr)
-
-            if best_lag > num_interp_points_t // 2:
-                best_lag = best_lag - num_interp_points_t
-
-            delay[circle] = best_lag * dt
-
-        z_valid = z[valid_mask]
-        delay_valid = delay[valid_mask]
-
-        valid_delay_mask = np.isfinite(delay_valid)
-
-        if np.count_nonzero(valid_delay_mask) < min_valid_segments:
-            continue
-
-        delay_unwrapped = (
-            np.unwrap(2 * np.pi * delay_valid[valid_delay_mask] / T0) * T0 / (2 * np.pi)
-        )
-
-        slope, _ = np.polyfit(
-            z_valid[valid_delay_mask],
-            delay_unwrapped,
-            1,
-        )
-
-        if np.isfinite(slope) and np.abs(slope) > 1e-12:
-            c_g[branch] = 1 / slope
-            tau_g[branch] = slope
-
-    return c_g[None, :]
-
-
-def compute_R0_branch(segment_data, pixel_size, ratio_map):
-    n_branch = max(branch for branch, _ in segment_data.keys()) + 1
-    R0_branch = np.full(n_branch, np.nan)
-
-    for branch in range(n_branch):
-        r0_values = []
-        for circle in range(
-            max(circle for b, circle in segment_data.keys() if b == branch) + 1
-        ):
-            if (branch, circle) in segment_data:
-                r0 = segment_data[(branch, circle)]["r0"]
-                ratio = ratio_map[branch, circle]
-                R0 = r0 * pixel_size / ratio
-                r0_values.append(R0)
-
-        if r0_values:
-            R0_branch[branch] = np.nanmean(r0_values)
-
-    return R0_branch
-
-
-def compute_Eh(
-    c_g,
-    R0_branch,
-    rho,
-):
-    Eh = 2 * rho * R0_branch[None, :] * c_g**2
-
-    return Eh
 
 
 def evaluate_womersley_model(
@@ -711,7 +532,7 @@ def evaluate_womersley_model(
             label="Model",
         )
 
-        rmse = np.sqrt(np.nanmean((raw_profile - model_profile) ** 2))
+        rmse = np.sqrt(nanmean((raw_profile - model_profile) ** 2))
 
         ax.set_title(f"{phase_name}\nt={t_idx}, RMSE={rmse:.3f}")
 
@@ -809,7 +630,7 @@ def evaluate_womersley_model(
 
     all_values = np.concatenate(sym_all + asym_all)
 
-    ymax = np.nanmax(np.abs(all_values))
+    ymax = nanmax(np.abs(all_values))
 
     axes[0].set_ylim(
         -ymax - 0.25,
@@ -1121,205 +942,7 @@ def evaluate_womersley_model(
         )
 
     plt.show()
-
-
-def evaluate_1Dpulse_model(
-    metrics,
-    branch_index,
-    circle_index,
-    position_index,
-    omega_0,
-    harmonics_index,
-    save_prefix=None,
-):
-    Qn = metrics["Q_n"]
-    n_freq, n_branch, n_circle = Qn.shape
-
-    # ==========================================================
-    # Figure 7
-    # Phase propagation along branch
-    # ==========================================================
-
-    delta_z = len_seg * pixel_size
-    z = np.arange(n_circle) * delta_z * 1000  # in mm
-    eps = 1e-12
-
-    valid_mask = np.abs(Qn[1, branch_index, :]) > eps
-    z_valid = z[valid_mask]
-
-    if len(z_valid) == 0:
-        raise ValueError("No valid Q signal found")
-
-    fig7, ax = plt.subplots(
-        1,
-        1,
-        figsize=(7, 5),
-    )
-
-    for n in range(harmonics_index):
-        q = Qn[n, branch_index, :]
-
-        phase = np.unwrap(np.angle(q))
-        phase_valid = phase[valid_mask] - phase[valid_mask][0]
-
-        ax.plot(z_valid, phase_valid, label=f"n={n}")
-
-    ax.set_xlabel("z (mm)")
-    ax.set_ylabel("Unwrapped phase arg(Qn)")
-    ax.set_title(f"Phase propagation along branch {branch_index}")
-    ax.grid(True)
-    ax.legend()
-
-    plt.tight_layout()
-
-    if save_prefix is not None:
-        fig7.savefig(
-            f"{save_prefix}_phase_propagation.png",
-            dpi=300,
-            bbox_inches="tight",
-        )
-
-    # ==========================================================
-    # Figure 8
-    # Harmonic phase velocity across branches
-    # ==========================================================
-
-    c_n = metrics["c_n"]
-
-    n_freq, n_branch = c_n.shape
-
-    n = np.arange(harmonics_index)
-
-    fig8, ax = plt.subplots(
-        1,
-        1,
-        figsize=(7, 5),
-    )
-
-    for branch in range(n_branch):
-        c_seg = c_n[:harmonics_index, branch]
-
-        if np.all(np.isnan(c_seg)):
-            continue
-
-        ax.plot(
-            n,
-            c_seg,
-            "o-",
-            label=f"branch {branch}",
-        )
-
-    ax.set_xlabel("Harmonic order n")
-    ax.set_ylabel("Phase velocity $c_n$ (m/s)")
-    ax.set_title("Harmonic phase velocity across branches")
-    ax.grid(True)
-    ax.legend()
-
-    plt.tight_layout()
-
-    if save_prefix is not None:
-        fig8.savefig(
-            f"{save_prefix}_wave_speed_spectrum.png",
-            dpi=300,
-            bbox_inches="tight",
-        )
-
-    # ==========================================================
-    # Figure 9
-    # Group pulse wave velocity across branches
-    # ==========================================================
-
-    c_g = metrics["c_g"]
-
-    if c_g.ndim == 2:
-        c_g_plot = c_g[0, :]
-    else:
-        c_g_plot = c_g
-
-    branches = np.arange(len(c_g_plot))
-    valid_mask = np.isfinite(c_g_plot)
-
-    branches_valid = branches[valid_mask]
-    c_g_valid = c_g_plot[valid_mask]
-
-    x = np.arange(len(c_g_valid))
-
-    fig9, ax = plt.subplots(
-        1,
-        1,
-        figsize=(7, 5),
-    )
-
-    ax.bar(
-        x,
-        c_g_valid,
-    )
-
-    ax.set_xlabel("Branch index")
-    ax.set_ylabel(r"Group PWV $c_g$ (m/s)")
-    ax.set_title("Group pulse wave velocity across branches")
-    ax.set_xticks(x)
-    ax.set_xticklabels(branches_valid)
-    ax.grid(True, axis="y")
-
-    plt.tight_layout()
-
-    if save_prefix is not None:
-        fig9.savefig(
-            f"{save_prefix}_group_pwv.png",
-            dpi=300,
-            bbox_inches="tight",
-        )
-
-    # ==========================================================
-    # Figure 10
-    # Stiffness product across branches
-    # ==========================================================
-
-    Eh = metrics["Eh"]
-
-    if Eh.ndim == 2:
-        Eh_plot = Eh[0, :]
-    else:
-        Eh_plot = Eh
-
-    branches = np.arange(len(Eh_plot))
-    valid_mask = np.isfinite(Eh_plot)
-
-    branches_valid = branches[valid_mask]
-    Eh_valid = Eh_plot[valid_mask]
-
-    x = np.arange(len(Eh_valid))
-
-    fig10, ax = plt.subplots(
-        1,
-        1,
-        figsize=(7, 5),
-    )
-
-    ax.bar(
-        x,
-        Eh_valid,
-    )
-
-    ax.set_xlabel("Branch index")
-    ax.set_ylabel(r"Stiffness product $Eh$ (N/m)")
-    ax.set_title("Effective stiffness product across branches")
-    ax.set_xticks(x)
-    ax.set_xticklabels(branches_valid)
-    ax.grid(True, axis="y")
-
-    plt.tight_layout()
-
-    if save_prefix is not None:
-        fig10.savefig(
-            f"{save_prefix}_stiffness_product.png",
-            dpi=300,
-            bbox_inches="tight",
-        )
-
-    plt.show()
-
+    
 
 @registerPipeline(name="WomersleyModeling")
 class WomersleyModeling(ProcessPipeline):
@@ -1354,40 +977,21 @@ class WomersleyModeling(ProcessPipeline):
             )
         )
 
-        dataset_x_aligned = registration_velocity_profile(dataset_x)
+        dataset_x_symmetric, dataset_x_antisymmetric = decompose_velocity_profile(dataset_x) 
 
         v_pulse_fft, v_pulse_meas_n1, v_pulse_meas_dc = extract_v_pulse_meas(
-            dataset=dataset_x_aligned,
+            dataset=dataset_x_symmetric,
             num_interp_points_t=num_interp_points_t,
         )
 
         segment_data = projected_parabola_fit(v_pulse_fft)
 
-        (
-            v_model,
-            v_model_fft,
-            C_n,
-            Q_n,
-            Tau_n,
-        ) = generate_harmonic_flow_profile(v_pulse_fft, segment_data, ratio_map)
-
-        c_n = calculate_cn(
-            Qn=Q_n,
-        )
-
-        c_g = calculate_cg(
-            Qn=Q_n,
-        )
-
-        Eh = compute_Eh(
-            c_g=c_g,
-            R0_branch=compute_R0_branch(segment_data, pixel_size, ratio_map),
-            rho=rho,
-        )
+        v_model, v_model_fft, C_n, Q_n, Tau_n = generate_harmonic_flow_profile(v_pulse_fft, segment_data, ratio_map)
 
         metrics: dict = {}
         metrics["dataset_x"] = np.asarray(dataset_x)
-        metrics["dataset_x_aligned"] = np.asarray(dataset_x_aligned)
+        metrics["dataset_x_symmetric"] = np.asarray(dataset_x_symmetric)
+        metrics["dataset_x_antisymmetric"] = np.asarray(dataset_x_antisymmetric)
         metrics["v_profile_fft"] = np.asarray(v_profile_fft)
         metrics["v_profile_meas_n1"] = np.asarray(v_profile_meas_n1)
         metrics["v_profile_meas_dc"] = np.asarray(v_profile_meas_dc)
@@ -1399,26 +1003,14 @@ class WomersleyModeling(ProcessPipeline):
         metrics["C_n"] = np.asarray(C_n)
         metrics["Q_n"] = np.asarray(Q_n)
         metrics["Tau_n"] = np.asarray(Tau_n)
-        metrics["c_n"] = np.asarray(c_n)
-        metrics["c_g"] = np.asarray(c_g)
-        metrics["Eh"] = np.asarray(Eh)
 
-        evaluate_womersley_model(
-            metrics,
-            branch_index=4,
-            circle_index=5,
-            position_index=8,
-            save_prefix=None,  # "segment_3_2",
-        )
-
-        # evaluate_1Dpulse_model(
+        # evaluate_womersley_model(
         #     metrics,
-        #     branch_index=3,
-        #     circle_index=2,
+        #     branch_index=4,
+        #     circle_index=5,
         #     position_index=8,
-        #     omega_0=omega_0,
-        #     harmonics_index=4,
-        #     save_prefix=None,  # "branch_3",
+        #     save_prefix=None,  # "segment_3_2",
         # )
+
 
         return ProcessResult(metrics=metrics)

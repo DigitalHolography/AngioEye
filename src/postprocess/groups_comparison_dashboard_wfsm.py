@@ -1,7 +1,6 @@
 ﻿from __future__ import annotations
 
 from input_output.archive_io import (
-    extract_file_from_zip,
     extract_folder_from_zip,
     temporary_zip_from_tree,
 )
@@ -22,6 +21,7 @@ from .core.base import (
     ),
     required_deps=["matplotlib>=3.8", "pandas>=2.1", "plotly>=5.18"],
     required_pipelines=["waveform_shape_metrics"],
+    input_methods=["file_batch", "cohort_batch", "zip_batch"],
 )
 class GraphicsDashboardPostprocess(BatchPostprocess):
     def run(self, context: PostprocessContext) -> PostprocessResult:
@@ -55,20 +55,12 @@ class GraphicsDashboardPostprocess(BatchPostprocess):
 
             png_paths = extract_folder_from_zip(
                 zip_path=temp_zip,
-                member_prefix="export_png/",
-                output_dir=output_dir,
-            )
-            eps_paths = extract_folder_from_zip(
-                zip_path=temp_zip,
-                member_prefix="export_eps/",
+                member_prefix="group comparison (Dashboard) - Waveform Shape Metrics/",
                 output_dir=output_dir,
             )
 
-
-        created_paths = [
-            
-            *[str(path) for path in png_paths],
-            *[str(path) for path in eps_paths],
+        created_paths = [            
+            *[str(path) for path in png_paths]
         ]
         summary = f" Generated dashboard {len(png_paths)} PNG illustration(s)."
         return PostprocessResult(summary=summary, generated_paths=created_paths)

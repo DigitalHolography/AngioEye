@@ -1,5 +1,7 @@
 import numpy as np
 
+from math_utils import nanmedian, nanstd, rfft_normalized
+
 from .core.base import ProcessPipeline, ProcessResult, registerPipeline, with_attrs
 
 
@@ -53,22 +55,6 @@ class WaveformHarmonicOrganization(ProcessPipeline):
     # ----------------------------
     # Helpers
     # ----------------------------
-    @staticmethod
-    def _safe_nanmedian(x: np.ndarray, axis=None) -> np.ndarray:
-        x = np.asarray(x, dtype=float)
-        if x.size == 0:
-            return np.nan
-        with np.errstate(all="ignore"):
-            return np.nanmedian(x, axis=axis)
-
-    @staticmethod
-    def _safe_nanstd(x: np.ndarray, axis=None) -> np.ndarray:
-        x = np.asarray(x, dtype=float)
-        if x.size == 0:
-            return np.nan
-        with np.errstate(all="ignore"):
-            return np.nanstd(x, axis=axis)
-
     @staticmethod
     def _ensure_beat_periods(T: np.ndarray, n_beats: int) -> np.ndarray:
         """
@@ -205,7 +191,7 @@ class WaveformHarmonicOrganization(ProcessPipeline):
                     if v.size < 2 or not np.all(np.isfinite(v)):
                         continue
 
-                    Vf = np.fft.rfft(v) / float(v.size)
+                    Vf = rfft_normalized(v, axis=0)
                     if Vf.size < H + 1:
                         continue
 
@@ -407,7 +393,7 @@ class WaveformHarmonicOrganization(ProcessPipeline):
     def _occupancy_metrics(self, c_hbkr: np.ndarray) -> dict:
         abs_c_hbkr = np.where(self._isfinite_complex(c_hbkr), np.abs(c_hbkr), np.nan)
 
-        A_b_over_hkr = self._safe_nanmedian(abs_c_hbkr, axis=1)  # (H-1,K,R)
+        A_b_over_hkr = nanmedian(abs_c_hbkr, axis=1)  # (H-1,K,R)
         valid_A_b_over_hkr_mask = np.isfinite(A_b_over_hkr)
         Hm1, n_branches, n_radii = A_b_over_hkr.shape
         A_b_over_hkr_flat = A_b_over_hkr.reshape(Hm1, n_branches * n_radii)
@@ -422,7 +408,7 @@ class WaveformHarmonicOrganization(ProcessPipeline):
             N_kr_over_h[ok_kr] / valid_kr_count_over_h[ok_kr].astype(float)
         )
 
-        A_kr_over_hb = self._safe_nanmedian(
+        A_kr_over_hb = nanmedian(
             abs_c_hbkr.reshape(abs_c_hbkr.shape[0], abs_c_hbkr.shape[1], -1), axis=2
         )  # (H-1,B)
         valid_A_kr_over_hb_mask = np.isfinite(A_kr_over_hb)
@@ -469,8 +455,8 @@ class WaveformHarmonicOrganization(ProcessPipeline):
         vals = np.where(valid, vals, np.nan)
 
         return {
-            "median": self._safe_nanmedian(vals, axis=1),
-            "std": self._safe_nanstd(vals, axis=1),
+            "median": nanmedian(vals, axis=1),
+            "std": nanstd(vals, axis=1),
             "valid_kr_count_over_h": self._count_true(valid, axis=1),
         }
 
@@ -491,8 +477,8 @@ class WaveformHarmonicOrganization(ProcessPipeline):
         vals = np.where(valid, vals, np.nan)
 
         return {
-            "median": self._safe_nanmedian(vals, axis=1),
-            "std": self._safe_nanstd(vals, axis=1),
+            "median": nanmedian(vals, axis=1),
+            "std": nanstd(vals, axis=1),
             "valid_b_count_over_h": self._count_true(valid, axis=1),
         }
 

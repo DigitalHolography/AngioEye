@@ -244,21 +244,31 @@ class AppSettingsStore:
         )
         self.save(settings)
 
-    def load_trim_h5source(self) -> bool:
-        trim_h5source = self.load().get("trim_h5source")
-        if isinstance(trim_h5source, bool):
-            return trim_h5source
-
-        default_trim_h5source = self.load_defaults().get("trim_h5source")
-        return (
-            default_trim_h5source
-            if isinstance(default_trim_h5source, bool)
-            else True
-        )
-
-    def save_trim_h5source(self, trim_h5source: bool) -> None:
+    def load_persist_source(self) -> bool:
         settings = self.load()
-        settings["trim_h5source"] = bool(trim_h5source)
+        persist_source = settings.get("persist_source")
+        if isinstance(persist_source, bool):
+            return persist_source
+
+        # Migrate the old, negatively named preference.  In that preference,
+        # trim_h5source=True meant that source data was not persisted.
+        legacy_trim = settings.get("trim_h5source")
+        if isinstance(legacy_trim, bool):
+            return legacy_trim is False
+
+        defaults = self.load_defaults()
+        persist_source = defaults.get("persist_source")
+        if isinstance(persist_source, bool):
+            return persist_source
+        legacy_trim = defaults.get("trim_h5source")
+        if isinstance(legacy_trim, bool):
+            return legacy_trim is False
+        return False
+
+    def save_persist_source(self, persist_source: bool) -> None:
+        settings = self.load()
+        settings["persist_source"] = bool(persist_source)
+        settings.pop("trim_h5source", None)
         self.save(settings)
 
     def load_batch_execution(self) -> dict[str, Any]:
@@ -270,5 +280,19 @@ class AppSettingsStore:
         return (
             default_batch_execution
             if isinstance(default_batch_execution, dict)
+            else {}
+        )
+
+    def load_postprocess_batching(self) -> dict[str, Any]:
+        postprocess_batching = self.load().get("postprocess_batching")
+        if isinstance(postprocess_batching, dict):
+            return postprocess_batching
+
+        default_postprocess_batching = self.load_defaults().get(
+            "postprocess_batching"
+        )
+        return (
+            default_postprocess_batching
+            if isinstance(default_postprocess_batching, dict)
             else {}
         )

@@ -18,7 +18,7 @@ from batch_engine import (
     run_task_batch,
     run_threaded_batches_in_process_pool,
 )
-from input_output import PNG_OUTPUT_DIRNAME, ZipH5Member
+from input_output import PNG_OUTPUT_DIRNAME, ZipH5Member, create_zip_from_tree
 from pipelines import load_pipeline_catalog
 
 from ._holo import HoloInputContext, output_filename
@@ -94,6 +94,31 @@ IdleCallback = Callable[[], None]
 ZIP_COMPANION_OUTPUT_FOLDERS = (PNG_OUTPUT_DIRNAME,)
 
 
+def zip_output_dir(
+    folder: Path,
+    target_path: Path | None = None,
+    progress_callback: ZipProgressCallback | None = None,
+) -> Path:
+    """Create a workflow archive using the same rules in every frontend."""
+    folder = folder.expanduser().resolve()
+    if not folder.exists() or not folder.is_dir():
+        raise FileNotFoundError(f"Output folder does not exist: {folder}")
+    if target_path is None:
+        zip_name = f"{folder.name}_outputs.zip" if folder.name else "outputs.zip"
+        target_path = folder.parent / zip_name
+    else:
+        target_path = target_path.expanduser().resolve()
+    if target_path.exists():
+        target_path.unlink()
+    return create_zip_from_tree(
+        folder,
+        target_path,
+        exclude_root_dirs=ZIP_COMPANION_OUTPUT_FOLDERS,
+        compresslevel=1,
+        progress_callback=progress_callback,
+    )
+
+
 @dataclass(frozen=True)
 class HoloPipelineJob:
     context: HoloInputContext
@@ -143,6 +168,47 @@ def _prepare_workflow_workspace(
         output_dir=temporary_output_dir,
         temporary_output_dir=temporary_output_dir,
     )
+
+
+def reset_zip_workflow_output_dir(
+    output_dir: Path,
+    *,
+    protected_paths: Iterable[Path] = (),
+) -> None:
+    """Remove stale results before writing a ZIP-input workflow output.
+
+    ZIP-input workflows use a dedicated result directory by default, so an
+    existing directory represents results from an earlier run.  Clear its
+    contents rather than allowing files from that run to be mixed with the
+    current results.  A source ZIP is protected when it lives inside the
+    selected output directory so an explicit, overlapping output selection
+    cannot delete the input before processing starts.
+    """
+    output_dir = output_dir.expanduser().resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    protected = {
+        path.expanduser().resolve()
+        for path in protected_paths
+    }
+
+    def remove_entry(path: Path) -> None:
+        if path.resolve() in protected:
+            return
+        if path.is_symlink() or not path.is_dir():
+            path.unlink()
+            return
+        if any(
+            protected_path == path.resolve()
+            or path.resolve() in protected_path.parents
+            for protected_path in protected
+        ):
+            for child in path.iterdir():
+                remove_entry(child)
+            return
+        shutil.rmtree(path)
+
+    for child in output_dir.iterdir():
+        remove_entry(child)
 
 
 def run_filesystem_workflow(
@@ -259,6 +325,10 @@ def run_zip_workflow(
     on_zip_error: Callable[[str], None] | None = None,
     idle_callback: IdleCallback | None = None,
 ) -> RunWorkflowResult:
+    reset_zip_workflow_output_dir(
+        base_output_dir,
+        protected_paths=(zip_path,),
+    )
     workspace = _prepare_workflow_workspace(
         base_output_dir=base_output_dir,
         zip_outputs=zip_outputs,
@@ -457,11 +527,12 @@ def _run_holo_pipeline_jobs(
     use_process_pool = settings.process_workers > 1 and can_pickle(run_job)
     if use_process_pool:
         process_count = min(len(batches), max(1, settings.process_workers))
-        thread_count = max(1, settings.batch_size)
+        thread_count = max(1, settings.thread_workers_per_process)
         log(
             f"[PROCESS] Starting ProcessPoolExecutor(max_workers={process_count}) "
-            f"for {len(batches)} holo batch(es); each process uses "
-            f"ThreadPoolExecutor(max_workers={thread_count})."
+            f"for {len(batches)} holo batch(es); "
+            f"threads per process={thread_count}; "
+            f"max concurrent file workers={process_count * thread_count}."
         )
         for batch_index, batch in enumerate(batches, start=1):
             log(
@@ -496,7 +567,7 @@ def _run_holo_pipeline_jobs(
     for task_result in run_task_batch(
         jobs,
         run_item=run_job,
-        max_workers=settings.batch_size,
+        max_workers=settings.thread_workers_per_process,
         idle_callback=idle_callback,
     ):
         _record_holo_task_result(

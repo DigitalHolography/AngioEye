@@ -91,21 +91,25 @@ python src/angio_eye.py
 
 When you run `angioeye` from inside the repository checkout, the launcher prefers the local `src/` tree so newly added or edited pipelines are picked up without needing a full reinstall.
 
-Installed builds expose editable `pipelines/` and `postprocess/` folders next to `AngioEye.exe` and `AngioEyeCLI.exe`; use the Library tabs' Open folder and Reload buttons to edit and refresh them.
+Installed builds expose editable `pipelines/` and `postprocess/` folders next to `AngioEye.exe`; use the Library tabs' Open folder and Reload buttons to edit and refresh them.
 
 ### CLI
 
 The CLI is designed for batch processing in headless environments or clusters.
 
 ```sh
-# Via the entry point
-angioeye-cli
+# Via the same entry point (arguments select CLI mode)
+angioeye --data data/ --pipelines waveform_shape_metrics --output ./results
+
+# Multiple names can follow one option, or be supplied as a list literal
+angioeye --data data/ --pipelines pipeline1 pipeline2 --postprocesses "HTML summary"
+angioeye --data data/ --pipelines '["pipeline1", "pipeline2"]'
 
 # Or via the script
-python src/cli.py
+python src/cli.py --data data/ --pipelines pipelines.txt --output ./results
 ```
 
-Windows installer builds also ship `AngioEyeCLI.exe` alongside `AngioEye.exe`, so the installed release can be used headlessly without a Python environment.
+The Windows installer ships one `AngioEye.exe`: launching it without arguments opens the GUI, while supplying arguments runs headlessly in CLI mode.
 
 ---
 
@@ -156,6 +160,9 @@ Use `@registerPostprocess(...)` to declare:
 
 - optional Python package dependencies with `required_deps`
 - required pipeline outputs with `required_pipelines`
+- grouped pipeline alternatives with `required_pipeline_options`; alternatives
+  within each inner list are OR'ed, while separate inner lists are AND'ed:
+  `[["one", "one_alternative"], ["two", "two_alternative"]]`
 
 ### Simple Postprocess Structure
 

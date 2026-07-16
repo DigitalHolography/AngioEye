@@ -31,7 +31,10 @@ def has_pipeline_output_option(
     h5_path: Path,
     pipeline_options: Sequence[Sequence[str]],
 ) -> bool:
-    return any(has_pipeline_outputs(h5_path, option) for option in pipeline_options)
+    return all(
+        any(has_pipeline_output(h5_path, pipeline_name) for pipeline_name in option)
+        for option in pipeline_options
+    )
 
 
 def compatible_postprocess_files(
@@ -50,9 +53,7 @@ def compatible_postprocess_files(
         return CompatiblePostprocessFiles(tuple(processed_outputs or input_h5_paths))
 
     selected = set(selected_pipeline_names)
-    if processed_outputs and any(
-        set(option).issubset(selected) for option in pipeline_options
-    ):
+    if processed_outputs and _pipeline_options_selected(pipeline_options, selected):
         return CompatiblePostprocessFiles(tuple(processed_outputs))
 
     compatible: list[Path] = []
@@ -88,8 +89,9 @@ def missing_required_pipeline_errors(
 
     for postprocess in postprocesses:
         pipeline_options = _pipeline_options_for(postprocess)
-        if not pipeline_options or any(
-            set(option).issubset(selected) for option in pipeline_options
+        if not pipeline_options or _pipeline_options_selected(
+            pipeline_options,
+            selected,
         ):
             continue
         if not reusable_h5_paths and defer_when_no_reusable_paths:
@@ -107,6 +109,30 @@ def missing_required_pipeline_errors(
     return errors
 
 
+def missing_required_option_errors(
+    *,
+    postprocesses: Sequence[object],
+    persist_source: bool,
+) -> list[str]:
+    if persist_source:
+        return []
+
+    errors: list[str] = []
+    for postprocess in postprocesses:
+        required_options = _required_options_for(postprocess)
+        for option in required_options:
+            if option == "persist_eyeflow_data":
+                errors.append(
+                    f"{postprocess.name} requires the Persist Eyeflow Data option; "
+                    "add --keep-source."
+                )
+            else:
+                errors.append(
+                    f"{postprocess.name} requires workflow option: {option}"
+                )
+    return errors
+
+
 def _pipeline_options(
     *,
     required_pipelines: Sequence[str],
@@ -115,7 +141,7 @@ def _pipeline_options(
     if required_pipeline_options:
         return tuple(tuple(option) for option in required_pipeline_options if option)
     required = tuple(required_pipelines)
-    return (required,) if required else ()
+    return tuple((pipeline_name,) for pipeline_name in required)
 
 
 def _pipeline_options_for(obj: object) -> tuple[tuple[str, ...], ...]:
@@ -123,13 +149,38 @@ def _pipeline_options_for(obj: object) -> tuple[tuple[str, ...], ...]:
     if options:
         return tuple(tuple(option) for option in options if option)
     required = tuple(getattr(obj, "required_pipelines", ()))
-    return (required,) if required else ()
+    return tuple((pipeline_name,) for pipeline_name in required)
+
+
+def _required_options_for(obj: object) -> tuple[str, ...]:
+    options = getattr(obj, "required_option", None)
+    if options is None:
+        options = getattr(obj, "required_options", ())
+    if isinstance(options, str):
+        return (options,)
+    return tuple(option for option in options if option)
 
 
 def _format_pipeline_options(
     pipeline_options: Sequence[Sequence[str]],
 ) -> str:
-    return " or ".join(" + ".join(option) for option in pipeline_options)
+    groups = []
+    for option_group in pipeline_options:
+        formatted_group = " or ".join(option_group)
+        groups.append(
+            f"({formatted_group})" if len(option_group) > 1 else formatted_group
+        )
+    return " and ".join(groups)
+
+
+def _pipeline_options_selected(
+    pipeline_options: Sequence[Sequence[str]],
+    selected: set[str],
+) -> bool:
+    return all(
+        any(pipeline_name in selected for pipeline_name in option)
+        for option in pipeline_options
+    )
 
 
 def _paired_paths(

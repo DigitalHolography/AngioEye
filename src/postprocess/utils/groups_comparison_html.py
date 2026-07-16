@@ -4,12 +4,16 @@ import zipfile
 from collections import defaultdict
 import shutil
 import h5py
+import matplotlib
+
+matplotlib.use("Agg", force=True)
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib.ticker import FormatStrFormatter
 from tkinter import Tk, filedialog
 import base64
+from math_utils import nanmedian, nanstd
 from input_output.hdf5_io import find_first_existing_path
 from input_output.hdf5_schema import pipeline_path_candidates
 from input_output.archive_io import (
@@ -114,8 +118,8 @@ def extract_group_metrics(group, results_dict, prefix=""):
                 data = np.array(item, dtype=float)
 
                 results_dict[full_name] = {
-                    "median": np.nanmedian(data),
-                    "std": np.nanstd(data),
+                    "median": nanmedian(data),
+                    "std": nanstd(data),
                 }
 
             except (ValueError, TypeError):
@@ -306,7 +310,7 @@ METRIC_GROUPS = {
         "sigma_t_over_T",
         "gamma_t",
     },
-    "Near peak crest witdh": {
+    "Near - peak crest - witdh": {
         "W50_over_T",
         "W80_over_T",
     },
@@ -327,31 +331,24 @@ METRIC_GROUPS = {
     "Temporal kinetics and persistence metrics": {
         "t_max_over_T",
         "t_min_over_T",
-        "Delta_t_over_T",
         "t_rise_over_T",
         "t_fall_over_T",
         "CF",
         "S_rise",
         "S_fall",
         "v_end_over_vbar",
-    },
-    "Spectral and representation-fidelity metrics": {
-        "E_low_over_E_total",
-        "E_LF_over_E_HF",
-        "rho_h",
-        "w_h",
-        "N_h_over_H_minus_1",
-        "eta_h",
-    },
-    "Derivative - energy metrics": {
         "E_slope",
+    },
+    "Spectral and representation - fidelity metrics": {
+        "E_LF_over_E_HF",
+        "eta_h",
     },
     "Temporal support and concentration metrics": {
         "N_t_over_T",
         "N_eff_over_T",
     },
 }
-def generate_html_gallery(image_dir, html_dir, html_name="metric_dashboard.html"):
+def generate_html_gallery(image_dir, html_dir, html_name="waveform_shape_metrics_group_comparison.html"):
     png_files = sorted(
         [f for f in os.listdir(image_dir) if f.lower().endswith(".png")]
     )
@@ -403,25 +400,25 @@ def generate_html_gallery(image_dir, html_dir, html_name="metric_dashboard.html"
         "        .card { background: white; border-radius: 12px; padding: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }",
         "        .card h2 { font-size: 16px; margin-bottom: 10px; }",
         "        img { width: 100%; border-radius: 8px; border: 1px solid #ddd; }",
+        "        .back-to-top { position: fixed; bottom: 25px; right: 25px; width: 50px; height: 50px; border-radius: 50%; border: none; background: #333; color: white; font-size: 22px; cursor: pointer; display: none; z-index: 9998; box-shadow: 0 3px 10px rgba(0,0,0,0.3); }",
+        "        .back-to-top:hover { background: #555; }",
         "    </style>",
         "</head>",
         "<body>",
+        "    <button id='backToTop' class='back-to-top' onclick='scrollToTop()'>&#8679;</button>",
         "    <h1>Waveform Shape Metrics Dashboard</h1>",
         "    <div class='toolbar'>",
         "        <div class='toolbar-top'>",
         "            <input type='text' id='searchBox' placeholder='Search for a metric...'>",
         "            <button onclick='toggleFilters()'>Show / Hide Filters</button>",
-        "            <button onclick='selectAllFilters()'>Select All</button>",
-        "            <button onclick='clearAllFilters()'>Clear All</button>",
-        "            <button onclick='collapseAllGroups()'>Collapse All Groups</button>",
-        "            <button onclick='expandAllGroups()'>Expand All Groups</button>",
-        "            <button onclick='invertSelection()'>Invert Selection</button>",
+        "            <button id='toggleAllButton' onclick='toggleAllFilters()'>Clear All</button>",
+        "            <button id='toggleGroupsButton' onclick='toggleAllGroups()'>Collapse All Groups</button>",
         "            <label><input type='checkbox' id='showArtery' checked onchange='applyFilters()'> Artery</label>",
         "            <label><input type='checkbox' id='showVein' checked onchange='applyFilters()'> Vein</label>",
         "        </div>",
         
         "               <div class='search-help'>",
-        "            Search by metric name : <code>RI</code>, <code>PI</code>, <code>mu_t_over_T</code>, <code>W50</code>, <code>rho_h</code>, <code>phi</code>, <code>slope</code>, etc.",
+        "            Search by metric name : <code>RI</code>, <code>PI</code>, <code>mu_t_over_T</code>, <code>W50</code>, <code>slope</code>, etc.",
         "        </div>",
         "        <div id='filterPanel' class='filter-panel'>",
         "            <div class='filter-grid'>",
@@ -445,7 +442,7 @@ def generate_html_gallery(image_dir, html_dir, html_name="metric_dashboard.html"
         html.extend([
             "        <div class='filter-group-box'>",
             "            <div class='group-header'>",
-            f"                <span class='group-toggle' onclick=\"toggleCollapse('{group_id}', this)\">â–¼</span>",
+            f"                <span class='group-toggle' onclick=\"toggleCollapse('{group_id}', this)\">&#9660;</span>",
             f"                <input type='checkbox' checked onchange=\"toggleGroup('{group_id}', this.checked)\">",
             f"                <label>{group_name}</label>",
             "            </div>",
@@ -508,7 +505,7 @@ def generate_html_gallery(image_dir, html_dir, html_name="metric_dashboard.html"
         html.extend([
             "        <div class='filter-group-box'>",
             "            <div class='group-header'>",
-            "                <span class='group-toggle' onclick=\"toggleCollapse('other', this)\">â–¼</span>",
+            "                <span class='group-toggle' onclick=\"toggleCollapse('other', this)\">&#9660;</span>",
             "                <input type='checkbox' checked onchange=\"toggleGroup('other', this.checked)\">",
             "                <label>Other</label>",
             "            </div>",
@@ -580,7 +577,7 @@ def generate_html_gallery(image_dir, html_dir, html_name="metric_dashboard.html"
     "            if (!container) return;",
     "",
     "            container.classList.toggle('collapsed');",
-    "            element.textContent = container.classList.contains('collapsed') ? 'â–¶' : 'â–¼';",
+    "            element.innerHTML = container.classList.contains('collapsed') ? '&#9654;' : '&#9660;';",
     "        }",
     "",
     "        function openImageModal(src) {",
@@ -628,56 +625,67 @@ def generate_html_gallery(image_dir, html_dir, html_name="metric_dashboard.html"
     "",
     "            applyFilters();",
     "        }",
-    "        function collapseAllGroups() {",
-    "            document.querySelectorAll('.filter-group-content').forEach(group => {",
-    "                group.classList.add('collapsed');",
-    "            });",
+    "        function toggleAllGroups() {",
+    "            const groups = document.querySelectorAll('.filter-group-content');",
+    "            const toggles = document.querySelectorAll('.group-toggle');",
+    "            const button = document.getElementById('toggleGroupsButton');",
     "",
-    "            document.querySelectorAll('.group-toggle').forEach(toggle => {",
-    "                toggle.textContent = 'â–¶';",
-    "            });",
-    "        }",
+    "            const allCollapsed = Array.from(groups).every(group => group.classList.contains('collapsed'));",
     "",
-    "        function expandAllGroups() {",
-    "            document.querySelectorAll('.filter-group-content').forEach(group => {",
-    "                group.classList.remove('collapsed');",
-    "            });",
-    "",
-    "            document.querySelectorAll('.group-toggle').forEach(toggle => {",
-    "                toggle.textContent = 'â–¼';",
-    "            });",
-    "        }",
-    "",
-    "        function invertSelection() {",
-    "            document.querySelectorAll('.metric-filter').forEach(cb => {",
-    "                cb.checked = !cb.checked;",
-    "            });",
-    "",
-    "            document.querySelectorAll('.filter-group-content').forEach(group => {",
-    "                const checkboxes = Array.from(group.querySelectorAll('.metric-filter'));",
-    "                const groupCheckbox = group.parentElement.querySelector('.group-header input[type=\"checkbox\"]');",
-    "",
-    "                if (groupCheckbox) {",
-    "                    groupCheckbox.checked = checkboxes.every(cb => cb.checked);",
+    "            groups.forEach(group => {",
+    "                if (allCollapsed) {",
+    "                    group.classList.remove('collapsed');",
+    "                } else {",
+    "                    group.classList.add('collapsed');",
     "                }",
     "            });",
     "",
-    "            applyFilters();",
+    "            toggles.forEach(toggle => {",
+    "                toggle.innerHTML = allCollapsed ? '&#9660;' : '&#9654;';",
+    "            });",
+    "",
+    "            button.textContent = allCollapsed ? 'Collapse All Groups' : 'Expand All Groups';",
     "        }",
-    "        function selectAllFilters() {",
-    "            document.querySelectorAll('.metric-filter').forEach(cb => cb.checked = true);",
-    "            document.querySelectorAll('.group-header input[type=\"checkbox\"]').forEach(cb => cb.checked = true);",
+    "",
+    "        function toggleAllFilters() {",
+    "            const filters = document.querySelectorAll('.metric-filter');",
+    "            const groups = document.querySelectorAll('.group-header input[type=\"checkbox\"]');",
+    "            const button = document.getElementById('toggleAllButton');",
+    "",
+    "            const allChecked = Array.from(filters).every(cb => cb.checked);",
+    "",
+    "            filters.forEach(cb => {",
+    "                cb.checked = !allChecked;",
+    "            });",
+    "",
+    "            groups.forEach(cb => {",
+    "                cb.checked = !allChecked;",
+    "            });",
+    "",
+    "            button.textContent = allChecked ? 'Select All' : 'Clear All';",
+    "",
     "            applyFilters();",
     "        }",
     "",
-    "        function clearAllFilters() {",
-    "            document.querySelectorAll('.metric-filter').forEach(cb => cb.checked = false);",
-    "            document.querySelectorAll('.group-header input[type=\"checkbox\"]').forEach(cb => cb.checked = false);",
-    "            applyFilters();",
+    "        function scrollToTop() {",
+    "            window.scrollTo({",
+    "                top: 0,",
+    "                behavior: 'smooth'",
+    "            });",
     "        }",
     "",
+    "        window.addEventListener('scroll', () => {",
+    "            const button = document.getElementById('backToTop');",
+    "",
+    "            if (window.scrollY > 300) {",
+    "                button.style.display = 'block';",
+    "            } else {",
+    "                button.style.display = 'none';",
+    "            }",
+    "        });",
     "        document.getElementById('searchBox').addEventListener('input', applyFilters);",
     "        window.addEventListener('load', applyFilters);",
+
     "    </script>",
     "</body>",
     "</html>",
@@ -711,7 +719,7 @@ def add_file_to_zip(zip_path: str, file_path: str, arc_name: str):
 
     os.replace(temp_zip, zip_path)
 
-def save_dashboard(zip_path, export_png_dir="export_png_html"):
+def save_dashboard(zip_path, export_png_dir="group comparison (HTML) - Waveform Shape Metrics"):
     all_results = analyze_zip(zip_path)
     reset_output_dir(export_png_dir)
 
@@ -726,20 +734,20 @@ def save_dashboard(zip_path, export_png_dir="export_png_html"):
     generate_html_gallery(
         image_dir=export_png_dir,
         html_dir=temp_html_dir,
-        html_name="waveform_metrics_dashboard.html",
+        html_name="waveform_shape_metrics_group_comparison.html",
     )
 
     html_path = os.path.join(
         temp_html_dir,
-        "waveform_metrics_dashboard.html"
+        "waveform_shape_metrics_group_comparison.html"
     )
 
-    replace_folder_in_zip(zip_path, export_png_dir, arc_folder="export_png_html")
+    replace_folder_in_zip(zip_path, export_png_dir, arc_folder="group comparison (HTML) - Waveform Shape Metrics")
 
     add_file_to_zip(
         zip_path,
         html_path,
-        arc_name="waveform_metrics_dashboard.html",
+        arc_name="waveform_shape_metrics_group_comparison.html",
     )
 
     if os.path.isdir(export_png_dir):

@@ -91,6 +91,8 @@ def _zip_html_relative_parent(output_dir, processed_file, source_relative_path):
     ),
     required_deps=["matplotlib>=3.8", "pandas>=2.1", "plotly>=5.18"],
     required_pipelines=["waveform_shape_metrics"],
+    required_option=["persist_eyeflow_data"],
+    input_methods=["single_file", "file_batch", "cohort_batch", "zip_batch"],
 )
 class WaveformMetricSummaryTablesPostprocess(BatchPostprocess):
     def run(self, context: PostprocessContext) -> PostprocessResult:
@@ -140,7 +142,7 @@ class WaveformMetricSummaryTablesPostprocess(BatchPostprocess):
                     source_relative_path,
                 )
                 html_path = (
-                    output_dir / "html" / html_parent / f"{processed_file.stem}.html"
+                    output_dir / "HTML summary" / html_parent / f"{processed_file.stem}.html"
                 )
                 table_paths.append(
                     html_summary_dashboard.generate_metric_table_html_for_file(

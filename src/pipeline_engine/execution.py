@@ -11,6 +11,7 @@ from input_output import (
     ANGIOEYE_PROCESSING_ROOT,
     create_h5_file,
     h5_output_parent,
+    read_signal_datasets,
     write_metrics_trees_to_h5,
 )
 from pipelines import (
@@ -67,7 +68,7 @@ def run_pipeline_file(
     output_relative_parent: Path = Path("."),
     output_filename: str | None = None,
     *,
-    trim_source: bool = True,
+    persist_source: bool = False,
     log: LogCallback | None = None,
     advance_progress: ProgressCallback | None = None,
     write_idle_callback: IdleCallback | None = None,
@@ -97,7 +98,7 @@ def run_pipeline_file(
 
     try:
         compute_started_at = time.monotonic()
-        pipeline_results = _run_pipeline_descriptors(
+        pipeline_results, signal_datasets = _run_pipeline_descriptors(
             h5_path=h5_path,
             pipelines=pipelines,
             log=log,
@@ -113,9 +114,10 @@ def run_pipeline_file(
         write_started_at = time.monotonic()
         _write_pipeline_output(
             pipeline_results=pipeline_results,
+            signal_datasets=signal_datasets,
             output_path=output_path,
             source_file=str(h5_path),
-            trim_source=trim_source,
+            persist_source=persist_source,
             idle_callback=write_idle_callback,
             record_timing=record_timing,
         )
@@ -182,6 +184,7 @@ def run_postprocesses(
             zip_outputs=zip_outputs,
             input_h5_paths=tuple(input_h5_paths),
             idle_callback=idle_callback,
+            record_timing=record_timing,
         )
         _record_timing(
             record_timing,
@@ -283,7 +286,7 @@ def _run_pipeline_descriptors(
     log: LogCallback | None,
     advance_progress: ProgressCallback | None,
     record_timing: TimingCallback | None,
-) -> list[tuple[str, ProcessResult]]:
+) -> tuple[list[tuple[str, ProcessResult]], dict[str, object]]:
     pipeline_results: list[tuple[str, ProcessResult]] = []
     h5_open_started_at = time.monotonic()
     h5file = h5py.File(h5_path, "r")
@@ -293,6 +296,7 @@ def _run_pipeline_descriptors(
         time.monotonic() - h5_open_started_at,
     )
     try:
+        signal_datasets = read_signal_datasets(h5file)
         for pipeline_desc in pipelines:
             descriptor_name = getattr(
                 pipeline_desc,
@@ -339,24 +343,26 @@ def _run_pipeline_descriptors(
             "per-file input HDF5 close after pipeline compute",
             time.monotonic() - h5_close_started_at,
         )
-    return pipeline_results
+    return pipeline_results, signal_datasets
 
 
 def _write_pipeline_output(
     *,
     pipeline_results: Sequence[tuple[str, ProcessResult]],
+    signal_datasets: dict[str, object],
     output_path: Path,
     source_file: str,
-    trim_source: bool,
+    persist_source: bool,
     idle_callback: IdleCallback | None,
     record_timing: TimingCallback | None,
 ) -> None:
     if idle_callback is None:
         _write_pipeline_output_sync(
             pipeline_results=pipeline_results,
+            signal_datasets=signal_datasets,
             output_path=output_path,
             source_file=source_file,
-            trim_source=trim_source,
+            persist_source=persist_source,
             record_timing=record_timing,
         )
         return
@@ -368,9 +374,10 @@ def _write_pipeline_output(
         try:
             _write_pipeline_output_sync(
                 pipeline_results=pipeline_results,
+                signal_datasets=signal_datasets,
                 output_path=output_path,
                 source_file=source_file,
-                trim_source=trim_source,
+                persist_source=persist_source,
                 record_timing=record_timing,
             )
         except Exception as exc:  # noqa: BLE001
@@ -396,22 +403,19 @@ def _write_pipeline_output(
 def _write_pipeline_output_sync(
     *,
     pipeline_results: Sequence[tuple[str, ProcessResult]],
+    signal_datasets: dict[str, object],
     output_path: Path,
     source_file: str,
-    trim_source: bool,
+    persist_source: bool,
     record_timing: TimingCallback | None,
 ) -> None:
-    copy_source = not pipeline_results
-    source_mode = (
-        "source copy disabled"
-        if trim_source and not copy_source
-        else "source copy enabled"
-    )
+    source_mode = "source copy enabled" if persist_source else "source copy disabled"
     create_started_at = time.monotonic()
     create_h5_file(
         output_path,
         source_file=source_file,
-        trim_source=trim_source and not copy_source,
+        persist_source=persist_source,
+        signal_datasets=signal_datasets,
     )
     _record_timing(
         record_timing,

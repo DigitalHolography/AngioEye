@@ -1,7 +1,14 @@
 {
   "batch_execution": {
     "batch_size": 16,
-    "process_workers": 8
+    "process_workers": 8,
+    "thread_workers_per_process": 2
+  },
+  "postprocess_batching": {
+    "variability": {
+      "batch_size": 16,
+      "process_workers": 8
+    }
   },
   "pipeline_visibility": {
     "Windkessel_RC": false,
@@ -21,6 +28,6 @@
     "Group comparison (Dashboard) - Waveform Shape Metrics": false,
     "HTML summary": true
   },
-  "trim_h5source": true,
+  "persist_source": false,
   "ui_mode": "minimal"
 }
