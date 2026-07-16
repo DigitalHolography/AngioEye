@@ -1,0 +1,577 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import h5py
+import numpy as np
+
+from math_utils import nanmedian
+
+from .core.base import ProcessResult, registerPipeline, with_attrs
+from .waveform_shape_metrics import ArterialSegExample
+
+REGION_NAMES = (
+    "top_left",
+    "top_right",
+    "bottom_left",
+    "bottom_right",
+    "top",
+    "bottom",
+    "left",
+    "right",
+)
+
+OPTIC_DISC_LABEL = -1
+REGION_AXIS_LABEL = -2
+
+OPTIC_DISC_CENTER_PATH = "/Topology/OpticDisc/CenterXY/value"
+OPTIC_DISC_MASK_PATH = "/Topology/OpticDisc/Mask/value"
+BEAT_PERIOD_PATH = "/Artery/VelocityPerBeat/beatPeriodSeconds/value"
+
+
+@dataclass(frozen=True)
+class VesselPaths:
+    name: str
+    branch_ids: str
+    branch_label_map: str
+    segment_center_xy: str
+    raw_waveform: str
+    bandlimited_waveform: str
+
+    def source_metric_path(self, signal_type: str, metric_name: str) -> str:
+        segment_group = {
+            "raw": "raw_segment",
+            "bandlimited": "bandlimited_segment",
+        }[signal_type]
+        return (
+            f"/Metrics/waveform_shape_metrics/{self.name}/by_segment/"
+            f"{segment_group}/{metric_name}"
+        )
+
+
+VESSEL_PATHS = (
+    VesselPaths(
+        name="artery",
+        branch_ids="/Topology/Artery/BranchIds/value",
+        branch_label_map="/Topology/Artery/BranchLabelMap/value",
+        segment_center_xy="/Topology/Artery/SegmentCenterXY/value",
+        raw_waveform=(
+            "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegment/value"
+        ),
+        bandlimited_waveform=(
+            "/Artery/VelocityPerBeat/Segments/"
+            "VelocitySignalPerBeatPerSegmentBandLimited/value"
+        ),
+    ),
+    VesselPaths(
+        name="vein",
+        branch_ids="/Topology/Vein/BranchIds/value",
+        branch_label_map="/Topology/Vein/BranchLabelMap/value",
+        segment_center_xy="/Topology/Vein/SegmentCenterXY/value",
+        raw_waveform=(
+            "/Vein/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegment/value"
+        ),
+        bandlimited_waveform=(
+            "/Vein/VelocityPerBeat/Segments/"
+            "VelocitySignalPerBeatPerSegmentBandLimited/value"
+        ),
+    ),
+)
+
+TOPOLOGICAL_METRICS_REQUIRED_PATHS = (
+    OPTIC_DISC_CENTER_PATH,
+    OPTIC_DISC_MASK_PATH,
+    BEAT_PERIOD_PATH,
+    *(
+        path
+        for vessel in VESSEL_PATHS
+        for path in (
+            vessel.branch_ids,
+            vessel.branch_label_map,
+            vessel.segment_center_xy,
+            vessel.raw_waveform,
+            vessel.bandlimited_waveform,
+        )
+    ),
+)
+
+
+@dataclass(frozen=True)
+class VesselData:
+    paths: VesselPaths
+    branch_ids: np.ndarray
+    branch_label_map: np.ndarray
+    segment_center_xy: np.ndarray
+    raw_waveform: np.ndarray
+    bandlimited_waveform: np.ndarray
+
+
+@registerPipeline(name="topological_metrics")
+class TopologicalMetricsPipeline(ArterialSegExample):
+    """Regional waveform-shape summaries indexed by EyeFlow topology."""
+
+    description = (
+        "Waveform-shape metrics by optic-disc-centred quadrants, half-planes, "
+        "and the individual branches present in each region "
+        "(artery + vein; raw + bandlimited)."
+    )
+    h5_source_label = "EF"
+    required_h5_paths = TOPOLOGICAL_METRICS_REQUIRED_PATHS
+
+    def run(self, h5file: h5py.File) -> ProcessResult:
+        self._require_inputs(h5file)
+        optic_disc_center = self._optic_disc_center(h5file)
+        optic_disc_mask = np.asarray(h5file[OPTIC_DISC_MASK_PATH], dtype=bool)
+        if optic_disc_mask.ndim != 2:
+            raise ValueError(
+                f"{OPTIC_DISC_MASK_PATH} must have shape (y, x), got "
+                f"{optic_disc_mask.shape}."
+            )
+
+        vessel_data = [self._load_vessel(h5file, paths) for paths in VESSEL_PATHS]
+        self._validate_spatial_frame(optic_disc_center, optic_disc_mask, vessel_data)
+
+        n_beats = self._shared_beat_count(vessel_data)
+        beat_periods = self._beat_periods(h5file, n_beats)
+        metric_specs = {item[0]: item for item in self._metric_keys()}
+        metrics: dict[str, object] = {}
+
+        metrics["topology/names"] = list(REGION_NAMES)
+        metrics["topology/optic_disc/center_xy"] = with_attrs(
+            optic_disc_center.astype(np.float32, copy=False),
+            {
+                "dimDesc": ["coordinate"],
+                "coordinate_order": ["x", "y"],
+                "coordinate_system": "image_pixel",
+                "unit": "pixel",
+            },
+        )
+        metrics["topology/optic_disc/mask"] = with_attrs(
+            optic_disc_mask,
+            {
+                "dimDesc": ["y", "x"],
+                "coordinate_system": "image_pixel",
+            },
+        )
+
+        metric_sources: set[str] = set()
+        for vessel in vessel_data:
+            membership = self._region_membership(
+                vessel.segment_center_xy,
+                optic_disc_center,
+            )
+            self._pack_topology_outputs(
+                metrics,
+                vessel,
+                optic_disc_mask,
+                optic_disc_center,
+            )
+
+            for signal_type, waveform in (
+                ("raw", vessel.raw_waveform),
+                ("bandlimited", vessel.bandlimited_waveform),
+            ):
+                segment_metrics, source = self._segment_metrics(
+                    h5file,
+                    vessel,
+                    signal_type,
+                    waveform,
+                    beat_periods,
+                    tuple(metric_specs),
+                )
+                metric_sources.add(source)
+                self._pack_region_metrics(
+                    metrics,
+                    vessel,
+                    signal_type,
+                    membership,
+                    segment_metrics,
+                    metric_specs,
+                )
+
+        source_summary = ",".join(sorted(metric_sources))
+        return ProcessResult(
+            metrics=metrics,
+            attrs={
+                "aggregation": (
+                    "median of per-segment metric values over branch-radius "
+                    "entries belonging to each region, independently per beat"
+                ),
+                "boundary_policy": (
+                    "x < center_x is left; x >= center_x is right; "
+                    "EyeFlow SegmentCenterXY uses a bottom-up y-axis: "
+                    "y < center_y is bottom; y >= center_y is top"
+                ),
+                "branch_aggregation": (
+                    "median of per-segment metric values within one EyeFlow "
+                    "branch and region, independently per beat"
+                ),
+                "branch_group_naming": "branch_<EyeFlow BranchIds value>",
+                "coordinate_order": "x,y",
+                "metric_source": source_summary,
+                "region_names": list(REGION_NAMES),
+                "topology_source": "/Topology",
+            },
+        )
+
+    @classmethod
+    def missing_required_paths(cls, h5file: h5py.File) -> tuple[str, ...]:
+        return tuple(path for path in cls.required_h5_paths if path not in h5file)
+
+    @classmethod
+    def _require_inputs(cls, h5file: h5py.File) -> None:
+        missing = cls.missing_required_paths(h5file)
+        if missing:
+            raise KeyError(
+                "Missing required EyeFlow topology dataset(s): " + ", ".join(missing)
+            )
+
+    @staticmethod
+    def _optic_disc_center(h5file: h5py.File) -> np.ndarray:
+        center = np.asarray(h5file[OPTIC_DISC_CENTER_PATH], dtype=float).reshape(-1)
+        if center.size != 2 or not np.all(np.isfinite(center)):
+            raise ValueError(
+                f"{OPTIC_DISC_CENTER_PATH} must contain one finite (x, y) pair."
+            )
+        return center
+
+    @staticmethod
+    def _load_vessel(h5file: h5py.File, paths: VesselPaths) -> VesselData:
+        branch_ids = np.asarray(h5file[paths.branch_ids], dtype=np.int32).reshape(-1)
+        raw_waveform = np.asarray(h5file[paths.raw_waveform], dtype=float)
+        bandlimited_waveform = np.asarray(
+            h5file[paths.bandlimited_waveform],
+            dtype=float,
+        )
+        if branch_ids.size == 0:
+            raw_waveform = TopologicalMetricsPipeline._drop_empty_branch_placeholder(
+                raw_waveform,
+                paths.name,
+                "raw",
+            )
+            bandlimited_waveform = (
+                TopologicalMetricsPipeline._drop_empty_branch_placeholder(
+                    bandlimited_waveform,
+                    paths.name,
+                    "bandlimited",
+                )
+            )
+        data = VesselData(
+            paths=paths,
+            branch_ids=branch_ids,
+            branch_label_map=np.asarray(h5file[paths.branch_label_map], dtype=np.int32),
+            segment_center_xy=np.asarray(h5file[paths.segment_center_xy], dtype=float),
+            raw_waveform=raw_waveform,
+            bandlimited_waveform=bandlimited_waveform,
+        )
+        TopologicalMetricsPipeline._validate_vessel(data)
+        return data
+
+    @staticmethod
+    def _drop_empty_branch_placeholder(
+        waveform: np.ndarray,
+        vessel_name: str,
+        signal_type: str,
+    ) -> np.ndarray:
+        if waveform.ndim != 4 or waveform.shape[2] != 1:
+            return waveform
+        if np.any(np.isfinite(waveform)):
+            raise ValueError(
+                f"{vessel_name} {signal_type} waveform contains a finite dummy "
+                "branch although BranchIds is empty."
+            )
+        return waveform[:, :, :0, :]
+
+    @staticmethod
+    def _validate_vessel(vessel: VesselData) -> None:
+        name = vessel.paths.name
+        if vessel.branch_label_map.ndim != 2:
+            raise ValueError(
+                f"{name} BranchLabelMap must have shape (y, x), got "
+                f"{vessel.branch_label_map.shape}."
+            )
+        if vessel.segment_center_xy.ndim != 3 or vessel.segment_center_xy.shape[2] != 2:
+            raise ValueError(
+                f"{name} SegmentCenterXY must have shape (branch, radius, 2), "
+                f"got {vessel.segment_center_xy.shape}."
+            )
+        if vessel.branch_ids.size != vessel.segment_center_xy.shape[0]:
+            raise ValueError(
+                f"{name} BranchIds length {vessel.branch_ids.size} does not match "
+                f"SegmentCenterXY branch size {vessel.segment_center_xy.shape[0]}."
+            )
+        if np.unique(vessel.branch_ids).size != vessel.branch_ids.size:
+            raise ValueError(f"{name} BranchIds must be unique.")
+
+        known_labels = np.concatenate(
+            (np.asarray([0], dtype=np.int32), vessel.branch_ids)
+        )
+        unexpected_labels = np.setdiff1d(
+            np.unique(vessel.branch_label_map),
+            known_labels,
+        )
+        if unexpected_labels.size:
+            raise ValueError(
+                f"{name} BranchLabelMap contains labels absent from BranchIds: "
+                f"{unexpected_labels.tolist()}."
+            )
+
+        expected_tail = vessel.segment_center_xy.shape[:2]
+        for signal_type, waveform in (
+            ("raw", vessel.raw_waveform),
+            ("bandlimited", vessel.bandlimited_waveform),
+        ):
+            if waveform.ndim != 4:
+                raise ValueError(
+                    f"{name} {signal_type} waveform must have shape "
+                    f"(sample, beat, branch, radius), got {waveform.shape}."
+                )
+            if waveform.shape[2:] != expected_tail:
+                raise ValueError(
+                    f"{name} {signal_type} waveform branch-radius shape "
+                    f"{waveform.shape[2:]} does not match SegmentCenterXY "
+                    f"shape {expected_tail}."
+                )
+
+        if vessel.raw_waveform.shape != vessel.bandlimited_waveform.shape:
+            raise ValueError(
+                f"{name} raw and bandlimited waveform shapes differ: "
+                f"{vessel.raw_waveform.shape} versus "
+                f"{vessel.bandlimited_waveform.shape}."
+            )
+
+    @staticmethod
+    def _validate_spatial_frame(
+        optic_disc_center: np.ndarray,
+        optic_disc_mask: np.ndarray,
+        vessels: list[VesselData],
+    ) -> None:
+        height, width = optic_disc_mask.shape
+        center_x, center_y = optic_disc_center
+        if not (0 <= center_x < width and 0 <= center_y < height):
+            raise ValueError(
+                "Optic-disc center lies outside the optic-disc mask image frame."
+            )
+
+        for vessel in vessels:
+            if vessel.branch_label_map.shape != optic_disc_mask.shape:
+                raise ValueError(
+                    f"{vessel.paths.name} BranchLabelMap shape "
+                    f"{vessel.branch_label_map.shape} does not match optic-disc "
+                    f"mask shape {optic_disc_mask.shape}."
+                )
+            centers = vessel.segment_center_xy
+            finite = np.all(np.isfinite(centers), axis=2)
+            if not np.any(finite):
+                continue
+            x = centers[:, :, 0][finite]
+            y = centers[:, :, 1][finite]
+            if np.any((x < 0) | (x >= width) | (y < 0) | (y >= height)):
+                raise ValueError(
+                    f"{vessel.paths.name} SegmentCenterXY contains coordinates "
+                    "outside the topology image frame."
+                )
+
+    @staticmethod
+    def _shared_beat_count(vessels: list[VesselData]) -> int:
+        counts = {int(vessel.raw_waveform.shape[1]) for vessel in vessels}
+        if len(counts) != 1:
+            raise ValueError(
+                "Artery and vein segment waveforms must have the same beat count."
+            )
+        return counts.pop()
+
+    @staticmethod
+    def _beat_periods(h5file: h5py.File, n_beats: int) -> np.ndarray:
+        periods = np.asarray(h5file[BEAT_PERIOD_PATH], dtype=float).reshape(-1)
+        if periods.size != n_beats:
+            raise ValueError(
+                f"{BEAT_PERIOD_PATH} contains {periods.size} beat period(s), but "
+                f"the segment waveforms contain {n_beats}."
+            )
+        if np.any(~np.isfinite(periods) | (periods <= 0)):
+            raise ValueError("Beat periods must all be finite and positive.")
+        return periods.reshape(1, -1)
+
+    @staticmethod
+    def _region_membership(
+        segment_center_xy: np.ndarray,
+        optic_disc_center: np.ndarray,
+    ) -> np.ndarray:
+        x = segment_center_xy[:, :, 0]
+        y = segment_center_xy[:, :, 1]
+        finite = np.isfinite(x) & np.isfinite(y)
+        left = finite & (x < optic_disc_center[0])
+        right = finite & ~left
+        bottom = finite & (y < optic_disc_center[1])
+        top = finite & ~bottom
+        return np.asarray(
+            (
+                top & left,
+                top & right,
+                bottom & left,
+                bottom & right,
+                top,
+                bottom,
+                left,
+                right,
+            ),
+            dtype=bool,
+        )
+
+    @staticmethod
+    def _pack_topology_outputs(
+        metrics: dict[str, object],
+        vessel: VesselData,
+        optic_disc_mask: np.ndarray,
+        optic_disc_center: np.ndarray,
+    ) -> None:
+        prefix = f"topology/{vessel.paths.name}"
+        metrics[f"{prefix}/branch_ids"] = with_attrs(
+            vessel.branch_ids,
+            {"dimDesc": ["branch"]},
+        )
+        branch_label_map, axis_thickness = (
+            TopologicalMetricsPipeline._branch_label_visualization(
+                vessel.branch_label_map,
+                optic_disc_mask,
+                optic_disc_center,
+            )
+        )
+        metrics[f"{prefix}/branch_label_map"] = with_attrs(
+            branch_label_map,
+            {
+                "axis_label": REGION_AXIS_LABEL,
+                "axis_thickness_pixels": axis_thickness,
+                "dimDesc": ["y", "x"],
+                "background_label": 0,
+                "branch_labels": "original EyeFlow BranchIds values",
+                "coordinate_system": "image_pixel",
+                "boundary_policy": (
+                    "vertical axis at center_x; horizontal axis at center_y"
+                ),
+                "description": (
+                    "Two-dimensional branch label mask with optic-disc and "
+                    "region-axis overlays"
+                ),
+                "optic_disc_label": OPTIC_DISC_LABEL,
+                "overlay_priority": "region axes, optic disc, vessel branches",
+            },
+        )
+
+    @staticmethod
+    def _branch_label_visualization(
+        branch_label_map: np.ndarray,
+        optic_disc_mask: np.ndarray,
+        optic_disc_center: np.ndarray,
+    ) -> tuple[np.ndarray, int]:
+        image = branch_label_map.astype(np.int32, copy=True)
+        image[optic_disc_mask] = OPTIC_DISC_LABEL
+
+        height, width = branch_label_map.shape
+        axis_thickness = max(3, int(round(min(height, width) / 128.0)))
+        center_x = int(np.floor(optic_disc_center[0]))
+        center_y = int(np.floor(optic_disc_center[1]))
+        x_start = max(0, center_x - axis_thickness // 2)
+        x_stop = min(width, x_start + axis_thickness)
+        y_start = max(0, center_y - axis_thickness // 2)
+        y_stop = min(height, y_start + axis_thickness)
+        image[:, x_start:x_stop] = REGION_AXIS_LABEL
+        image[y_start:y_stop, :] = REGION_AXIS_LABEL
+        return image, axis_thickness
+
+    def _segment_metrics(
+        self,
+        h5file: h5py.File,
+        vessel: VesselData,
+        signal_type: str,
+        waveform: np.ndarray,
+        beat_periods: np.ndarray,
+        metric_names: tuple[str, ...],
+    ) -> tuple[dict[str, np.ndarray], str]:
+        expected_shape = (
+            waveform.shape[1],
+            waveform.shape[2],
+            waveform.shape[3],
+        )
+        source_metrics: dict[str, np.ndarray] = {}
+        for metric_name in metric_names:
+            path = vessel.paths.source_metric_path(signal_type, metric_name)
+            dataset = h5file.get(path)
+            if not isinstance(dataset, h5py.Dataset) or dataset.shape != expected_shape:
+                break
+            source_metrics[metric_name] = np.asarray(dataset, dtype=float)
+        else:
+            return source_metrics, "eyeflow_per_segment_metrics"
+
+        computed, _branch, _global, _n_branches, _n_radii, _note = (
+            self._compute_block_segment(waveform, beat_periods)
+        )
+        return computed, "angioeye_recomputed_from_waveforms"
+
+    @staticmethod
+    def _pack_region_metrics(
+        metrics: dict[str, object],
+        vessel: VesselData,
+        signal_type: str,
+        membership: np.ndarray,
+        segment_metrics: dict[str, np.ndarray],
+        metric_specs: dict[str, tuple[str, str, str, str]],
+    ) -> None:
+        n_beats = next(iter(segment_metrics.values())).shape[0]
+        for region_index, region_name in enumerate(REGION_NAMES):
+            selected = membership[region_index]
+            region_prefix = f"{vessel.paths.name}/{region_name}"
+            global_prefix = f"{region_prefix}/global"
+            branch_indexes = np.flatnonzero(np.any(selected, axis=1))
+            for metric_name, values in segment_metrics.items():
+                if np.any(selected):
+                    region_values = nanmedian(values[:, selected], axis=1)
+                else:
+                    region_values = np.full(n_beats, np.nan, dtype=np.float32)
+
+                _name, definition, unit, family = metric_specs[metric_name]
+                metrics[f"{global_prefix}/{signal_type}/{metric_name}"] = with_attrs(
+                    np.asarray(region_values, dtype=np.float32),
+                    {
+                        "aggregation": (
+                            "median over selected branch-radius segment metrics"
+                        ),
+                        "definition": [definition],
+                        "dimDesc": ["beat"],
+                        "metric_family": [family],
+                        "region": region_name,
+                        "signal_type": signal_type,
+                        "unit": [unit],
+                    },
+                )
+
+            for branch_index in branch_indexes:
+                branch_id = int(vessel.branch_ids[branch_index])
+                branch_selected = selected[branch_index]
+                branch_prefix = f"{region_prefix}/by_branch/branch_{branch_id}"
+
+                for metric_name, values in segment_metrics.items():
+                    branch_values = nanmedian(
+                        values[:, branch_index, branch_selected],
+                        axis=1,
+                    )
+                    _name, definition, unit, family = metric_specs[metric_name]
+                    metrics[f"{branch_prefix}/{signal_type}/{metric_name}"] = (
+                        with_attrs(
+                            np.asarray(branch_values, dtype=np.float32),
+                            {
+                                "aggregation": (
+                                    "median over this branch's selected radius-segment "
+                                    "metrics"
+                                ),
+                                "branch_id": branch_id,
+                                "definition": [definition],
+                                "dimDesc": ["beat"],
+                                "metric_family": [family],
+                                "region": region_name,
+                                "signal_type": signal_type,
+                                "unit": [unit],
+                            },
+                        )
+                    )

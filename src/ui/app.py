@@ -86,6 +86,9 @@ class ProcessApp(
         self._build_ui()
         self._install_drop_targets()
         self.batch_input_var.trace_add("write", self.run_controller.on_batch_paths_changed)
+        self.batch_input_var.trace_add(
+            "write", self.pipeline_library_controller.update_input_statuses
+        )
         self.batch_output_var.trace_add("write", self.run_controller.on_batch_paths_changed)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.pipeline_library_controller.register()
