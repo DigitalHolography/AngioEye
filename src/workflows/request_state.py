@@ -7,7 +7,10 @@ from typing import Any, Literal
 
 from input_output import InputPlan, prepare_run_input, prepare_run_inputs
 
-from ._postprocess_requirements import missing_required_pipeline_errors
+from ._postprocess_requirements import (
+    missing_required_option_errors,
+    missing_required_pipeline_errors,
+)
 from .dispatch import OutputFilenameResolver, WorkflowInputError, WorkflowRunRequest
 from .runs import ZipOutputDir
 
@@ -133,6 +136,12 @@ def build_workflow_request(
         reusable_h5_paths=reusable_h5_paths,
         defer_when_no_reusable_paths=bool(input_plan and input_plan.is_zip)
         or (input_selection.convention == "holo" and not work_selection.pipelines),
+    )
+    requirement_errors.extend(
+        missing_required_option_errors(
+            postprocesses=work_selection.postprocesses,
+            persist_source=output_options.persist_source,
+        )
     )
     if requirement_errors:
         raise WorkflowInputError(

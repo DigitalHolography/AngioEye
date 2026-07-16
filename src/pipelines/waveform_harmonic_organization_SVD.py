@@ -1,5 +1,7 @@
 import numpy as np
 
+from math_utils import rfft_normalized
+
 from .core.base import ProcessPipeline, ProcessResult, registerPipeline, with_attrs
 
 
@@ -202,7 +204,7 @@ class WaveformHarmonicOrganizationSVD(ProcessPipeline):
                     if v.size < 2 or not np.all(np.isfinite(v)):
                         continue
 
-                    Vf = np.fft.rfft(v) / float(v.size)
+                    Vf = rfft_normalized(v, axis=0)
                     if Vf.size < H + 1:
                         continue
 

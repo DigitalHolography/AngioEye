@@ -1,5 +1,7 @@
 import numpy as np
 
+from math_utils import nancv, nanmean, nanmad, nanmedian, nanstd
+
 from .core.base import ProcessPipeline, ProcessResult, registerPipeline
 
 
@@ -35,43 +37,6 @@ class LowRankPulsatilityMetrics(ProcessPipeline):
     min_valid_samples_fraction = 0.95
     min_valid_columns = 3
     max_modes_panel = 3
-
-    @staticmethod
-    def _safe_nanmean(x: np.ndarray) -> float:
-        x = np.asarray(x, dtype=float)
-        if x.size == 0 or not np.any(np.isfinite(x)):
-            return np.nan
-        return float(np.nanmean(x))
-
-    @staticmethod
-    def _safe_nanmedian(x: np.ndarray) -> float:
-        x = np.asarray(x, dtype=float)
-        if x.size == 0 or not np.any(np.isfinite(x)):
-            return np.nan
-        return float(np.nanmedian(x))
-
-    @staticmethod
-    def _safe_nanstd(x: np.ndarray) -> float:
-        x = np.asarray(x, dtype=float)
-        if x.size == 0 or not np.any(np.isfinite(x)):
-            return np.nan
-        return float(np.nanstd(x))
-
-    @staticmethod
-    def _safe_nanmad(x: np.ndarray) -> float:
-        x = np.asarray(x, dtype=float)
-        if x.size == 0 or not np.any(np.isfinite(x)):
-            return np.nan
-        med = np.nanmedian(x)
-        return float(np.nanmedian(np.abs(x - med)))
-
-    def _safe_nancv(self, x: np.ndarray) -> float:
-        x = np.asarray(x, dtype=float)
-        mu = self._safe_nanmean(x)
-        sd = self._safe_nanstd(x)
-        if (not np.isfinite(mu)) or (not np.isfinite(sd)) or abs(mu) <= self.eps:
-            return np.nan
-        return float(sd / (abs(mu) + self.eps))
 
     def _ensure_segment_shape(self, v_block: np.ndarray) -> np.ndarray:
         v_block = np.asarray(v_block, dtype=float)
@@ -137,8 +102,7 @@ class LowRankPulsatilityMetrics(ProcessPipeline):
             x = vals[mask]
             if x.size == 0 or not np.any(np.isfinite(x)):
                 continue
-            med = np.nanmedian(x)
-            out[b] = float(np.nanmedian(np.abs(x - med)))
+            out[b] = float(nanmad(x))
         return out
 
     def _median_per_beat(
@@ -154,7 +118,7 @@ class LowRankPulsatilityMetrics(ProcessPipeline):
             x = vals[mask]
             if x.size == 0 or not np.any(np.isfinite(x)):
                 continue
-            out[b] = float(np.nanmedian(x))
+            out[b] = float(nanmedian(x))
         return out
 
     @staticmethod
@@ -197,7 +161,7 @@ class LowRankPulsatilityMetrics(ProcessPipeline):
             "beat_period_valid": beat_period_valid,
         }
 
-        mu = np.nanmean(v_block, axis=0)
+        mu = nanmean(v_block, axis=0)
         out["mu"] = mu
 
         v_filled = np.where(np.isfinite(v_block), v_block, mu[None, :, :, :])
@@ -251,7 +215,7 @@ class LowRankPulsatilityMetrics(ProcessPipeline):
 
         for m in range(n_modes):
             scores = s[m] * Vt[m, :]
-            med_score = self._safe_nanmedian(scores)
+            med_score = nanmedian(scores)
             if np.isfinite(med_score) and med_score < 0:
                 U[:, m] *= -1.0
                 Vt[m, :] *= -1.0
@@ -300,8 +264,8 @@ class LowRankPulsatilityMetrics(ProcessPipeline):
             residual_rms_bkr[valid_column_mask] = res_rms_valid
             residual_rms_panel[m - 1] = residual_rms_bkr
 
-            num = self._safe_nanmedian(res_rms_valid)
-            den = self._safe_nanmedian(X_total_rms_valid)
+            num = nanmedian(res_rms_valid)
+            den = nanmedian(X_total_rms_valid)
             rho_panel[m - 1] = (
                 float(num / (den + self.eps))
                 if np.isfinite(num) and np.isfinite(den) and den > self.eps
@@ -352,13 +316,13 @@ class LowRankPulsatilityMetrics(ProcessPipeline):
         out["beatwise"] = beatwise
 
         acq = {
-            "mu_acq": self._safe_nanmedian(mu[valid_column_mask]),
-            "beat_period_mean": self._safe_nanmean(T[0][beat_period_valid]),
-            "beat_period_median": self._safe_nanmedian(T[0][beat_period_valid]),
-            "beat_period_std": self._safe_nanstd(T[0][beat_period_valid]),
-            "sigma_mu_beat": self._safe_nanstd(beatwise["median_kr_mu"]),
-            "mad_mu_beat": self._safe_nanmad(beatwise["median_kr_mu"]),
-            "spatial_mad_mu_median_over_beats": self._safe_nanmedian(
+            "mu_acq": nanmedian(mu[valid_column_mask]),
+            "beat_period_mean": nanmean(T[0][beat_period_valid]),
+            "beat_period_median": nanmedian(T[0][beat_period_valid]),
+            "beat_period_std": nanstd(T[0][beat_period_valid]),
+            "sigma_mu_beat": nanstd(beatwise["median_kr_mu"]),
+            "mad_mu_beat": nanmad(beatwise["median_kr_mu"]),
+            "spatial_mad_mu_median_over_beats": nanmedian(
                 beatwise["spatial_mad_mu"]
             ),
         }
@@ -366,28 +330,28 @@ class LowRankPulsatilityMetrics(ProcessPipeline):
         for m in range(1, n_modes + 1):
             mode_rms = rms_mode_panel[m - 1]
             res_rms = residual_rms_panel[m - 1]
-            acq[f"A{m}"] = self._safe_nanmedian(mode_rms[valid_column_mask])
-            acq[f"sigma_A{m}_beat"] = self._safe_nanstd(beatwise[f"median_kr_A{m}"])
-            acq[f"mad_A{m}_beat"] = self._safe_nanmad(beatwise[f"median_kr_A{m}"])
-            acq[f"cv_A{m}_beat"] = self._safe_nancv(beatwise[f"median_kr_A{m}"])
-            acq[f"spatial_mad_A{m}_median_over_beats"] = self._safe_nanmedian(
+            acq[f"A{m}"] = nanmedian(mode_rms[valid_column_mask])
+            acq[f"sigma_A{m}_beat"] = nanstd(beatwise[f"median_kr_A{m}"])
+            acq[f"mad_A{m}_beat"] = nanmad(beatwise[f"median_kr_A{m}"])
+            acq[f"cv_A{m}_beat"] = nancv(beatwise[f"median_kr_A{m}"])
+            acq[f"spatial_mad_A{m}_median_over_beats"] = nanmedian(
                 beatwise[f"spatial_mad_A{m}"]
             )
-            acq[f"R{m}"] = self._safe_nanmedian(res_rms[valid_column_mask])
+            acq[f"R{m}"] = nanmedian(res_rms[valid_column_mask])
             acq[f"rho{m}"] = rho_panel[m - 1]
-            acq[f"sigma_R{m}_beat"] = self._safe_nanstd(beatwise[f"median_kr_R{m}"])
-            acq[f"mad_R{m}_beat"] = self._safe_nanmad(beatwise[f"median_kr_R{m}"])
-            acq[f"cv_R{m}_beat"] = self._safe_nancv(beatwise[f"median_kr_R{m}"])
-            acq[f"sigma_rho{m}_beat"] = self._safe_nanstd(beatwise[f"rho{m}_beatwise"])
-            acq[f"mad_rho{m}_beat"] = self._safe_nanmad(beatwise[f"rho{m}_beatwise"])
-            acq[f"cv_rho{m}_beat"] = self._safe_nancv(beatwise[f"rho{m}_beatwise"])
-            acq[f"spatial_mad_R{m}_median_over_beats"] = self._safe_nanmedian(
+            acq[f"sigma_R{m}_beat"] = nanstd(beatwise[f"median_kr_R{m}"])
+            acq[f"mad_R{m}_beat"] = nanmad(beatwise[f"median_kr_R{m}"])
+            acq[f"cv_R{m}_beat"] = nancv(beatwise[f"median_kr_R{m}"])
+            acq[f"sigma_rho{m}_beat"] = nanstd(beatwise[f"rho{m}_beatwise"])
+            acq[f"mad_rho{m}_beat"] = nanmad(beatwise[f"rho{m}_beatwise"])
+            acq[f"cv_rho{m}_beat"] = nancv(beatwise[f"rho{m}_beatwise"])
+            acq[f"spatial_mad_R{m}_median_over_beats"] = nanmedian(
                 beatwise[f"spatial_mad_R{m}"]
             )
-            acq[f"median_abs_a{m}"] = self._safe_nanmedian(
+            acq[f"median_abs_a{m}"] = nanmedian(
                 np.abs(score_panel_bkr[m - 1])[valid_column_mask]
             )
-            acq[f"spatial_mad_abs_a{m}_median_over_beats"] = self._safe_nanmedian(
+            acq[f"spatial_mad_abs_a{m}_median_over_beats"] = nanmedian(
                 beatwise[f"spatial_mad_abs_a{m}"]
             )
 

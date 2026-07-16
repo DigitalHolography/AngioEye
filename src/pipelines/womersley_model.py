@@ -4,6 +4,8 @@ import matplotlib.pyplot as plt
 # import matplotlib.pyplot as plt
 import numpy as np
 from scipy.interpolate import interp1d
+
+from math_utils import fft, ifft, irfft, nanargmax, nanmax, nanmean, rfft, rfftfreq
 from scipy.optimize import curve_fit
 from scipy.special import jv
 
@@ -81,20 +83,16 @@ def extract_v_profile_meas(dataset, num_interp_points_x):
                 )
                 dataset_x[t_idx, :, branch_idx, radii_idx] = v_interp
 
-                v_fft = np.fft.rfft(np.asarray(v_interp), n=num_interp_points_x)
+                v_fft = rfft(v_interp, n=num_interp_points_x, axis=0)
                 v_profile_fft[t_idx, :, branch_idx, radii_idx] = v_fft
 
                 v_meas = np.zeros_like(v_fft)
                 v_meas[1] = v_fft[1]
-                v_profile_meas_n1[t_idx, :, branch_idx, radii_idx] = np.fft.irfft(
-                    v_meas
-                )
+                v_profile_meas_n1[t_idx, :, branch_idx, radii_idx] = irfft(v_meas)
 
                 v_meas_dc = np.zeros_like(v_fft)
                 v_meas_dc[0] = v_fft[0]
-                v_profile_meas_dc[t_idx, :, branch_idx, radii_idx] = np.fft.irfft(
-                    v_meas_dc
-                )
+                v_profile_meas_dc[t_idx, :, branch_idx, radii_idx] = irfft(v_meas_dc)
 
                 ratio_map[branch_idx, radii_idx] = ratio
 
@@ -117,7 +115,7 @@ def registration_velocity_profile(dataset):
                 if np.all(np.isnan(profile)):
                     continue
 
-                peak_idx = np.nanargmax(profile)
+                peak_idx = nanargmax(profile)
                 peak_value = profile[peak_idx]
 
                 out[center_idx] = peak_value
@@ -208,18 +206,16 @@ def extract_v_pulse_meas(dataset, num_interp_points_t):
                     v_pulse=v_pulse,
                 )
 
-                v_fft = np.fft.rfft(np.asarray(v_interp), n=num_interp_points_t)
+                v_fft = rfft(v_interp, n=num_interp_points_t, axis=0)
                 v_pulse_fft[:, x_idx, branch_idx, radii_idx] = v_fft
 
                 v_meas = np.zeros_like(v_fft)
                 v_meas[1] = v_fft[1]
-                v_pulse_meas_n1[:, x_idx, branch_idx, radii_idx] = np.fft.irfft(v_meas)
+                v_pulse_meas_n1[:, x_idx, branch_idx, radii_idx] = irfft(v_meas)
 
                 v_meas_dc = np.zeros_like(v_fft)
                 v_meas_dc[0] = v_fft[0]
-                v_pulse_meas_dc[:, x_idx, branch_idx, radii_idx] = np.fft.irfft(
-                    v_meas_dc
-                )
+                v_pulse_meas_dc[:, x_idx, branch_idx, radii_idx] = irfft(v_meas_dc)
 
     return v_pulse_fft, v_pulse_meas_n1, v_pulse_meas_dc
 
@@ -459,7 +455,7 @@ def generate_harmonic_flow_profile(V, segment_data, ratio_map):
                 Q_n[n, branch, circle] = Qn[n]
                 Tau_n[n, branch, circle] = taun[n]
 
-    v_model = np.fft.irfft(v_model_fft * num_interp_points_t, axis=0)
+    v_model = irfft(v_model_fft * num_interp_points_t, axis=0)
 
     return (
         v_model,
@@ -530,7 +526,7 @@ def calculate_cg(
     T0 = 1 / f0
     dt = T0 / num_interp_points_t
 
-    Q_puls = np.fft.irfft(
+    Q_puls = irfft(
         Qn * num_interp_points_t,
         n=num_interp_points_t,
         axis=0,
@@ -562,7 +558,7 @@ def calculate_cg(
             Q = Q_branch[:, circle]
             Q = Q - np.mean(Q)
 
-            corr = np.fft.ifft(np.fft.fft(Q) * np.conj(np.fft.fft(Q_ref))).real
+            corr = ifft(fft(Q) * np.conj(fft(Q_ref))).real
 
             best_lag = np.argmax(corr)
 
@@ -612,7 +608,7 @@ def compute_R0_branch(segment_data, pixel_size, ratio_map):
                 r0_values.append(R0)
 
         if r0_values:
-            R0_branch[branch] = np.nanmean(r0_values)
+            R0_branch[branch] = nanmean(r0_values)
 
     return R0_branch
 
@@ -711,7 +707,7 @@ def evaluate_womersley_model(
             label="Model",
         )
 
-        rmse = np.sqrt(np.nanmean((raw_profile - model_profile) ** 2))
+        rmse = np.sqrt(nanmean((raw_profile - model_profile) ** 2))
 
         ax.set_title(f"{phase_name}\nt={t_idx}, RMSE={rmse:.3f}")
 
@@ -809,7 +805,7 @@ def evaluate_womersley_model(
 
     all_values = np.concatenate(sym_all + asym_all)
 
-    ymax = np.nanmax(np.abs(all_values))
+    ymax = nanmax(np.abs(all_values))
 
     axes[0].set_ylim(
         -ymax - 0.25,

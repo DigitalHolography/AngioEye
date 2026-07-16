@@ -16,6 +16,7 @@ from .core.base import (
         "Minimal tutorial showing the available PostprocessContext fields and "
         "the PostprocessResult output format."
     ),
+    input_methods=["single_file", "file_batch", "cohort_batch", "zip_batch"],
     visibility="hidden",
 )
 class PostprocessTutorial(BatchPostprocess):

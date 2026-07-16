@@ -1,5 +1,18 @@
 import numpy as np
 
+from math_utils import (
+    nanmax,
+    nanmean,
+    nanmedian,
+    nanmin,
+    nanstd,
+    nancv,
+    nanmad,
+    rfft_normalized,
+    irfft_normalized,
+    rfftfreq,
+)
+
 from .core.base import ProcessPipeline, ProcessResult, registerPipeline, with_attrs
 
 
@@ -66,35 +79,6 @@ class WindkesselRC(ProcessPipeline):
     primitive_min_methods_for_consensus = 2
 
     @staticmethod
-    def _safe_nanmedian(x: np.ndarray) -> float:
-        x = np.asarray(x, dtype=float)
-        if x.size == 0 or not np.any(np.isfinite(x)):
-            return np.nan
-        return float(np.nanmedian(x))
-
-    @staticmethod
-    def _safe_nanmean(x: np.ndarray) -> float:
-        x = np.asarray(x, dtype=float)
-        if x.size == 0 or not np.any(np.isfinite(x)):
-            return np.nan
-        return float(np.nanmean(x))
-
-    @staticmethod
-    def _safe_nanstd(x: np.ndarray) -> float:
-        x = np.asarray(x, dtype=float)
-        if x.size == 0 or not np.any(np.isfinite(x)):
-            return np.nan
-        return float(np.nanstd(x))
-
-    @staticmethod
-    def _mad(x: np.ndarray) -> float:
-        x = np.asarray(x, dtype=float)
-        if x.size == 0 or not np.any(np.isfinite(x)):
-            return np.nan
-        med = float(np.nanmedian(x))
-        return float(np.nanmedian(np.abs(x - med)))
-
-    @staticmethod
     def _ensure_time_by_beat(v2: np.ndarray, n_beats: int) -> np.ndarray:
         v2 = np.asarray(v2, dtype=float)
         if v2.ndim != 2:
@@ -130,7 +114,7 @@ class WindkesselRC(ProcessPipeline):
         vals = vals[np.isfinite(vals)]
         if vals.size < 2:
             return np.nan
-        return float(np.nanmax(vals) - np.nanmin(vals))
+        return float(nanmax(vals) - nanmin(vals))
 
     @staticmethod
     def _pairwise_rel_range(vals: np.ndarray, eps: float = 1e-12) -> float:
@@ -138,8 +122,8 @@ class WindkesselRC(ProcessPipeline):
         vals = vals[np.isfinite(vals)]
         if vals.size < 2:
             return np.nan
-        med = float(np.nanmedian(vals))
-        return float((np.nanmax(vals) - np.nanmin(vals)) / max(abs(med), eps))
+        med = float(nanmedian(vals))
+        return float((nanmax(vals) - nanmin(vals)) / max(abs(med), eps))
 
     def _prepare_beat(self, x: np.ndarray) -> np.ndarray:
         x = np.asarray(x, dtype=float).ravel()
@@ -162,7 +146,7 @@ class WindkesselRC(ProcessPipeline):
             return np.full_like(x, np.nan, dtype=float)
         y = x.copy()
         if use_mean_normalization:
-            mu = float(np.nanmean(y))
+            mu = float(nanmean(y))
             if (not np.isfinite(mu)) or abs(mu) <= self.eps:
                 return np.full_like(y, np.nan, dtype=float)
             y = y / mu
@@ -201,8 +185,8 @@ class WindkesselRC(ProcessPipeline):
         if not np.any(np.isfinite(qa)) or not np.any(np.isfinite(qv)):
             return out
 
-        qa0 = qa - np.nanmean(qa)
-        qv0 = qv - np.nanmean(qv)
+        qa0 = qa - nanmean(qa)
+        qv0 = qv - nanmean(qv)
 
         Hn = []
         omegas = []
@@ -317,8 +301,8 @@ class WindkesselRC(ProcessPipeline):
 
         tau_phase_arr = np.asarray(tau_phase, dtype=float)
         tau_amp_arr = np.asarray(tau_amp, dtype=float)
-        tau_phase_med = self._safe_nanmedian(tau_phase_arr)
-        tau_amp_med = self._safe_nanmedian(tau_amp_arr)
+        tau_phase_med = nanmedian(tau_phase_arr)
+        tau_amp_med = nanmedian(tau_amp_arr)
         signal_norm = float(np.sum(weights * np.abs(Hn) ** 2))
         residual_norm = float(best_residual / max(signal_norm, self.eps))
 
@@ -358,11 +342,11 @@ class WindkesselRC(ProcessPipeline):
             return np.full_like(x, np.nan, dtype=float)
         if not np.any(np.isfinite(x)):
             return np.full_like(x, np.nan, dtype=float)
-        xx = np.where(np.isfinite(x), x, np.nanmean(x))
-        X = np.fft.rfft(xx)
-        freqs = np.fft.rfftfreq(n, d=Tbeat / n)
+        xx = np.where(np.isfinite(x), x, nanmean(x))
+        X = rfft_normalized(xx, axis=0)
+        freqs = rfftfreq(n, d=Tbeat / n)
         phase = np.exp(-1j * 2.0 * np.pi * freqs * delay_seconds)
-        return np.asarray(np.fft.irfft(X * phase, n=n), dtype=float)
+        return np.asarray(irfft_normalized(X * phase, n=n, axis=0), dtype=float)
 
     def _time_integral_fit_one_beat(self, qa: np.ndarray, qv: np.ndarray, Tbeat: float) -> dict:
         out = {
@@ -639,8 +623,8 @@ class WindkesselRC(ProcessPipeline):
             tau_vals = np.asarray([freq_tau[i], td_tau[i], arx_tau[i]], dtype=float)
             delay_vals = np.asarray([freq_delay[i], td_delay[i], arx_delay[i]], dtype=float)
             methods_valid_count[i] = int(np.sum(np.isfinite(tau_vals)))
-            tau_consensus_median[i] = self._safe_nanmedian(tau_vals)
-            delay_consensus_median[i] = self._safe_nanmedian(delay_vals)
+            tau_consensus_median[i] = nanmedian(tau_vals)
+            delay_consensus_median[i] = nanmedian(delay_vals)
             tau_intermethod_range[i] = self._pairwise_range(tau_vals)
             tau_intermethod_rel_range[i] = self._pairwise_rel_range(tau_vals, self.eps)
             delay_intermethod_range[i] = self._pairwise_range(delay_vals)
@@ -714,16 +698,16 @@ class WindkesselRC(ProcessPipeline):
                     "arx_delay_reasonable": arx_delay_reasonable,
                 },
                 "summary": {
-                    "freq_tau_reasonable_fraction": np.asarray(self._safe_nanmean(freq_tau_reasonable), dtype=float),
-                    "time_integral_tau_reasonable_fraction": np.asarray(self._safe_nanmean(td_tau_reasonable), dtype=float),
-                    "arx_tau_reasonable_fraction": np.asarray(self._safe_nanmean(arx_tau_reasonable), dtype=float),
-                    "freq_delay_reasonable_fraction": np.asarray(self._safe_nanmean(freq_delay_reasonable), dtype=float),
-                    "time_integral_delay_reasonable_fraction": np.asarray(self._safe_nanmean(td_delay_reasonable), dtype=float),
-                    "arx_delay_reasonable_fraction": np.asarray(self._safe_nanmean(arx_delay_reasonable), dtype=float),
-                    "consensus_available_fraction": np.asarray(self._safe_nanmean(tau_consensus_available), dtype=float),
-                    "tau_intermethod_rel_range_median": np.asarray(self._safe_nanmedian(tau_intermethod_rel_range), dtype=float),
-                    "delay_intermethod_range_median": np.asarray(self._safe_nanmedian(delay_intermethod_range), dtype=float),
-                    "methods_valid_count_median": np.asarray(self._safe_nanmedian(methods_valid_count), dtype=float),
+                    "freq_tau_reasonable_fraction": np.asarray(nanmean(freq_tau_reasonable), dtype=float),
+                    "time_integral_tau_reasonable_fraction": np.asarray(nanmean(td_tau_reasonable), dtype=float),
+                    "arx_tau_reasonable_fraction": np.asarray(nanmean(arx_tau_reasonable), dtype=float),
+                    "freq_delay_reasonable_fraction": np.asarray(nanmean(freq_delay_reasonable), dtype=float),
+                    "time_integral_delay_reasonable_fraction": np.asarray(nanmean(td_delay_reasonable), dtype=float),
+                    "arx_delay_reasonable_fraction": np.asarray(nanmean(arx_delay_reasonable), dtype=float),
+                    "consensus_available_fraction": np.asarray(nanmean(tau_consensus_available), dtype=float),
+                    "tau_intermethod_rel_range_median": np.asarray(nanmedian(tau_intermethod_rel_range), dtype=float),
+                    "delay_intermethod_range_median": np.asarray(nanmedian(delay_intermethod_range), dtype=float),
+                    "methods_valid_count_median": np.asarray(nanmedian(methods_valid_count), dtype=float),
                 },
             },
         }
@@ -731,10 +715,10 @@ class WindkesselRC(ProcessPipeline):
     def _summary_scalars(self, x: np.ndarray, prefix: str) -> dict:
         x = np.asarray(x, dtype=float)
         return {
-            f"{prefix}/median": np.asarray(self._safe_nanmedian(x), dtype=float),
-            f"{prefix}/mean": np.asarray(self._safe_nanmean(x), dtype=float),
-            f"{prefix}/std": np.asarray(self._safe_nanstd(x), dtype=float),
-            f"{prefix}/mad": np.asarray(self._mad(x), dtype=float),
+            f"{prefix}/median": np.asarray(nanmedian(x), dtype=float),
+            f"{prefix}/mean": np.asarray(nanmean(x), dtype=float),
+            f"{prefix}/std": np.asarray(nanstd(x), dtype=float),
+            f"{prefix}/mad": np.asarray(nanmad(x), dtype=float),
             f"{prefix}/n_valid": np.asarray(int(np.sum(np.isfinite(x))), dtype=int),
         }
 

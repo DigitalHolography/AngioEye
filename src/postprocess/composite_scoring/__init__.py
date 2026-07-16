@@ -1,7 +1,13 @@
 """Postprocess composite scoring for Waveform Shape Metrics Pipeline."""
 
-from postprocess.core.base import registerPostprocess, PostprocessContext, PostprocessResult
+from postprocess.core.base import (
+    PostprocessContext,
+    PostprocessResult,
+    registerPostprocess,
+)
+
 from .run import run_composite_scoring
+
 
 @registerPostprocess(
     name="Composite Scoring",
@@ -11,6 +17,7 @@ from .run import run_composite_scoring
     ),
     required_deps=["matplotlib>=3.8", "scipy>=1.10"],
     required_pipelines=["waveform_shape_metrics"],
+    input_methods=["single_file", "file_batch", "cohort_batch", "zip_batch"],
 )
 def run(ctx: PostprocessContext) -> PostprocessResult:
     return run_composite_scoring(ctx)

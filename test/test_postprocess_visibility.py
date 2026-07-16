@@ -12,7 +12,12 @@ if str(SRC_DIR) not in sys.path:
 from app_settings import AppSettingsStore  # noqa: E402
 from postprocess import PostprocessDescriptor  # noqa: E402
 from postprocess.core import base as postprocess_base  # noqa: E402
-from postprocess.core.base import PostprocessResult, registerPostprocess  # noqa: E402
+from postprocess.core.base import (  # noqa: E402
+    DEFAULT_INPUT_METHODS,
+    PostprocessResult,
+    format_required_pipeline_options,
+    registerPostprocess,
+)
 from postprocess.pipeline_metrics_manifest import (  # noqa: E402
     PipelineMetricsManifestPostprocess,
 )
@@ -47,6 +52,129 @@ class PostprocessVisibilityTests(unittest.TestCase):
         finally:
             postprocess_base.POSTPROCESS_REGISTRY.clear()
             postprocess_base.POSTPROCESS_REGISTRY.update(original_registry)
+
+    def test_register_postprocess_applies_input_methods_to_function_targets(
+        self,
+    ) -> None:
+        original_registry = postprocess_base.POSTPROCESS_REGISTRY.copy()
+        postprocess_base.POSTPROCESS_REGISTRY.clear()
+        try:
+
+            @registerPostprocess(
+                name="Batch Function",
+                input_methods=["zip_batch", "file_batch", "zip_batch"],
+            )
+            def batch_function(_context):
+                return PostprocessResult()
+
+            registered = postprocess_base.POSTPROCESS_REGISTRY["Batch Function"]
+
+            self.assertIs(registered.func, batch_function)
+            self.assertEqual(
+                registered.input_methods,
+                ["zip_batch", "file_batch"],
+            )
+        finally:
+            postprocess_base.POSTPROCESS_REGISTRY.clear()
+            postprocess_base.POSTPROCESS_REGISTRY.update(original_registry)
+
+    def test_register_postprocess_defaults_input_methods(self) -> None:
+        original_registry = postprocess_base.POSTPROCESS_REGISTRY.copy()
+        postprocess_base.POSTPROCESS_REGISTRY.clear()
+        try:
+
+            @registerPostprocess(name="Default Function")
+            def default_function(_context):
+                return PostprocessResult()
+
+            registered = postprocess_base.POSTPROCESS_REGISTRY["Default Function"]
+
+            self.assertIs(registered.func, default_function)
+            self.assertEqual(
+                registered.input_methods,
+                list(DEFAULT_INPUT_METHODS),
+            )
+        finally:
+            postprocess_base.POSTPROCESS_REGISTRY.clear()
+            postprocess_base.POSTPROCESS_REGISTRY.update(original_registry)
+
+    def test_register_postprocess_groups_pipeline_options_as_or_with_and_groups(
+        self,
+    ) -> None:
+        original_registry = postprocess_base.POSTPROCESS_REGISTRY.copy()
+        postprocess_base.POSTPROCESS_REGISTRY.clear()
+        try:
+
+            @registerPostprocess(
+                name="Grouped Pipelines",
+                required_pipeline_options=[
+                    ["one", "one_alternative"],
+                    ["two", "two_alternative"],
+                ],
+            )
+            def grouped_pipelines(_context):
+                return PostprocessResult()
+
+            registered = postprocess_base.POSTPROCESS_REGISTRY["Grouped Pipelines"]
+
+            self.assertEqual(
+                registered.required_pipeline_options,
+                [["one", "one_alternative"], ["two", "two_alternative"]],
+            )
+            self.assertEqual(
+                format_required_pipeline_options(registered),
+                "(one or one_alternative) and (two or two_alternative)",
+            )
+        finally:
+            postprocess_base.POSTPROCESS_REGISTRY.clear()
+            postprocess_base.POSTPROCESS_REGISTRY.update(original_registry)
+
+    def test_register_postprocess_propagates_required_option(self) -> None:
+        original_registry = postprocess_base.POSTPROCESS_REGISTRY.copy()
+        postprocess_base.POSTPROCESS_REGISTRY.clear()
+        try:
+            @registerPostprocess(
+                name="Persistent Function",
+                required_option=["persist_eyeflow_data"],
+            )
+            def persistent_function(_context):
+                return PostprocessResult()
+
+            registered = postprocess_base.POSTPROCESS_REGISTRY["Persistent Function"]
+            self.assertEqual(["persist_eyeflow_data"], registered.required_option)
+
+            descriptor = PostprocessDescriptor(
+                name=registered.name,
+                description=registered.description,
+                available=True,
+                postprocess_cls=registered,
+                required_option=list(registered.required_option),
+            )
+            self.assertEqual(
+                ["persist_eyeflow_data"],
+                descriptor.instantiate().required_option,
+            )
+        finally:
+            postprocess_base.POSTPROCESS_REGISTRY.clear()
+            postprocess_base.POSTPROCESS_REGISTRY.update(original_registry)
+
+    def test_postprocess_required_option_is_shown_in_tooltip_and_status(self) -> None:
+        postprocess = PostprocessDescriptor(
+            name="Variability",
+            description="Build variability tables.",
+            available=True,
+            required_option=["persist_eyeflow_data"],
+        )
+        controller = PostprocessLibraryController(SimpleNamespace())
+
+        self.assertIn(
+            "Requires options: persist_eyeflow_data",
+            controller.descriptor_tooltip_text(postprocess),
+        )
+        self.assertEqual(
+            "Requires: option persist_eyeflow_data",
+            controller.status_text(postprocess),
+        )
 
     def test_postprocess_library_register_filters_hidden_rows(self) -> None:
         available = [
