@@ -38,10 +38,13 @@ from pathlib import Path
 from app_settings import (
     AppSettingsStore,
     normalize_pipeline_visibility,
-    normalize_postprocess_visibility,
 )
 from pipelines import PipelineDescriptor, load_pipeline_catalog
-from postprocess import PostprocessDescriptor, load_postprocess_catalog
+from postprocess import (
+    PostprocessDescriptor,
+    load_postprocess_catalog,
+    required_options_for,
+)
 from workflows import (
     WorkflowCallbacks,
     WorkflowInputError,
@@ -222,18 +225,17 @@ def run_cli(
                 normalize_visibility=normalize_pipeline_visibility,
             )
         selected_postprocess_names = _selected_names(postprocess_file)
-        if not postprocess_file:
-            selected_postprocess_names = _default_selected_names(
-                postprocess_registry,
-                visibility_loader=settings_store.load_postprocess_visibility,
-                normalize_visibility=normalize_postprocess_visibility,
-            )
         work_selection = resolve_work_selection(
             selected_pipeline_names,
             pipeline_registry,
             selected_postprocess_names,
             postprocess_registry,
         )
+        if any(
+            "persist_eyeflow_data" in required_options_for(postprocess)
+            for postprocess in work_selection.postprocesses
+        ):
+            effective_persist_source = True
         input_selection = _prepare_cli_input(data_paths)
         request = build_workflow_request(
             WorkflowRequestState(
@@ -333,7 +335,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=None,
         help=(
             "Postprocess name(s), a text file with one name per line, or a list "
-            "such as ['postprocess1', 'postprocess2']. If omitted, use settings."
+            "such as ['postprocess1', 'postprocess2']. If omitted, run none."
         ),
     )
     parser.add_argument(
@@ -351,7 +353,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--keep-source",
         dest="persist_source",
         action="store_true",
-        help="Persist source HDF5 contents into pipeline output files.",
+        help=(
+            "Persist source HDF5 contents into pipeline output files. "
+            "Automatically enabled when a selected postprocess requires it."
+        ),
     )
     persist_group.set_defaults(persist_source=False)
     parser.add_argument(
