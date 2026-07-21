@@ -66,9 +66,9 @@ def extract_v_profile_meas(dataset, num_interp_points_x):
     # Expected shape: (n_t, n_x, n_branches, n_radii) -> (128, 33, 14, 10)
     n_t, n_x, n_branches, n_radii = dataset.shape
     dataset_x = np.full((n_t, num_interp_points_x, n_branches, n_radii), np.nan, dtype=float)
-    v_profile_fft = np.full((n_t, num_interp_points_x // 2 + 1, n_branches, n_radii), np.nan, dtype=complex)
-    v_profile_meas_n1 = np.full((n_t, num_interp_points_x, n_branches, n_radii), np.nan, dtype=float)
-    v_profile_meas_dc = np.full((n_t, num_interp_points_x, n_branches, n_radii), np.nan, dtype=float)
+    v_profile_fft = np.zeros((n_t, num_interp_points_x // 2 + 1, n_branches, n_radii), dtype=complex)
+    v_profile_meas_n1 = np.zeros((n_t, num_interp_points_x, n_branches, n_radii), dtype=float)
+    v_profile_meas_dc = np.zeros((n_t, num_interp_points_x, n_branches, n_radii), dtype=float)
     ratio_map = np.full((n_branches, n_radii), np.nan, dtype=float)
 
     for branch_idx in range(n_branches):
@@ -106,36 +106,16 @@ def decompose_velocity_profile(dataset):
     dataset = np.asarray(dataset, dtype=float)
     dataset_flipped = dataset[:, ::-1, :, :]
 
-    dataset_x_symmetric = 0.5 * (
-        dataset + dataset_flipped
-    )
+    dataset_x_symmetric = 0.5 * (dataset + dataset_flipped)
+    dataset_x_antisymmetric = 0.5 * (dataset - dataset_flipped)
 
-    dataset_x_antisymmetric = 0.5 * (
-        dataset - dataset_flipped
-    )
+    invalid_profiles = np.all(np.isnan(dataset), axis=1,keepdims=True)
 
-    invalid_profiles = np.all(
-        np.isnan(dataset),
-        axis=1,
-        keepdims=True,
-    )
+    dataset_x_symmetric = np.where(invalid_profiles,np.nan,dataset_x_symmetric)
 
-    dataset_x_symmetric = np.where(
-        invalid_profiles,
-        np.nan,
-        dataset_x_symmetric,
-    )
+    dataset_x_antisymmetric = np.where(invalid_profiles,np.nan,dataset_x_antisymmetric)
 
-    dataset_x_antisymmetric = np.where(
-        invalid_profiles,
-        np.nan,
-        dataset_x_antisymmetric,
-    )
-
-    return (
-        dataset_x_symmetric,
-        dataset_x_antisymmetric,
-    )
+    return (dataset_x_symmetric, dataset_x_antisymmetric)
 
 
 # v_profile_meas_extraction
@@ -173,9 +153,9 @@ def preprocess_v_pulse_meas(num_interp_points_t, v_pulse):
 def extract_v_pulse_meas(dataset, num_interp_points_t):
     # Expected shape: (n_t, n_x, n_branches, n_radii) -> (128, 33, 14, 10)
     n_t, n_x, n_branches, n_radii = dataset.shape
-    v_pulse_fft = np.full((num_interp_points_t // 2 + 1, n_x, n_branches, n_radii), np.nan, dtype=complex)
-    v_pulse_meas_n1 = np.full((num_interp_points_t, n_x, n_branches, n_radii), np.nan, dtype=float)
-    v_pulse_meas_dc = np.full((num_interp_points_t, n_x, n_branches, n_radii), np.nan, dtype=float)
+    v_pulse_fft = np.zeros((num_interp_points_t // 2 + 1, n_x, n_branches, n_radii), dtype=complex)
+    v_pulse_meas_n1 = np.zeros((num_interp_points_t, n_x, n_branches, n_radii), dtype=float)
+    v_pulse_meas_dc = np.zeros((num_interp_points_t, n_x, n_branches, n_radii), dtype=float)
 
     for branch_idx in range(n_branches):
         for radii_idx in range(n_radii):
@@ -356,10 +336,10 @@ def compute_tau_n(R0, nu, omega_n, Cn_n, rho):
 
 
 def generate_harmonic_flow_profile(V, segment_data, ratio_map):
-    v_model_fft = np.full((V.shape[0], V.shape[1], V.shape[2], V.shape[3]), np.nan, dtype=complex)
-    C_n = np.full((V.shape[0], V.shape[2], V.shape[3]), np.nan, dtype=complex)
-    Q_n = np.full((V.shape[0], V.shape[2], V.shape[3]), np.nan, dtype=complex)
-    Tau_n = np.full((V.shape[0], V.shape[2], V.shape[3]), np.nan, dtype=complex)
+    v_model_fft = np.zeros((V.shape[0], V.shape[1], V.shape[2], V.shape[3]), dtype=complex)
+    C_n = np.zeros((V.shape[0], V.shape[2], V.shape[3]), dtype=complex)
+    Q_n = np.zeros((V.shape[0], V.shape[2], V.shape[3]), dtype=complex)
+    Tau_n = np.zeros((V.shape[0], V.shape[2], V.shape[3]), dtype=complex)
     for branch in range(V.shape[2]):
         for circle in range(V.shape[3]):
             if (branch, circle) not in segment_data:
@@ -393,9 +373,9 @@ def generate_harmonic_flow_profile(V, segment_data, ratio_map):
                 )
                 continue
 
-            Cn = np.full(V.shape[0], np.nan, dtype=complex)
-            Qn = np.full(V.shape[0], np.nan, dtype=complex)
-            taun = np.full(V.shape[0], np.nan, dtype=complex)
+            Cn = np.zeros(V.shape[0], dtype=complex)
+            Qn = np.zeros(V.shape[0], dtype=complex)
+            taun = np.zeros(V.shape[0], dtype=complex)
             Cn[0] = 1.0
 
             for n in range(num_harmonics):
