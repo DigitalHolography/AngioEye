@@ -27,31 +27,37 @@ min_valid_segments = 4  # Minimum number of valid segments in one branch
 
 
 def preprocess_v_profile_meas(num_interp_points_x, v_profile):
-    valid_mask = ~np.isnan(v_profile)
+    v_profile = np.asarray(v_profile, dtype=float)
+
+    valid_mask = np.isfinite(v_profile)
     valid_indices = np.where(valid_mask)[0]
-    valid_count = np.sum(valid_mask)
 
-    if valid_count <= 8:
-        # print(f"Warning: Only {valid_count} valid points found. Skipping...")
-        return np.zeros(num_interp_points_x), 0.0
+    if valid_indices.size <= 8:
+        return np.full(num_interp_points_x, np.nan), np.nan
 
-    min_idx = valid_indices[0]
-    max_idx = valid_indices[-1]
+    x_valid = valid_indices.astype(float)
+    v_valid = v_profile[valid_mask]
 
-    v_valid = v_profile[min_idx : max_idx + 1].copy()
-    # v_valid[0], v_valid[-1] = 0.0, 0.0
-    x_valid = np.arange(len(v_valid))
-    x_interp = np.linspace(0, len(v_valid) - 1, num=num_interp_points_x)
+    x_interp = np.linspace(
+        x_valid[0],
+        x_valid[-1],
+        num_interp_points_x,
+    )
 
     interpolator = interp1d(
         x_valid,
         v_valid,
         kind="linear",
         bounds_error=False,
-        fill_value="extrapolate",  # type: ignore
+        fill_value=np.nan,
     )
+
     v_interp = interpolator(x_interp)
-    ratio = (num_interp_points_x - 1) / (len(v_valid) - 1)
+
+    ratio = (
+        (num_interp_points_x - 1)
+        / (x_valid[-1] - x_valid[0])
+    )
 
     return np.asarray(v_interp), ratio
 
