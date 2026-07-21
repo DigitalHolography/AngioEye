@@ -66,11 +66,10 @@ def extract_v_profile_meas(dataset, num_interp_points_x):
     # Expected shape: (n_t, n_x, n_branches, n_radii) -> (128, 33, 14, 10)
     n_t, n_x, n_branches, n_radii = dataset.shape
     dataset_x = np.full((n_t, num_interp_points_x, n_branches, n_radii), np.nan, dtype=float)
-    v_profile_fft = np.zeros((n_t, num_interp_points_x // 2 + 1, n_branches, n_radii), dtype=complex)
-    v_profile_meas_n1 = np.zeros((n_t, num_interp_points_x, n_branches, n_radii), dtype=float)
-    v_profile_meas_dc = np.zeros((n_t, num_interp_points_x, n_branches, n_radii), dtype=float)
-
-    ratio_map = np.zeros((n_branches, n_radii))
+    v_profile_fft = np.full((n_t, num_interp_points_x // 2 + 1, n_branches, n_radii), np.nan, dtype=complex)
+    v_profile_meas_n1 = np.full((n_t, num_interp_points_x, n_branches, n_radii), np.nan, dtype=float)
+    v_profile_meas_dc = np.full((n_t, num_interp_points_x, n_branches, n_radii), np.nan, dtype=float)
+    ratio_map = np.full((n_branches, n_radii), np.nan, dtype=float)
 
     for branch_idx in range(n_branches):
         for radii_idx in range(n_radii):
@@ -174,9 +173,9 @@ def preprocess_v_pulse_meas(num_interp_points_t, v_pulse):
 def extract_v_pulse_meas(dataset, num_interp_points_t):
     # Expected shape: (n_t, n_x, n_branches, n_radii) -> (128, 33, 14, 10)
     n_t, n_x, n_branches, n_radii = dataset.shape
-    v_pulse_fft = np.zeros((num_interp_points_t // 2 + 1, n_x, n_branches, n_radii), dtype=complex)
-    v_pulse_meas_n1 = np.zeros((num_interp_points_t, n_x, n_branches, n_radii), dtype=float)
-    v_pulse_meas_dc = np.zeros((num_interp_points_t, n_x, n_branches, n_radii), dtype=float)
+    v_pulse_fft = np.full((num_interp_points_t // 2 + 1, n_x, n_branches, n_radii), np.nan, dtype=complex)
+    v_pulse_meas_n1 = np.full((num_interp_points_t, n_x, n_branches, n_radii), np.nan, dtype=float)
+    v_pulse_meas_dc = np.full((num_interp_points_t, n_x, n_branches, n_radii), np.nan, dtype=float)
 
     for branch_idx in range(n_branches):
         for radii_idx in range(n_radii):
@@ -357,12 +356,10 @@ def compute_tau_n(R0, nu, omega_n, Cn_n, rho):
 
 
 def generate_harmonic_flow_profile(V, segment_data, ratio_map):
-    v_model_fft = np.zeros(
-        (V.shape[0], V.shape[1], V.shape[2], V.shape[3]), dtype=complex
-    )
-    C_n = np.zeros((V.shape[0], V.shape[2], V.shape[3]), dtype=complex)
-    Q_n = np.zeros((V.shape[0], V.shape[2], V.shape[3]), dtype=complex)
-    Tau_n = np.zeros((V.shape[0], V.shape[2], V.shape[3]), dtype=complex)
+    v_model_fft = np.full((V.shape[0], V.shape[1], V.shape[2], V.shape[3]), np.nan, dtype=complex)
+    C_n = np.full((V.shape[0], V.shape[2], V.shape[3]), np.nan, dtype=complex)
+    Q_n = np.full((V.shape[0], V.shape[2], V.shape[3]), np.nan, dtype=complex)
+    Tau_n = np.full((V.shape[0], V.shape[2], V.shape[3]), np.nan, dtype=complex)
     for branch in range(V.shape[2]):
         for circle in range(V.shape[3]):
             if (branch, circle) not in segment_data:
@@ -396,10 +393,10 @@ def generate_harmonic_flow_profile(V, segment_data, ratio_map):
                 )
                 continue
 
-            Cn = np.zeros(V.shape[0], dtype=complex)
-            Cn[0] = 1
-            Qn = np.zeros(V.shape[0], dtype=complex)
-            taun = np.zeros(V.shape[0], dtype=complex)
+            Cn = np.full(V.shape[0], np.nan, dtype=complex)
+            Qn = np.full(V.shape[0], np.nan, dtype=complex)
+            taun = np.full(V.shape[0], np.nan, dtype=complex)
+            Cn[0] = 1.0
 
             for n in range(num_harmonics):
                 Vn = np.array(matrix[n], dtype=complex) / num_interp_points_t
@@ -442,26 +439,11 @@ def fit_antisymmetric_curve(
     v_model,
     ratio_map,
 ):
-    dataset_x_antisymmetric = np.asarray(dataset_x_antisymmetric, dtype=float)
-    v_model = np.asarray(v_model, dtype=float)
-    ratio_map = np.asarray(ratio_map, dtype=float)
-
     n_t, n_x, n_branches, n_radii = dataset_x_antisymmetric.shape
 
-    displacement = np.full(
-        (n_t, n_branches, n_radii),
-        np.nan,
-        dtype=float,
-    )
-    antisymmetric_model = np.full_like(
-        dataset_x_antisymmetric,
-        np.nan,
-    )
-    antisymmetric_r2 = np.full(
-        (n_t, n_branches, n_radii),
-        np.nan,
-        dtype=float,
-    )
+    displacement = np.full((n_t, n_branches, n_radii), np.nan, dtype=float)
+    antisymmetric_model = np.full_like(dataset_x_antisymmetric, np.nan)
+    antisymmetric_r2 = np.full((n_t, n_branches, n_radii), np.nan, dtype=float)
 
     for branch in range(n_branches):
         for circle in range(n_radii):
@@ -551,7 +533,7 @@ class WomersleyModeling(ProcessPipeline):
             raise ValueError(
                 f"Expected a dataset at {self.v_profile_path}, but found {type(obj)}"
             )
-        dataset = obj[:]
+        dataset = np.asarray(obj[:], dtype=float)
         dataset[dataset == 0] = np.nan
 
         obj = h5file[self.b_period_path]
