@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping, Sequence
+import json
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import h5py
 import numpy as np
+
+from app_settings import app_version
 
 UTF8_STRING_DTYPE = h5py.string_dtype(encoding="utf-8")
 GroupCache = dict[str, h5py.Group]
@@ -89,6 +92,29 @@ def copy_signal_datasets(
         write_signal_datasets(read_signal_datasets(src), dest)
 
 
+def _initialize_app_versions(
+    h5file: h5py.File,
+    source_file: Path | str | None,
+) -> None:
+    """Write application versions as one JSON dictionary dataset."""
+
+    if "app_versions" in h5file:
+        del h5file["app_versions"]
+
+    app_versions: dict[str, str] = {}
+    if source_file:
+        with open_h5(source_file, "r") as source_h5:
+            if "app_versions" in source_h5:
+                app_versions = json.loads(source_h5["app_versions"][()])
+
+    app_versions["AE_version"] = app_version()
+    h5file.create_dataset(
+        "app_versions",
+        data=json.dumps(app_versions),
+        dtype=UTF8_STRING_DTYPE,
+    )
+
+
 def read_signal_datasets(source: h5py.Group | h5py.File) -> dict[str, np.ndarray]:
     """Read the canonical EyeFlow signals from an already-open HDF5 file."""
     signals: dict[str, np.ndarray] = {}
@@ -135,6 +161,7 @@ def create_h5_file(
             copy_signal_datasets(source_file, h5file)
         else:
             write_signal_datasets(signal_datasets, h5file)
+        _initialize_app_versions(h5file, source_file)
         if source_file:
             h5file.attrs["source_file"] = str(source_file)
     return out_path
