@@ -12,6 +12,9 @@ script, and compiles the final setup executable into dist\installer.
 
 .EXAMPLE
 .\build_installer.ps1 -InnoSetupCompiler "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+
+.EXAMPLE
+.\build_installer.ps1 -Console
 #>
 
 [CmdletBinding()]
@@ -21,6 +24,7 @@ param(
     [switch]$IncludePipelineExtras,
     [switch]$IncludePostprocessExtras,
     [switch]$IncludeAllExtras,
+    [switch]$Console,
     [switch]$SkipClean
 )
 
@@ -267,6 +271,10 @@ function Write-PyInstallerSpec {
     $logo = ConvertTo-PythonLiteralPath (Join-Path $RepoRoot "Angioeye_logo.png")
     $settings = ConvertTo-PythonLiteralPath (Join-Path $RepoRoot "default_settings.json")
     $pyproject = ConvertTo-PythonLiteralPath $PyprojectPath
+    $pyInstallerConsole = "False"
+    if ($Console) {
+        $pyInstallerConsole = "True"
+    }
 
 @"
 # -*- mode: python ; coding: utf-8 -*-
@@ -338,7 +346,7 @@ gui_exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=True,
+    console=$pyInstallerConsole,
     disable_windowed_traceback=False,
     icon=r'$icon',
 )

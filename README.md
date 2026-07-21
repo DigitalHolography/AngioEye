@@ -107,9 +107,13 @@ angioeye --data data/ --pipelines '["pipeline1", "pipeline2"]'
 
 # Or via the script
 python src/cli.py --data data/ --pipelines pipelines.txt --output ./results
+
+# Dedicated installed CLI entry point
+angioeye-cli --data data/ --pipelines pipelines.txt --output ./results
 ```
 
-The Windows installer ships one `AngioEye.exe`: launching it without arguments opens the GUI, while supplying arguments runs headlessly in CLI mode.
+The Windows installer defaults to a GUI-only `AngioEye.exe`. To build a
+console-enabled variant for CLI use, pass `-Console` to `build_installer.ps1`.
 
 ---
 

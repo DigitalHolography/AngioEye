@@ -6,14 +6,17 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 class BuildInstallerScriptTests(unittest.TestCase):
-    def test_powershell_build_is_single_console_executable(self) -> None:
+    def test_powershell_build_defaults_to_gui_and_supports_console_variant(self) -> None:
         script = (PROJECT_ROOT / "build_installer.ps1").read_text(encoding="utf-8")
         project = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
 
         self.assertIn('hiddenimports += ["angio_eye", "cli", "launcher"]', script)
-        self.assertIn("console=True", script)
+        self.assertIn("[switch]$Console", script)
+        self.assertIn('$pyInstallerConsole = "False"', script)
+        self.assertIn('$pyInstallerConsole = "True"', script)
+        self.assertIn("console=$pyInstallerConsole", script)
         self.assertNotIn("AngioEyeCLI.exe", script)
-        self.assertNotIn("angioeye-cli", project)
+        self.assertIn('angioeye-cli = "launcher:cli_main"', project)
 
     def test_legacy_two_executable_build_files_are_removed(self) -> None:
         self.assertFalse((PROJECT_ROOT / "AngioEye.spec").exists())

@@ -11,14 +11,27 @@ from .core.base import ProcessResult, registerPipeline, with_attrs
 from .waveform_shape_metrics import ArterialSegExample
 
 REGION_NAMES = (
-    "top_left",
-    "top_right",
-    "bottom_left",
-    "bottom_right",
-    "top",
-    "bottom",
-    "left",
-    "right",
+    "north_west",
+    "north_east",
+    "south_west",
+    "south_east",
+    "north",
+    "south",
+    "west",
+    "east",
+)
+
+# The four quadrant names above are kept in the historical output order. For
+# ties, use the usual mathematical (counter-clockwise) order starting in the
+# north-east: QI, QII, QIII, QIV.
+TRIGONOMETRIC_QUADRANT_ORDER = (
+    "north_east",
+    "north_west",
+    "south_west",
+    "south_east",
+)
+TRIGONOMETRIC_QUADRANT_INDICES = tuple(
+    REGION_NAMES.index(name) for name in TRIGONOMETRIC_QUADRANT_ORDER
 )
 
 OPTIC_DISC_LABEL = -1
@@ -151,12 +164,16 @@ class TopologicalMetricsPipeline(ArterialSegExample):
             {
                 "dimDesc": ["y", "x"],
                 "coordinate_system": "image_pixel",
+                "image_origin": "lower_left",
+                "y_axis_direction": "increasing_toward_north",
             },
         )
 
         metric_sources: set[str] = set()
         for vessel in vessel_data:
             membership = self._region_membership(
+                vessel.branch_ids,
+                vessel.branch_label_map,
                 vessel.segment_center_xy,
                 optic_disc_center,
             )
@@ -198,13 +215,18 @@ class TopologicalMetricsPipeline(ArterialSegExample):
                     "entries belonging to each region, independently per beat"
                 ),
                 "boundary_policy": (
-                    "x < center_x is left; x >= center_x is right; "
-                    "EyeFlow SegmentCenterXY uses a bottom-up y-axis: "
-                    "y < center_y is bottom; y >= center_y is top"
+                    "x < center_x is west; x >= center_x is east; "
+                    "EyeFlow uses a bottom-up y-axis: y < center_y is south; "
+                    "y >= center_y is north"
                 ),
                 "branch_aggregation": (
-                    "median of per-segment metric values within one EyeFlow "
-                    "branch and region, independently per beat"
+                    "median of all per-segment metric values within an EyeFlow "
+                    "branch assigned to one quadrant by BranchLabelMap area, "
+                    "independently per beat"
+                ),
+                "branch_quadrant_assignment": (
+                    "largest BranchLabelMap pixel area; ties use trigonometric "
+                    "order north-east, north-west, south-west, south-east"
                 ),
                 "branch_group_naming": "branch_<EyeFlow BranchIds value>",
                 "coordinate_order": "x,y",
@@ -315,6 +337,15 @@ class TopologicalMetricsPipeline(ArterialSegExample):
                 f"{name} BranchLabelMap contains labels absent from BranchIds: "
                 f"{unexpected_labels.tolist()}."
             )
+        missing_labels = np.setdiff1d(
+            vessel.branch_ids,
+            np.unique(vessel.branch_label_map),
+        )
+        if missing_labels.size:
+            raise ValueError(
+                f"{name} BranchLabelMap has no pixels for BranchIds: "
+                f"{missing_labels.tolist()}."
+            )
 
         expected_tail = vessel.segment_center_xy.shape[:2]
         for signal_type, waveform in (
@@ -395,26 +426,81 @@ class TopologicalMetricsPipeline(ArterialSegExample):
 
     @staticmethod
     def _region_membership(
+        branch_ids: np.ndarray,
+        branch_label_map: np.ndarray,
         segment_center_xy: np.ndarray,
         optic_disc_center: np.ndarray,
     ) -> np.ndarray:
-        x = segment_center_xy[:, :, 0]
-        y = segment_center_xy[:, :, 1]
-        finite = np.isfinite(x) & np.isfinite(y)
-        left = finite & (x < optic_disc_center[0])
-        right = finite & ~left
-        bottom = finite & (y < optic_disc_center[1])
-        top = finite & ~bottom
+        """Assign every branch and all of its radii to one area-majority region.
+
+        ``BranchLabelMap`` is indexed as ``[y, x]`` while ``SegmentCenterXY``
+        stores coordinates as ``[x, y]``. Both use EyeFlow's bottom-up Y frame,
+        so no transpose, rotation, or vertical flip is applied here.
+        """
+        n_branches, n_radii = segment_center_xy.shape[:2]
+        if branch_ids.size != n_branches:
+            raise ValueError(
+                "BranchIds and SegmentCenterXY must have the same branch count."
+            )
+
+        height, width = branch_label_map.shape
+        pixel_y, pixel_x = np.indices((height, width), dtype=float)
+        west = pixel_x < optic_disc_center[0]
+        east = ~west
+        south = pixel_y < optic_disc_center[1]
+        north = ~south
+        quadrant_masks = np.asarray(
+            (
+                north & west,
+                north & east,
+                south & west,
+                south & east,
+            ),
+            dtype=bool,
+        )
+
+        area_by_quadrant = np.zeros((n_branches, 4), dtype=np.float32)
+        for branch_index, branch_id in enumerate(branch_ids):
+            branch_pixels = branch_label_map == branch_id
+            area_by_quadrant[branch_index] = np.asarray(
+                [np.count_nonzero(branch_pixels & mask) for mask in quadrant_masks],
+                dtype=np.float32,
+            )
+
+        if not np.all(np.any(area_by_quadrant, axis=1)):
+            raise ValueError(
+                "BranchLabelMap must contain at least one pixel for every branch."
+            )
+
+        chosen_quadrants = np.full(n_branches, -1, dtype=np.float32)
+        for branch_index, area in enumerate(area_by_quadrant):
+            if np.any(area):
+                priority_order = np.asarray(TRIGONOMETRIC_QUADRANT_INDICES)
+                chosen_quadrants[branch_index] = priority_order[np.argmax(area[priority_order])]
+
+        assigned_quadrants = np.asarray(
+            [
+                chosen_quadrants == 0,
+                chosen_quadrants == 1,
+                chosen_quadrants == 2,
+                chosen_quadrants == 3,
+            ],
+            dtype=bool,
+        )
+        assigned_quadrants = np.broadcast_to(
+            assigned_quadrants[:, :, np.newaxis],
+            (4, n_branches, n_radii),
+        )
         return np.asarray(
             (
-                top & left,
-                top & right,
-                bottom & left,
-                bottom & right,
-                top,
-                bottom,
-                left,
-                right,
+                assigned_quadrants[0],
+                assigned_quadrants[1],
+                assigned_quadrants[2],
+                assigned_quadrants[3],
+                assigned_quadrants[0] | assigned_quadrants[1],
+                assigned_quadrants[2] | assigned_quadrants[3],
+                assigned_quadrants[0] | assigned_quadrants[2],
+                assigned_quadrants[1] | assigned_quadrants[3],
             ),
             dtype=bool,
         )
@@ -447,9 +533,11 @@ class TopologicalMetricsPipeline(ArterialSegExample):
                 "background_label": 0,
                 "branch_labels": "original EyeFlow BranchIds values",
                 "coordinate_system": "image_pixel",
+                "image_origin": "lower_left",
                 "boundary_policy": (
                     "vertical axis at center_x; horizontal axis at center_y"
                 ),
+                "y_axis_direction": "increasing_toward_north",
                 "description": (
                     "Two-dimensional branch label mask with optic-disc and "
                     "region-axis overlays"

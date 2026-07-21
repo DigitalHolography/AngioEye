@@ -52,7 +52,10 @@ def _write_vessel(
     branch_ids = np.arange(1, n_branches + 1, dtype=np.int32)
     label_map = np.zeros((21, 21), dtype=np.int32)
     for branch_index, branch_id in enumerate(branch_ids):
-        label_map[2 + branch_index : 4 + branch_index, 2:19] = branch_id
+        if branch_index % 2 == 0:
+            label_map[2:6, 2:8] = branch_id
+        else:
+            label_map[15:19, 14:20] = branch_id
 
     raw = np.full(
         (sample_count, n_beats, n_branches, n_radii),
@@ -132,7 +135,7 @@ def _write_topological_input(path: Path, *, source_metrics: bool = False) -> Non
 
 
 class TopologicalMetricsTests(unittest.TestCase):
-    def test_regions_split_each_branch_by_radius_and_aggregate_per_beat(self) -> None:
+    def test_regions_assign_each_branch_by_area_and_aggregate_per_beat(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "input.h5"
             _write_topological_input(path)
@@ -169,16 +172,24 @@ class TopologicalMetricsTests(unittest.TestCase):
             pipeline = TopologicalMetricsPipeline()
             expected = np.asarray(
                 [
-                    pipeline._compute_metrics_1d(raw[:, beat, 1, 1], 1.0)[
-                        "t_max_over_T"
-                    ]
+                    np.nanmedian(
+                        [
+                            pipeline._compute_metrics_1d(
+                                raw[:, beat, 1, radius],
+                                1.0,
+                            )["t_max_over_T"]
+                            for radius in range(raw.shape[3])
+                        ]
+                    )
                     for beat in range(raw.shape[1])
                 ]
             )
-            actual = result.metrics["artery/top_left/global/raw/t_max_over_T"].data
+            actual = result.metrics[
+                "artery/north_east/global/raw/t_max_over_T"
+            ].data
             np.testing.assert_allclose(actual, expected, equal_nan=True)
 
-            branch_prefix = "artery/top_left/by_branch/branch_2"
+            branch_prefix = "artery/north_east/by_branch/branch_2"
             np.testing.assert_allclose(
                 result.metrics[f"{branch_prefix}/raw/t_max_over_T"].data,
                 expected,
@@ -189,11 +200,15 @@ class TopologicalMetricsTests(unittest.TestCase):
                 result.metrics.keys(),
             )
             self.assertIn(
-                "artery/bottom_left/by_branch/branch_1/raw/t_max_over_T",
+                "artery/south_west/by_branch/branch_1/raw/t_max_over_T",
                 result.metrics,
             )
             self.assertNotIn(
-                "artery/top_left/by_branch/branch_1/raw/t_max_over_T",
+                "artery/north_west/by_branch/branch_1/raw/t_max_over_T",
+                result.metrics,
+            )
+            self.assertNotIn(
+                "artery/north_west/by_branch/branch_2/raw/t_max_over_T",
                 result.metrics,
             )
 
@@ -225,19 +240,68 @@ class TopologicalMetricsTests(unittest.TestCase):
             with h5py.File(path, "r") as h5file:
                 result = TopologicalMetricsPipeline().run(h5file)
 
-            region_prefix = "artery/top"
+            region_prefix = "artery/north"
             np.testing.assert_array_equal(
                 result.metrics[f"{region_prefix}/global/raw/PI"].data,
-                [21.0, 21.0],
-            )
-            np.testing.assert_array_equal(
-                result.metrics[f"{region_prefix}/by_branch/branch_1/raw/PI"].data,
-                [11.0, 11.0],
+                [30.5, 30.5],
             )
             np.testing.assert_array_equal(
                 result.metrics[f"{region_prefix}/by_branch/branch_2/raw/PI"].data,
-                [31.0, 31.0],
+                [30.5, 30.5],
             )
+            self.assertNotIn(
+                "artery/north/by_branch/branch_1/raw/PI",
+                result.metrics,
+            )
+
+    def test_equal_quadrant_areas_use_first_trigonometric_quadrant(self) -> None:
+        branch_ids = np.asarray([7], dtype=np.int32)
+        branch_label_map = np.zeros((5, 5), dtype=np.int32)
+        # One pixel in each quadrant around (2, 2), so QI/north-east wins.
+        branch_label_map[3, 1] = 7  # north-west
+        branch_label_map[3, 2] = 7  # north-east
+        branch_label_map[1, 1] = 7  # south-west
+        branch_label_map[1, 2] = 7  # south-east
+        centers = np.asarray([[[1.0, 1.0], [3.0, 3.0]]])
+
+        membership = TopologicalMetricsPipeline._region_membership(
+            branch_ids,
+            branch_label_map,
+            centers,
+            np.asarray([2.0, 2.0]),
+        )
+
+        self.assertTrue(np.all(membership[1]))  # north-east
+        self.assertFalse(np.any(membership[0]))  # north-west
+        self.assertFalse(np.any(membership[2]))  # south-west
+        self.assertFalse(np.any(membership[3]))  # south-east
+        self.assertTrue(np.all(membership[4]))  # north half-plane
+        self.assertTrue(np.all(membership[7]))  # east half-plane
+
+    def test_branch_area_uses_xy_frame_without_transposing_or_flipping(self) -> None:
+        branch_ids = np.asarray([1, 2], dtype=np.int32)
+        branch_label_map = np.zeros((8, 8), dtype=np.int32)
+        branch_label_map[6, 1] = 1  # high y, low x -> north-west
+        branch_label_map[1, 6] = 2  # low y, high x -> south-east
+        centers = np.asarray(
+            [
+                [[7.0, 1.0]],
+                [[1.0, 7.0]],
+            ],
+            dtype=np.float32,
+        )
+
+        membership = TopologicalMetricsPipeline._region_membership(
+            branch_ids,
+            branch_label_map,
+            centers,
+            np.asarray([4.0, 4.0]),
+        )
+
+        self.assertTrue(bool(membership[0, 0, 0]))  # branch 1: north-west
+        self.assertTrue(bool(membership[3, 1, 0]))  # branch 2: south-east
+        self.assertFalse(bool(membership[2, 0, 0]))
+        self.assertFalse(bool(membership[1, 1, 0]))
 
     def test_branch_by_region_hierarchy_is_written_to_h5(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -259,7 +323,7 @@ class TopologicalMetricsTests(unittest.TestCase):
 
             prefix = (
                 "/AngioEye/Processing/topological_metrics/artery/"
-                "top_left/by_branch/branch_2"
+                "north_east/by_branch/branch_2"
             )
             with h5py.File(output_path, "r") as h5file:
                 topology_group = h5file[
@@ -290,7 +354,7 @@ class TopologicalMetricsTests(unittest.TestCase):
                     h5file,
                 )
                 region_group = h5file[
-                    "/AngioEye/Processing/topological_metrics/artery/top_left"
+                    "/AngioEye/Processing/topological_metrics/artery/north_east"
                 ]
                 self.assertEqual(
                     {"by_branch", "global"},
@@ -320,7 +384,7 @@ class TopologicalMetricsTests(unittest.TestCase):
             metric_index = (
                 list(TopologicalMetricsPipeline()._metric_names()).index("PI") + 1
             )
-            actual = result.metrics["vein/top_right/global/raw/PI"].data
+            actual = result.metrics["vein/south_west/global/raw/PI"].data
             np.testing.assert_array_equal(
                 actual,
                 np.full(2, metric_index, dtype=np.float32),
@@ -371,7 +435,7 @@ class TopologicalMetricsTests(unittest.TestCase):
                 result = TopologicalMetricsPipeline().run(h5file)
 
             self.assertTrue(
-                np.all(np.isnan(result.metrics["vein/top/global/raw/PI"].data))
+                np.all(np.isnan(result.metrics["vein/north/global/raw/PI"].data))
             )
 
 

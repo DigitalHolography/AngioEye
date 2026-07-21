@@ -11,22 +11,30 @@
     }
   },
   "pipeline_visibility": {
+    "ProfileAnalysis": false,
+    "WomersleyModeling": false,
+    "absolute_waveform_metrics": false,
     "Windkessel_RC": false,
     "lowrank_pulsatility_metrics": false,
     "modal_analysis": false,
+    "topological_metrics": false,
     "waveform_harmonic_organization": false,
     "waveform_harmonic_organization_SVD": false,
     "waveform_shape_metrics": true,
-    "waveform_shape_metrics_denoised": false
+    "waveform_shape_metrics_denoised": false,
+    "waveform_shape_metrics_filter_sweep": false
   },
   "postprocess_visibility": {
+    "Composite Scoring": false,
+    "Fixed Threshold Patient Evaluation": false,
     "Pipeline Metrics Manifest": false,
     "Postprocess Tutorial": false,
     "QC_Windkessel_RC": false,
     "Variability and heterogeneity": false,
     "Group comparison (HTML) - Waveform Shape Metrics": false,
     "Group comparison (Dashboard) - Waveform Shape Metrics": false,
-    "HTML summary": true
+    "HTML summary": true,
+    "groups comparison stats": false
   },
   "persist_source": false,
   "ui_mode": "minimal"
