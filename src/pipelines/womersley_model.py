@@ -448,6 +448,67 @@ def generate_harmonic_flow_profile(V, segment_data, ratio_map):
     )
 
 
+def fit_antisymmetric_curve(
+    dataset_x_antisymmetric,
+    v_model,
+    ratio_map,
+):
+
+    n_t, n_x, n_branches, n_radii = dataset_x_antisymmetric.shape
+
+    disp = np.full(
+        (n_t, n_branches, n_radii),
+        np.nan,
+        dtype=float,
+    )
+
+    for branch in range(n_branches):
+        for circle in range(n_radii):
+            ratio = ratio_map[branch, circle]
+
+            if not np.isfinite(ratio) or ratio <= 0:
+                continue
+
+            dx = pixel_size / ratio
+
+            symmetric_gradient = np.gradient(
+                v_model[:, :, branch, circle],
+                dx,
+                axis=1,
+                edge_order=2,
+            )
+
+            for t_idx in range(n_t):
+                antisymmetric_profile = dataset_x_antisymmetric[
+                    t_idx, :, branch, circle
+                ]
+                gradient_profile = symmetric_gradient[t_idx]
+
+                valid = (
+                    np.isfinite(antisymmetric_profile)
+                    & np.isfinite(gradient_profile)
+                )
+
+                if np.sum(valid) < 3:
+                    continue
+
+                numerator = np.sum(
+                    gradient_profile[valid]
+                    * antisymmetric_profile[valid]
+                )
+                denominator = np.sum(
+                    gradient_profile[valid] ** 2
+                )
+
+                if not np.isfinite(denominator) or denominator <= 0:
+                    continue
+
+                disp[t_idx, branch, circle] = (
+                    -numerator / denominator
+                )
+
+    return disp
+
 @registerPipeline(name="WomersleyModeling")
 class WomersleyModeling(ProcessPipeline):
     description = "Womersley Modeling Pipeline"
@@ -492,6 +553,8 @@ class WomersleyModeling(ProcessPipeline):
 
         v_model, v_model_fft, C_n, Q_n, Tau_n = generate_harmonic_flow_profile(v_pulse_fft, segment_data, ratio_map)
 
+        disp = fit_antisymmetric_curve(dataset_x_antisymmetric, v_model, ratio_map)
+
         metrics: dict = {}
         metrics["dataset_x"] = np.asarray(dataset_x)
         metrics["dataset_x_symmetric"] = np.asarray(dataset_x_symmetric)
@@ -507,6 +570,7 @@ class WomersleyModeling(ProcessPipeline):
         metrics["C_n"] = np.asarray(C_n)
         metrics["Q_n"] = np.asarray(Q_n)
         metrics["Tau_n"] = np.asarray(Tau_n)
+        metrics["disp"] = np.asarray(disp)
 
 
         return ProcessResult(metrics=metrics)
