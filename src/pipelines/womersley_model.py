@@ -563,6 +563,7 @@ class WomersleyModeling(ProcessPipeline):
                 f"Expected a dataset at {self.v_profile_path}, but found {type(obj)}"
             )
         dataset = obj[:]
+        dataset[dataset == 0] = np.nan
 
         obj = h5file[self.b_period_path]
         if not isinstance(obj, h5py.Dataset):
