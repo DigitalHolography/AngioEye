@@ -304,10 +304,15 @@ def womersley_Bn(L, R0, nu, omega_n, x0, r0):
     return Bn.astype(complex)
 
 def compute_Cn(Vn, KBn):
-    numerator = np.sum(np.conj(KBn) * Vn)
-
-    denominator = np.sum(np.abs(KBn) ** 2)
-
+    valid = np.isfinite(Vn) & np.isfinite(KBn)
+    
+    numerator = np.sum(np.conj(KBn[valid]) * Vn[valid])
+    
+    denominator = np.sum(np.abs(KBn[valid]) ** 2)
+    
+    if not np.isfinite(denominator) or denominator <= 0:
+        return 0 + 0j
+        
     return numerator / denominator
 
 
@@ -393,6 +398,8 @@ def generate_harmonic_flow_profile(V, segment_data, ratio_map):
                     omega_n = n * omega_0
                     Bn = womersley_Bn(L, R0, nu, omega_n, x0, r0)
                     KBn = K @ Bn
+                    if not np.isfinite(compute_Cn(Vn, KBn)):
+                        continue
                     Cn[n] = compute_Cn(Vn, KBn)
                     Qn[n] = compute_Qn(R0, nu, omega_n, Cn[n])
                     taun[n] = compute_tau_n(R0, nu, omega_n, Cn[n], rho)
