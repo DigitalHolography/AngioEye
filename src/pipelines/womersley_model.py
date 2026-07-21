@@ -305,9 +305,9 @@ def womersley_Bn(L, R0, nu, omega_n, x0, r0):
 
 def compute_Cn(Vn, KBn):
     
-    numerator = np.sum(np.conj(KBn[valid]) * Vn[valid])
+    numerator = np.sum(np.conj(KBn) * Vn)
     
-    denominator = np.sum(np.abs(KBn[valid]) ** 2)
+    denominator = np.sum(np.abs(KBn ** 2)
         
     return numerator / denominator
 
