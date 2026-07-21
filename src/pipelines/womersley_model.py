@@ -308,9 +308,6 @@ def compute_Cn(Vn, KBn):
     numerator = np.sum(np.conj(KBn[valid]) * Vn[valid])
     
     denominator = np.sum(np.abs(KBn[valid]) ** 2)
-    
-    if not np.isfinite(denominator) or denominator <= 0:
-        return 0 + 0j
         
     return numerator / denominator
 
