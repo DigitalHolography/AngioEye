@@ -65,16 +65,10 @@ def preprocess_v_profile_meas(num_interp_points_x, v_profile):
 def extract_v_profile_meas(dataset, num_interp_points_x):
     # Expected shape: (n_t, n_x, n_branches, n_radii) -> (128, 33, 14, 10)
     n_t, n_x, n_branches, n_radii = dataset.shape
-    dataset_x = np.zeros((n_t, num_interp_points_x, n_branches, n_radii), dtype=float)
-    v_profile_fft = np.zeros(
-        (n_t, num_interp_points_x // 2 + 1, n_branches, n_radii), dtype=complex
-    )
-    v_profile_meas_n1 = np.zeros(
-        (n_t, num_interp_points_x, n_branches, n_radii), dtype=float
-    )
-    v_profile_meas_dc = np.zeros(
-        (n_t, num_interp_points_x, n_branches, n_radii), dtype=float
-    )
+    dataset_x = np.full((n_t, num_interp_points_x, n_branches, n_radii), np.nan, dtype=float)
+    v_profile_fft = np.zeros((n_t, num_interp_points_x // 2 + 1, n_branches, n_radii), dtype=complex)
+    v_profile_meas_n1 = np.zeros((n_t, num_interp_points_x, n_branches, n_radii), dtype=float)
+    v_profile_meas_dc = np.zeros((n_t, num_interp_points_x, n_branches, n_radii), dtype=float)
 
     ratio_map = np.zeros((n_branches, n_radii))
 
