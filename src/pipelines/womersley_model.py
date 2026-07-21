@@ -312,31 +312,15 @@ def projected_parabola_fit(V):
 
 def womersley_Bn(L, R0, nu, omega_n, x0, r0):
     x = np.arange(L)
-
     x_norm = (x - x0) / r0
 
     alpha_n = R0 * np.sqrt(omega_n / nu)
-    # print(f"alpha_n: {alpha_n}")
     lam = np.exp(1j * 3 * np.pi / 4) * alpha_n
-    # print(f"lam: {lam}")
+
     Bn = 1 - jv(0, lam * np.abs(x_norm)) / jv(0, lam)
-    # print(f"Bn before masking: {Bn}")
-
-    mask = np.abs(x_norm) > 1
-    idx = np.where(mask)[0]
-
-    left_idx = idx[idx < L / 2]
-    for i in left_idx[::-1]:
-        if i + 1 < L:
-            Bn[i] = Bn[i + 1] / 4
-
-    right_idx = idx[idx >= L / 2]
-    for i in right_idx:
-        if i - 1 >= 0:
-            Bn[i] = Bn[i - 1] / 4
+    Bn[np.abs(x_norm) > 1] = 0.0
 
     return Bn.astype(complex)
-
 
 def compute_Cn(Vn, KBn):
     numerator = np.sum(np.conj(KBn) * Vn)
