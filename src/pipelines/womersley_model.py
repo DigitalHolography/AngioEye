@@ -83,6 +83,9 @@ def extract_v_profile_meas(dataset, num_interp_points_x):
                 )
                 dataset_x[t_idx, :, branch_idx, radii_idx] = v_interp
 
+                if not np.isfinite(ratio) or not np.all(np.isfinite(v_interp)):
+                    continue
+
                 v_fft = rfft(v_interp, n=num_interp_points_x, axis=0)
                 v_profile_fft[t_idx, :, branch_idx, radii_idx] = v_fft
 
@@ -140,43 +143,40 @@ def decompose_velocity_profile(dataset):
 
 
 def preprocess_v_pulse_meas(num_interp_points_t, v_pulse):
-    valid_mask = ~np.isnan(v_pulse)
+    v_pulse = np.asarray(v_pulse, dtype=float)
+
+    valid_mask = np.isfinite(v_pulse)
     valid_indices = np.where(valid_mask)[0]
 
-    if valid_indices.size == 0:
-        return np.zeros(len(v_pulse))
+    if valid_indices.size < 2:
+        return np.full(num_interp_points_t, np.nan)
 
-    min_idx = valid_indices[0]
-    max_idx = valid_indices[-1]
+    t_valid = valid_indices.astype(float)
+    v_valid = v_pulse[valid_mask]
 
-    v_valid = v_pulse[min_idx : max_idx + 1].copy()
-    x_valid = np.arange(len(v_valid))
-    x_interp = np.linspace(0, len(v_valid) - 1, num=num_interp_points_t)
+    t_interp = np.linspace(
+        t_valid[0],
+        t_valid[-1],
+        num_interp_points_t,
+    )
 
     interpolator = interp1d(
-        x_valid,
+        t_valid,
         v_valid,
         kind="linear",
         bounds_error=False,
-        fill_value="extrapolate",  # type: ignore
+        fill_value=np.nan,
     )
-    v_interp = interpolator(x_interp)
 
-    return np.asanyarray(v_interp)
+    return np.asarray(interpolator(t_interp))
 
 
 def extract_v_pulse_meas(dataset, num_interp_points_t):
     # Expected shape: (n_t, n_x, n_branches, n_radii) -> (128, 33, 14, 10)
     n_t, n_x, n_branches, n_radii = dataset.shape
-    v_pulse_fft = np.zeros(
-        (num_interp_points_t // 2 + 1, n_x, n_branches, n_radii), dtype=complex
-    )
-    v_pulse_meas_n1 = np.zeros(
-        (num_interp_points_t, n_x, n_branches, n_radii), dtype=float
-    )
-    v_pulse_meas_dc = np.zeros(
-        (num_interp_points_t, n_x, n_branches, n_radii), dtype=float
-    )
+    v_pulse_fft = np.zeros((num_interp_points_t // 2 + 1, n_x, n_branches, n_radii), dtype=complex)
+    v_pulse_meas_n1 = np.zeros((num_interp_points_t, n_x, n_branches, n_radii), dtype=float)
+    v_pulse_meas_dc = np.zeros((num_interp_points_t, n_x, n_branches, n_radii), dtype=float)
 
     for branch_idx in range(n_branches):
         for radii_idx in range(n_radii):
@@ -188,6 +188,8 @@ def extract_v_pulse_meas(dataset, num_interp_points_t):
                     v_pulse=v_pulse,
                 )
 
+                if not np.all(np.isfinite(v_interp)):
+                    continue
                 v_fft = rfft(v_interp, n=num_interp_points_t, axis=0)
                 v_pulse_fft[:, x_idx, branch_idx, radii_idx] = v_fft
 
