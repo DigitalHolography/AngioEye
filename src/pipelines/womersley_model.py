@@ -304,7 +304,6 @@ def womersley_Bn(L, R0, nu, omega_n, x0, r0):
     return Bn.astype(complex)
 
 def compute_Cn(Vn, KBn):
-    valid = np.isfinite(Vn) & np.isfinite(KBn)
     
     numerator = np.sum(np.conj(KBn[valid]) * Vn[valid])
     
@@ -398,8 +397,6 @@ def generate_harmonic_flow_profile(V, segment_data, ratio_map):
                     omega_n = n * omega_0
                     Bn = womersley_Bn(L, R0, nu, omega_n, x0, r0)
                     KBn = K @ Bn
-                    if not np.isfinite(compute_Cn(Vn, KBn)):
-                        continue
                     Cn[n] = compute_Cn(Vn, KBn)
                     Qn[n] = compute_Qn(R0, nu, omega_n, Cn[n])
                     taun[n] = compute_tau_n(R0, nu, omega_n, Cn[n], rho)
@@ -428,9 +425,9 @@ def fit_antisymmetric_curve(
 ):
     n_t, n_x, n_branches, n_radii = dataset_x_antisymmetric.shape
 
-    displacement = np.full((n_t, n_branches, n_radii), np.nan, dtype=float)
-    antisymmetric_model = np.full_like(dataset_x_antisymmetric, np.nan)
-    antisymmetric_r2 = np.full((n_t, n_branches, n_radii), np.nan, dtype=float)
+    displacement = np.zeros((n_t, n_branches, n_radii), dtype=float)
+    antisymmetric_model = np.zeros_like(dataset_x_antisymmetric, dtype=float)
+    antisymmetric_r2 = np.zeros((n_t, n_branches, n_radii), dtype=float)
 
     for branch in range(n_branches):
         for circle in range(n_radii):
