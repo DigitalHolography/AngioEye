@@ -241,7 +241,10 @@ def apply_abel_projection(L):
 
 
 def projected_parabola_model(x, A, x0, y0, K):
-    return K @ (A * (x - x0) ** 2 + y0)
+    parabola = A * (x - x0) ** 2 + y0
+    parabola = np.where(parabola > 0, parabola, 0.0)
+
+    return K @ parabola
 
 
 def projected_parabola_fit(V):
