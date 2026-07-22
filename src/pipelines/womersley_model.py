@@ -454,14 +454,14 @@ def fit_antisymmetric_curve(dataset_x_antisymmetric, v_model, ratio_map):
     return disp, anti_model
 
 
-def evaluate_anti_model(disp, num_harmonics=3, branch_idx=0, num_examples=3, distribution_path="anti_disp_distribution.png", jump_analysis_path="anti_disp_jump_analysis.png"):
+def evaluate_anti_model(disp, num_harmonics=3, branch_idx=0, num_examples=3, exclude_last=5, isolated_threshold=0.9, isolation_radius=2, distribution_path="anti_disp_distribution.png", jump_analysis_path="anti_disp_jump_analysis.png"):
     n_t, n_branches, n_radii = disp.shape
     segment_valid = np.any(np.isfinite(disp) & (disp != 0), axis=0)
     disp_valid = np.isfinite(disp) & segment_valid[None, :, :]
     phase = 2 * np.pi * np.arange(n_t) / n_t
     design_matrix = np.column_stack([np.ones(n_t)] + [f(phase * n) for n in range(1, num_harmonics + 1) for f in (np.cos, np.sin)])
-    disp_smooth = np.zeros_like(disp)
-    disp_residual = np.zeros_like(disp)
+    disp_smooth = np.full_like(disp, np.nan, dtype=float)
+    disp_residual = np.full_like(disp, np.nan, dtype=float)
 
     for branch in range(n_branches):
         for circle in range(n_radii):
@@ -474,53 +474,85 @@ def evaluate_anti_model(disp, num_harmonics=3, branch_idx=0, num_examples=3, dis
             disp_smooth[:, branch, circle] = design_matrix @ coefficients
             disp_residual[time_valid, branch, circle] = disp[time_valid, branch, circle] - disp_smooth[time_valid, branch, circle]
 
-    residual_values = disp_residual[disp_valid]
-    temporal_difference = np.zeros((n_t - 1, n_branches, n_radii), dtype=float)
-    difference_valid = disp_valid[1:] & disp_valid[:-1]
+    temporal_difference = np.full((n_t - 1, n_branches, n_radii), np.nan, dtype=float)
+    difference_valid = disp_valid[1:] & disp_valid[:-1] & np.isfinite(disp_residual[1:]) & np.isfinite(disp_residual[:-1])
     raw_difference = np.diff(disp_residual, axis=0)
     temporal_difference[difference_valid] = raw_difference[difference_valid]
-    difference_values = temporal_difference[difference_valid]
-    temporal_jump_probability = np.zeros_like(temporal_difference)
-    jump_probability = 0.0
-    normal_std = 0.0
-    jump_std = 0.0
+    fitting_valid = difference_valid.copy()
+
+    if exclude_last > 0:
+        fitting_valid[max(0, n_t - 1 - exclude_last):] = False
+
+    temporal_jump_probability = np.full_like(temporal_difference, np.nan, dtype=float)
+    jump_parameters = np.full((n_branches, n_radii, 3), np.nan, dtype=float)
 
     def gaussian_density(values, std):
         return np.exp(-0.5 * (values / std) ** 2) / (np.sqrt(2 * np.pi) * std)
 
-    if difference_values.size >= 10 and np.std(difference_values) > 0:
-        scale = np.std(difference_values)
-        normal_std = max(scale * 0.5, 1e-12)
-        jump_std = max(scale * 2.0, normal_std * 2)
+    def fit_gaussian_mixture(values):
+        values = values[np.isfinite(values)]
+
+        if values.size < 10:
+            return None
+
+        scale = np.std(values)
+
+        if not np.isfinite(scale) or scale <= 1e-12:
+            return None
+
+        normal_std = max(0.5 * scale, 1e-12)
+        jump_std = max(2.0 * scale, 2.0 * normal_std)
         jump_probability = 0.1
 
         for _ in range(200):
-            normal_density = gaussian_density(difference_values, normal_std)
-            jump_density = gaussian_density(difference_values, jump_std)
-            denominator = (1 - jump_probability) * normal_density + jump_probability * jump_density
-            responsibility = np.divide(jump_probability * jump_density, denominator, out=np.zeros_like(difference_values), where=denominator > 0)
+            normal_density = gaussian_density(values, normal_std)
+            jump_density = gaussian_density(values, jump_std)
+            denominator = (1.0 - jump_probability) * normal_density + jump_probability * jump_density
+            responsibility = np.divide(jump_probability * jump_density, denominator, out=np.zeros_like(values), where=denominator > 0)
+            normal_weight = np.sum(1.0 - responsibility)
+            jump_weight = np.sum(responsibility)
             new_jump_probability = np.mean(responsibility)
-            new_normal_std = np.sqrt(np.sum((1 - responsibility) * difference_values**2) / max(np.sum(1 - responsibility), 1e-12))
-            new_jump_std = np.sqrt(np.sum(responsibility * difference_values**2) / max(np.sum(responsibility), 1e-12))
+            new_normal_std = np.sqrt(np.sum((1.0 - responsibility) * values**2) / max(normal_weight, 1e-12))
+            new_jump_std = np.sqrt(np.sum(responsibility * values**2) / max(jump_weight, 1e-12))
 
             if new_normal_std > new_jump_std:
                 new_normal_std, new_jump_std = new_jump_std, new_normal_std
-                new_jump_probability = 1 - new_jump_probability
+                new_jump_probability = 1.0 - new_jump_probability
 
-            if np.allclose([jump_probability, normal_std, jump_std], [new_jump_probability, new_normal_std, new_jump_std], rtol=1e-6, atol=1e-8):
-                jump_probability, normal_std, jump_std = new_jump_probability, new_normal_std, new_jump_std
+            new_jump_probability = np.clip(new_jump_probability, 1e-6, 1.0 - 1e-6)
+            new_normal_std = max(new_normal_std, 1e-12)
+            new_jump_std = max(new_jump_std, new_normal_std)
+            old_parameters = np.array([jump_probability, normal_std, jump_std])
+            new_parameters = np.array([new_jump_probability, new_normal_std, new_jump_std])
+            jump_probability, normal_std, jump_std = new_parameters
+
+            if np.allclose(old_parameters, new_parameters, rtol=1e-6, atol=1e-8):
                 break
 
-            jump_probability = np.clip(new_jump_probability, 1e-6, 1 - 1e-6)
-            normal_std = max(new_normal_std, 1e-12)
-            jump_std = max(new_jump_std, normal_std)
+        return jump_probability, normal_std, jump_std
 
-        normal_density = gaussian_density(difference_values, normal_std)
-        jump_density = gaussian_density(difference_values, jump_std)
-        denominator = (1 - jump_probability) * normal_density + jump_probability * jump_density
-        temporal_jump_probability[difference_valid] = np.divide(jump_probability * jump_density, denominator, out=np.zeros_like(difference_values), where=denominator > 0)
+    for branch in range(n_branches):
+        for circle in range(n_radii):
+            circle_fitting_valid = fitting_valid[:, branch, circle]
+            circle_values = temporal_difference[circle_fitting_valid, branch, circle]
+            parameters = fit_gaussian_mixture(circle_values)
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+            if parameters is None:
+                continue
+
+            jump_probability, normal_std, jump_std = parameters
+            jump_parameters[branch, circle] = [jump_probability, normal_std, jump_std]
+            values = temporal_difference[circle_fitting_valid, branch, circle]
+            normal_density = gaussian_density(values, normal_std)
+            jump_density = gaussian_density(values, jump_std)
+            denominator = (1.0 - jump_probability) * normal_density + jump_probability * jump_density
+            temporal_jump_probability[circle_fitting_valid, branch, circle] = np.divide(jump_probability * jump_density, denominator, out=np.full_like(values, np.nan), where=denominator > 0)
+
+    branch_idx = int(np.clip(branch_idx, 0, n_branches - 1))
+    residual_values = disp_residual[np.isfinite(disp_residual) & disp_valid]
+    difference_values = temporal_difference[fitting_valid & np.isfinite(temporal_difference)]
+
+    fig, axes = plt.subplots(1, 3, figsize=(16, 4))
 
     if residual_values.size > 0:
         axes[0].hist(residual_values, bins=60, density=True, alpha=0.7)
@@ -530,75 +562,144 @@ def evaluate_anti_model(disp, num_harmonics=3, branch_idx=0, num_examples=3, dis
     axes[0].set_title("All-point residual distribution")
 
     if difference_values.size > 0:
-        axes[1].hist(difference_values, bins=60, density=True, alpha=0.7, label="Data")
+        axes[1].hist(difference_values, bins=60, density=True, alpha=0.7)
 
-        if normal_std > 0 and jump_std > 0:
-            x_plot = np.linspace(np.min(difference_values), np.max(difference_values), 500)
-            normal_curve = (1 - jump_probability) * gaussian_density(x_plot, normal_std)
-            jump_curve = jump_probability * gaussian_density(x_plot, jump_std)
-            axes[1].plot(x_plot, normal_curve + jump_curve, label="Gaussian mixture")
-            axes[1].plot(x_plot, normal_curve, linestyle="--", label="Normal component")
-            axes[1].plot(x_plot, jump_curve, linestyle="--", label="Jump component")
-            axes[1].legend()
-
-    parameter_text = f"jump probability = {jump_probability:.4f}\nnormal std = {normal_std:.4f}\njump std = {jump_std:.4f}"
-    axes[1].text(0.02, 0.97, parameter_text, transform=axes[1].transAxes, va="top", ha="left", bbox={"facecolor": "white", "alpha": 0.8})
     axes[1].set_xlabel("Temporal residual difference")
     axes[1].set_ylabel("Probability density")
-    axes[1].set_title("All-point jump distribution")
+    axes[1].set_title(f"Temporal differences, last {exclude_last} excluded")
+
+    circle_indices = np.arange(n_radii)
+    branch_parameters = jump_parameters[branch_idx]
+    axes[2].plot(circle_indices, branch_parameters[:, 1], "o-", label="normal std")
+    axes[2].plot(circle_indices, branch_parameters[:, 2], "o-", label="jump std")
+    axes[2].set_xlabel("Circle")
+    axes[2].set_ylabel("Standard deviation")
+    axes[2].set_title(f"Circle-specific mixture parameters, branch {branch_idx}")
+
+    probability_axis = axes[2].twinx()
+    probability_axis.plot(circle_indices, branch_parameters[:, 0], "s--", color="tab:red", label="jump probability")
+    probability_axis.set_ylabel("Mixture jump probability")
+    probability_axis.set_ylim(0, 1)
+
+    lines_1, labels_1 = axes[2].get_legend_handles_labels()
+    lines_2, labels_2 = probability_axis.get_legend_handles_labels()
+    axes[2].legend(lines_1 + lines_2, labels_1 + labels_2, loc="best")
+
     fig.tight_layout()
     fig.savefig(distribution_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
-    branch_idx = int(np.clip(branch_idx, 0, n_branches - 1))
     branch_probability = temporal_jump_probability[:, branch_idx, :]
-    branch_valid = difference_valid[:, branch_idx, :]
+    branch_valid = np.isfinite(branch_probability)
+    valid_count = np.sum(branch_valid, axis=1)
+    probability_sum = np.nansum(branch_probability, axis=1)
+    mean_probability = np.divide(probability_sum, valid_count, out=np.full(n_t - 1, np.nan), where=valid_count > 0)
+    isolated_mask = np.zeros_like(branch_valid, dtype=bool)
+
+    for circle in range(n_radii):
+        for time_idx in range(n_t - 1):
+            probability = branch_probability[time_idx, circle]
+
+            if not np.isfinite(probability) or probability < isolated_threshold:
+                continue
+
+            start = max(0, time_idx - isolation_radius)
+            stop = min(n_t - 1, time_idx + isolation_radius + 1)
+            neighbour_probability = branch_probability[start:stop, circle].copy()
+            neighbour_probability[time_idx - start] = np.nan
+            finite_neighbours = neighbour_probability[np.isfinite(neighbour_probability)]
+
+            if finite_neighbours.size == 0 or np.max(finite_neighbours) < isolated_threshold:
+                isolated_mask[time_idx, circle] = True
+
     candidate_probability = np.where(branch_valid, branch_probability, -np.inf)
     finite_candidates = np.flatnonzero(np.isfinite(candidate_probability.ravel()))
-    num_selected = min(num_examples, finite_candidates.size)
+    highest_points = []
 
-    if num_selected > 0:
-        selected_flat = finite_candidates[np.argsort(candidate_probability.ravel()[finite_candidates])[-num_selected:][::-1]]
-        selected_points = [np.unravel_index(index, candidate_probability.shape) for index in selected_flat]
-    else:
-        selected_points = []
+    if finite_candidates.size > 0:
+        sorted_candidates = finite_candidates[np.argsort(candidate_probability.ravel()[finite_candidates])[::-1]]
+        highest_points = [np.unravel_index(index, candidate_probability.shape) for index in sorted_candidates[:num_examples]]
 
-    fig = plt.figure(figsize=(12, 4 + 3 * max(num_selected, 1)))
-    grid = fig.add_gridspec(max(num_selected, 1) + 1, 1, height_ratios=[1.4] + [1] * max(num_selected, 1))
-    heatmap_axis = fig.add_subplot(grid[0])
-    heatmap = heatmap_axis.imshow(branch_probability, origin="lower", aspect="auto", vmin=0, vmax=1, cmap="magma")
+    isolated_candidates = np.flatnonzero(isolated_mask.ravel())
+    isolated_points = []
+
+    if isolated_candidates.size > 0:
+        sorted_isolated = isolated_candidates[np.argsort(branch_probability.ravel()[isolated_candidates])[::-1]]
+        isolated_points = [np.unravel_index(index, branch_probability.shape) for index in sorted_isolated[:num_examples]]
+
+    selected_points = []
+    selected_labels = []
+
+    for point in highest_points:
+        selected_points.append(point)
+        selected_labels.append("highest probability")
+
+    for point in isolated_points:
+        if point in selected_points:
+            index = selected_points.index(point)
+            selected_labels[index] = "highest probability, isolated"
+        else:
+            selected_points.append(point)
+            selected_labels.append("isolated")
+
+    num_selected = len(selected_points)
+    fig = plt.figure(figsize=(12, 6 + 3 * max(num_selected, 1)))
+    grid = fig.add_gridspec(max(num_selected, 1) + 1, 2, height_ratios=[1.5] + [1] * max(num_selected, 1))
+
+    heatmap_axis = fig.add_subplot(grid[0, 0])
+    heatmap_cmap = plt.get_cmap("magma").copy()
+    heatmap_cmap.set_bad(color="lightgray")
+    heatmap = heatmap_axis.imshow(np.ma.masked_invalid(branch_probability), origin="lower", aspect="auto", vmin=0, vmax=1, cmap=heatmap_cmap)
     heatmap_axis.set_xlabel("Circle")
     heatmap_axis.set_ylabel("Time transition")
     heatmap_axis.set_title(f"Temporal jump probability, branch {branch_idx}")
     fig.colorbar(heatmap, ax=heatmap_axis, label="Jump probability")
 
-    for time_idx, circle_idx in selected_points:
-        heatmap_axis.plot(circle_idx, time_idx, "co", markersize=5)
+    for (time_idx, circle_idx), label in zip(selected_points, selected_labels):
+        marker = "o" if "isolated" in label else "x"
+        color = "cyan" if "isolated" in label else "lime"
+        heatmap_axis.plot(circle_idx, time_idx, marker=marker, color=color, markersize=7, markeredgewidth=1.5)
+
+    mean_axis = fig.add_subplot(grid[0, 1])
+    mean_axis.plot(np.arange(n_t - 1), mean_probability, color="tab:blue")
+    mean_axis.axhline(isolated_threshold, color="tab:red", linestyle="--", label=f"threshold = {isolated_threshold:.2f}")
+
+    if exclude_last > 0:
+        excluded_start = max(0, n_t - 1 - exclude_last)
+        mean_axis.axvspan(excluded_start, n_t - 2, color="gray", alpha=0.25, label="excluded")
+
+    mean_axis.set_xlabel("Time transition")
+    mean_axis.set_ylabel("Mean jump probability")
+    mean_axis.set_ylim(0, 1)
+    mean_axis.set_title("Mean probability across valid circles")
+    mean_axis.legend()
 
     if selected_points:
         time_axis = np.arange(n_t)
 
-        for row, (time_idx, circle_idx) in enumerate(selected_points, start=1):
-            axis = fig.add_subplot(grid[row])
+        for row, ((time_idx, circle_idx), label) in enumerate(zip(selected_points, selected_labels), start=1):
+            axis = fig.add_subplot(grid[row, :])
             axis.plot(time_axis, disp[:, branch_idx, circle_idx], label="disp")
             axis.plot(time_axis, disp_smooth[:, branch_idx, circle_idx], label="disp smooth")
             axis.axvline(time_idx, color="red", linestyle="--")
             axis.axvline(time_idx + 1, color="red", linestyle="--")
+            probability = branch_probability[time_idx, circle_idx]
+            normal_std = jump_parameters[branch_idx, circle_idx, 1]
+            jump_std = jump_parameters[branch_idx, circle_idx, 2]
             axis.set_ylabel("Normalized displacement")
-            axis.set_title(f"Circle {circle_idx}, transition {time_idx} → {time_idx + 1}, jump probability = {branch_probability[time_idx, circle_idx]:.4f}")
+            axis.set_title(f"{label}: circle {circle_idx}, transition {time_idx} → {time_idx + 1}, probability = {probability:.4f}, normal std = {normal_std:.4f}, jump std = {jump_std:.4f}")
             axis.legend()
 
         axis.set_xlabel("Time point")
+
     else:
-        axis = fig.add_subplot(grid[1])
+        axis = fig.add_subplot(grid[1, :])
         axis.text(0.5, 0.5, "No valid jump candidates", ha="center", va="center")
         axis.set_axis_off()
 
     fig.tight_layout()
     fig.savefig(jump_analysis_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
-
-    jump_parameters = np.array([jump_probability, normal_std, jump_std])
 
     return disp_smooth, disp_residual, temporal_difference, temporal_jump_probability, jump_parameters
     
