@@ -1,7 +1,6 @@
 import h5py
 import matplotlib.pyplot as plt
-
-# import matplotlib.pyplot as plt
+from pathlib import Path
 import numpy as np
 from scipy.interpolate import interp1d
 
@@ -991,8 +990,14 @@ class WomersleyModeling(ProcessPipeline):
         v_model, v_model_fft, C_n, Q_n, Tau_n = generate_harmonic_flow_profile(v_pulse_fft, segment_data, ratio_map)
 
         disp, anti_model = fit_antisymmetric_curve(dataset_x_antisymmetric, v_model, ratio_map)
-        disp_smooth, disp_residual, temporal_difference, temporal_jump_probability, jump_parameters, mixture_reliable, overall_mean_probability, active_branch_count, high_segment_count, frame_spatial_class, temporal_event_class, global_coherence, global_motion_class, jump_event_count, global_direction_event_count, jump_event_rate, jump_summary_metrics = evaluate_anti_model(disp)
-        
+
+        input_stem = Path(h5file.filename).stem
+        distribution_path = f"{input_stem}_anti_disp_distribution.png"
+        jump_analysis_path = f"{input_stem}_anti_disp_jump_analysis.png"
+        animation_path = f"{input_stem}_anti_disp_jump_animation.gif"
+    
+        disp_smooth, disp_residual, temporal_difference, temporal_jump_probability, jump_parameters, mixture_reliable, overall_mean_probability, active_branch_count, high_segment_count, frame_spatial_class, temporal_event_class, global_coherence, global_motion_class, jump_event_count, global_direction_event_count, jump_event_rate, jump_summary_metrics = evaluate_anti_model(disp, distribution_path=distribution_path, jump_analysis_path=jump_analysis_path, animation_path=animation_path)
+    
         metrics: dict = {}
         metrics["dataset_x"] = np.asarray(dataset_x)
         metrics["dataset_x_symmetric"] = np.asarray(dataset_x_symmetric)
