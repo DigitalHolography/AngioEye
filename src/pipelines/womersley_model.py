@@ -454,7 +454,7 @@ def fit_antisymmetric_curve(dataset_x_antisymmetric, v_model, ratio_map):
     return disp, anti_model
 
 
-def evaluate_anti_model(disp, num_harmonics=3, figure_path="anti_disp_distribution.png"):
+def evaluate_anti_model(disp, num_harmonics=3, branch_idx=0, num_examples=3, distribution_path="anti_disp_distribution.png", jump_analysis_path="anti_disp_jump_analysis.png"):
     n_t, n_branches, n_radii = disp.shape
     segment_valid = np.any(np.isfinite(disp) & (disp != 0), axis=0)
     disp_valid = np.isfinite(disp) & segment_valid[None, :, :]
@@ -485,6 +485,9 @@ def evaluate_anti_model(disp, num_harmonics=3, figure_path="anti_disp_distributi
     normal_std = 0.0
     jump_std = 0.0
 
+    def gaussian_density(values, std):
+        return np.exp(-0.5 * (values / std) ** 2) / (np.sqrt(2 * np.pi) * std)
+
     if difference_values.size >= 10 and np.std(difference_values) > 0:
         scale = np.std(difference_values)
         normal_std = max(scale * 0.5, 1e-12)
@@ -492,8 +495,8 @@ def evaluate_anti_model(disp, num_harmonics=3, figure_path="anti_disp_distributi
         jump_probability = 0.1
 
         for _ in range(200):
-            normal_density = np.exp(-0.5 * (difference_values / normal_std) ** 2) / (np.sqrt(2 * np.pi) * normal_std)
-            jump_density = np.exp(-0.5 * (difference_values / jump_std) ** 2) / (np.sqrt(2 * np.pi) * jump_std)
+            normal_density = gaussian_density(difference_values, normal_std)
+            jump_density = gaussian_density(difference_values, jump_std)
             denominator = (1 - jump_probability) * normal_density + jump_probability * jump_density
             responsibility = np.divide(jump_probability * jump_density, denominator, out=np.zeros_like(difference_values), where=denominator > 0)
             new_jump_probability = np.mean(responsibility)
@@ -512,8 +515,8 @@ def evaluate_anti_model(disp, num_harmonics=3, figure_path="anti_disp_distributi
             normal_std = max(new_normal_std, 1e-12)
             jump_std = max(new_jump_std, normal_std)
 
-        normal_density = np.exp(-0.5 * (difference_values / normal_std) ** 2) / (np.sqrt(2 * np.pi) * normal_std)
-        jump_density = np.exp(-0.5 * (difference_values / jump_std) ** 2) / (np.sqrt(2 * np.pi) * jump_std)
+        normal_density = gaussian_density(difference_values, normal_std)
+        jump_density = gaussian_density(difference_values, jump_std)
         denominator = (1 - jump_probability) * normal_density + jump_probability * jump_density
         temporal_jump_probability[difference_valid] = np.divide(jump_probability * jump_density, denominator, out=np.zeros_like(difference_values), where=denominator > 0)
 
@@ -531,23 +534,74 @@ def evaluate_anti_model(disp, num_harmonics=3, figure_path="anti_disp_distributi
 
         if normal_std > 0 and jump_std > 0:
             x_plot = np.linspace(np.min(difference_values), np.max(difference_values), 500)
-            normal_curve = (1 - jump_probability) * np.exp(-0.5 * (x_plot / normal_std) ** 2) / (np.sqrt(2 * np.pi) * normal_std)
-            jump_curve = jump_probability * np.exp(-0.5 * (x_plot / jump_std) ** 2) / (np.sqrt(2 * np.pi) * jump_std)
+            normal_curve = (1 - jump_probability) * gaussian_density(x_plot, normal_std)
+            jump_curve = jump_probability * gaussian_density(x_plot, jump_std)
             axes[1].plot(x_plot, normal_curve + jump_curve, label="Gaussian mixture")
             axes[1].plot(x_plot, normal_curve, linestyle="--", label="Normal component")
             axes[1].plot(x_plot, jump_curve, linestyle="--", label="Jump component")
             axes[1].legend()
 
+    parameter_text = f"jump probability = {jump_probability:.4f}\nnormal std = {normal_std:.4f}\njump std = {jump_std:.4f}"
+    axes[1].text(0.02, 0.97, parameter_text, transform=axes[1].transAxes, va="top", ha="left", bbox={"facecolor": "white", "alpha": 0.8})
     axes[1].set_xlabel("Temporal residual difference")
     axes[1].set_ylabel("Probability density")
     axes[1].set_title("All-point jump distribution")
     fig.tight_layout()
-    fig.savefig(figure_path, dpi=300, bbox_inches="tight")
+    fig.savefig(distribution_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+    branch_idx = int(np.clip(branch_idx, 0, n_branches - 1))
+    branch_probability = temporal_jump_probability[:, branch_idx, :]
+    branch_valid = difference_valid[:, branch_idx, :]
+    candidate_probability = np.where(branch_valid, branch_probability, -np.inf)
+    finite_candidates = np.flatnonzero(np.isfinite(candidate_probability.ravel()))
+    num_selected = min(num_examples, finite_candidates.size)
+
+    if num_selected > 0:
+        selected_flat = finite_candidates[np.argsort(candidate_probability.ravel()[finite_candidates])[-num_selected:][::-1]]
+        selected_points = [np.unravel_index(index, candidate_probability.shape) for index in selected_flat]
+    else:
+        selected_points = []
+
+    fig = plt.figure(figsize=(12, 4 + 3 * max(num_selected, 1)))
+    grid = fig.add_gridspec(max(num_selected, 1) + 1, 1, height_ratios=[1.4] + [1] * max(num_selected, 1))
+    heatmap_axis = fig.add_subplot(grid[0])
+    heatmap = heatmap_axis.imshow(branch_probability, origin="lower", aspect="auto", vmin=0, vmax=1, cmap="magma")
+    heatmap_axis.set_xlabel("Circle")
+    heatmap_axis.set_ylabel("Time transition")
+    heatmap_axis.set_title(f"Temporal jump probability, branch {branch_idx}")
+    fig.colorbar(heatmap, ax=heatmap_axis, label="Jump probability")
+
+    for time_idx, circle_idx in selected_points:
+        heatmap_axis.plot(circle_idx, time_idx, "co", markersize=5)
+
+    if selected_points:
+        time_axis = np.arange(n_t)
+
+        for row, (time_idx, circle_idx) in enumerate(selected_points, start=1):
+            axis = fig.add_subplot(grid[row])
+            axis.plot(time_axis, disp[:, branch_idx, circle_idx], label="disp")
+            axis.plot(time_axis, disp_smooth[:, branch_idx, circle_idx], label="disp smooth")
+            axis.axvline(time_idx, color="red", linestyle="--")
+            axis.axvline(time_idx + 1, color="red", linestyle="--")
+            axis.set_ylabel("Normalized displacement")
+            axis.set_title(f"Circle {circle_idx}, transition {time_idx} → {time_idx + 1}, jump probability = {branch_probability[time_idx, circle_idx]:.4f}")
+            axis.legend()
+
+        axis.set_xlabel("Time point")
+    else:
+        axis = fig.add_subplot(grid[1])
+        axis.text(0.5, 0.5, "No valid jump candidates", ha="center", va="center")
+        axis.set_axis_off()
+
+    fig.tight_layout()
+    fig.savefig(jump_analysis_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
     jump_parameters = np.array([jump_probability, normal_std, jump_std])
 
     return disp_smooth, disp_residual, temporal_difference, temporal_jump_probability, jump_parameters
+    
 
 @registerPipeline(name="WomersleyModeling")
 class WomersleyModeling(ProcessPipeline):
@@ -594,7 +648,7 @@ class WomersleyModeling(ProcessPipeline):
         v_model, v_model_fft, C_n, Q_n, Tau_n = generate_harmonic_flow_profile(v_pulse_fft, segment_data, ratio_map)
 
         disp, anti_model = fit_antisymmetric_curve(dataset_x_antisymmetric, v_model, ratio_map)
-        disp_smooth, disp_residual, temporal_difference, temporal_jump_probability, jump_parameters = evaluate_anti_model(disp)
+        disp_smooth, disp_residual, temporal_difference, temporal_jump_probability, jump_parameters = evaluate_anti_model(disp, branch_idx=0)
 
         metrics: dict = {}
         metrics["dataset_x"] = np.asarray(dataset_x)
