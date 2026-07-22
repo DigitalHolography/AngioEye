@@ -307,7 +307,7 @@ def compute_Cn(Vn, KBn):
     
     numerator = np.sum(np.conj(KBn) * Vn)
     
-    denominator = np.sum(np.abs(KBn ** 2)
+    denominator = np.sum(np.abs(KBn ** 2))
         
     return numerator / denominator
 
