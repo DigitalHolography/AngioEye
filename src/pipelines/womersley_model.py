@@ -651,7 +651,7 @@ def evaluate_anti_model(disp, num_harmonics=3, num_examples=8, exclude_last=5, j
     late_mean = np.nanmean(late_values) if np.any(np.isfinite(late_values)) else np.nan
     late_early_ratio = late_mean / early_mean if np.isfinite(early_mean) and early_mean > 0 else np.nan
     reliable_fraction = reliable_count / max(fitted_count, 1)
-    summary_metrics = np.array([fitted_count, reliable_count, reliable_fraction, np.nanmean(overall_mean_probability), high_probability_fraction, early_mean, late_mean, late_early_ratio, spatial_frame_fraction[0], spatial_frame_fraction[1], spatial_frame_fraction[2], np.sum(events) / event_denominator * 100.0])
+    summary_metrics = np.array([fitted_count, reliable_count, reliable_fraction, np.nanmean(overall_mean_probability), high_probability_fraction, early_mean, late_mean, late_early_ratio, spatial_frame_fraction[0], spatial_frame_fraction[1], spatial_frame_fraction[2], len(events) / event_denominator * 100.0])
 
     residual_values = disp_residual[np.isfinite(disp_residual) & disp_valid]
     difference_values = temporal_difference[fitting_valid & np.isfinite(temporal_difference)]
