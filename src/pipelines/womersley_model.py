@@ -417,8 +417,8 @@ def generate_harmonic_flow_profile(V, segment_data, ratio_map):
 
 def fit_antisymmetric_curve(dataset_x_antisymmetric, v_model, ratio_map):
     n_t, n_x, n_branches, n_radii = dataset_x_antisymmetric.shape
-    displacement = np.zeros((n_t, n_branches, n_radii), dtype=float)
-    antisymmetric_model = np.zeros_like(dataset_x_antisymmetric, dtype=float)
+    disp = np.zeros((n_t, n_branches, n_radii), dtype=float)
+    anti_model = np.zeros_like(dataset_x_antisymmetric, dtype=float)
 
     for branch in range(n_branches):
         for circle in range(n_radii):
@@ -431,59 +431,47 @@ def fit_antisymmetric_curve(dataset_x_antisymmetric, v_model, ratio_map):
             symmetric_gradient = np.gradient(v_model[:, :, branch, circle], dx, axis=1, edge_order=2)
 
             for t_idx in range(n_t):
-                antisymmetric_profile = dataset_x_antisymmetric[t_idx, :, branch, circle]
+                anti_profile = dataset_x_antisymmetric[t_idx, :, branch, circle]
                 gradient_profile = symmetric_gradient[t_idx]
-                valid = np.isfinite(antisymmetric_profile) & np.isfinite(gradient_profile)
+                valid = np.isfinite(anti_profile) & np.isfinite(gradient_profile)
 
                 if np.sum(valid) < 3:
                     continue
 
-                numerator = np.sum(gradient_profile[valid] * antisymmetric_profile[valid])
+                numerator = np.sum(gradient_profile[valid] * anti_profile[valid])
                 denominator = np.sum(gradient_profile[valid] ** 2)
 
                 if not np.isfinite(denominator) or denominator <= 0:
                     continue
 
                 delta = -numerator / denominator
-                displacement[t_idx, branch, circle] = delta
-                antisymmetric_model[t_idx, :, branch, circle] = -delta * gradient_profile
+                disp[t_idx, branch, circle] = delta
+                anti_model[t_idx, :, branch, circle] = -delta * gradient_profile
 
-    return displacement, antisymmetric_model
+    return disp, anti_model
 
 
-def evaluate_anti_model(dataset_x_antisymmetric, antisymmetric_model):
-    valid = np.isfinite(dataset_x_antisymmetric) & np.isfinite(antisymmetric_model)
+def evaluate_anti_model(dataset_x_antisymmetric, anti_model):
+    valid = np.isfinite(dataset_x_antisymmetric) & np.isfinite(anti_model)
     count = np.sum(valid, axis=1)
-    antisymmetric_energy = np.sum(np.where(valid, dataset_x_antisymmetric**2, 0.0), axis=1)
-    residual_energy = np.sum(np.where(valid, (dataset_x_antisymmetric - antisymmetric_model) ** 2, 0.0), axis=1)
-    antisymmetric_energy = np.where(count >= 3, antisymmetric_energy, np.nan)
-    residual_energy = np.where(count >= 3, residual_energy, np.nan)
-    antisymmetric_r2 = np.full_like(antisymmetric_energy, np.nan)
-    np.divide(residual_energy, antisymmetric_energy, out=antisymmetric_r2, where=np.isfinite(antisymmetric_energy) & (antisymmetric_energy > 0))
-    antisymmetric_r2 = 1.0 - antisymmetric_r2
+    anti_energy = np.sum(np.where(valid, dataset_x_antisymmetric**2, 0.0), axis=1)
+    residual_energy = np.sum(np.where(valid, (dataset_x_antisymmetric - anti_model) ** 2, 0.0), axis=1)
+    anti_energy = np.where(count >= 3, anti_energy, 0.0)
+    residual_energy = np.where(count >= 3, residual_energy, 0.0)
+    anti_r2 = np.zeros_like(anti_energy)
+    energy_valid = anti_energy > 0
+    anti_r2[energy_valid] = 1.0 - residual_energy[energy_valid] / anti_energy[energy_valid]
 
     def statistics(values, axis):
-        finite = np.isfinite(values)
-        n = np.sum(finite, axis=axis)
-        mean = np.full(np.sum(values, axis=axis).shape, np.nan, dtype=float)
-        np.divide(np.sum(np.where(finite, values, 0.0), axis=axis), n, out=mean, where=n > 0)
-        variance = np.full_like(mean, np.nan)
-        np.divide(np.sum(np.where(finite, (values - np.expand_dims(mean, axis)) ** 2, 0.0), axis=axis), n, out=variance, where=n > 0)
-        return mean, np.sqrt(variance)
+        return np.nanmean(values, axis=axis), np.nanstd(values, axis=axis)
 
     def jitter(values, axis):
-        differences = np.diff(values, axis=axis)
-        finite = np.isfinite(differences)
-        n = np.sum(finite, axis=axis)
-        result = np.full(np.sum(differences, axis=axis).shape, np.nan, dtype=float)
-        np.divide(np.sum(np.where(finite, differences**2, 0.0), axis=axis), n, out=result, where=n > 0)
-        return np.sqrt(result)
+        return np.sqrt(np.nanmean(np.diff(values, axis=axis) ** 2, axis=axis))
 
-    temporal_r2_mean, temporal_r2_std = statistics(antisymmetric_r2, axis=0)
-    temporal_r2_jitter = jitter(antisymmetric_r2, axis=0)
-    spatial_r2_mean, spatial_r2_std = statistics(antisymmetric_r2, axis=2)
-    spatial_r2_jitter = jitter(antisymmetric_r2, axis=2)
-    return antisymmetric_r2, antisymmetric_energy, residual_energy, temporal_r2_mean, temporal_r2_std, temporal_r2_jitter, spatial_r2_mean, spatial_r2_std, spatial_r2_jitter
+    spatial_r2_mean, spatial_r2_std = statistics(anti_r2, axis=2)
+    spatial_r2_jitter = jitter(anti_r2, axis=2)
+
+    return anti_r2, anti_energy, residual_energy, spatial_r2_mean, spatial_r2_std, spatial_r2_jitter
 
 
 @registerPipeline(name="WomersleyModeling")
@@ -503,7 +491,6 @@ class WomersleyModeling(ProcessPipeline):
                 f"Expected a dataset at {self.v_profile_path}, but found {type(obj)}"
             )
         dataset = np.asarray(obj[:], dtype=float)
-        dataset[dataset == 0] = np.nan
 
         obj = h5file[self.b_period_path]
         if not isinstance(obj, h5py.Dataset):
@@ -531,8 +518,8 @@ class WomersleyModeling(ProcessPipeline):
 
         v_model, v_model_fft, C_n, Q_n, Tau_n = generate_harmonic_flow_profile(v_pulse_fft, segment_data, ratio_map)
 
-        displacement, antisymmetric_model = fit_antisymmetric_curve(dataset_x_antisymmetric, v_model, ratio_map)
-        antisymmetric_r2, antisymmetric_energy, residual_energy, temporal_r2_mean, temporal_r2_std, temporal_r2_jitter, spatial_r2_mean, spatial_r2_std, spatial_r2_jitter = evaluate_anti_model(dataset_x_antisymmetric, antisymmetric_model)
+        disp, anti_model = fit_antisymmetric_curve(dataset_x_antisymmetric, v_model, ratio_map)
+        anti_r2, anti_energy, residual_energy, spatial_r2_mean, spatial_r2_std, spatial_r2_jitter = evaluate_anti_model(dataset_x_antisymmetric, anti_model)
 
         metrics: dict = {}
         metrics["dataset_x"] = np.asarray(dataset_x)
@@ -549,14 +536,11 @@ class WomersleyModeling(ProcessPipeline):
         metrics["C_n"] = np.asarray(C_n)
         metrics["Q_n"] = np.asarray(Q_n)
         metrics["Tau_n"] = np.asarray(Tau_n)
-        metrics["displacement"] = np.asarray(displacement)
-        metrics["antisymmetric_model"] = np.asarray(antisymmetric_model)
-        metrics["antisymmetric_r2"] = np.asarray(antisymmetric_r2)
-        metrics["antisymmetric_energy"] = np.asarray(antisymmetric_energy)
+        metrics["disp"] = np.asarray(disp)
+        metrics["anti_model"] = np.asarray(anti_model)
+        metrics["anti_r2"] = np.asarray(anti_r2)
+        metrics["anti_energy"] = np.asarray(anti_energy)
         metrics["residual_energy"] = np.asarray(residual_energy)
-        metrics["temporal_r2_mean"] = np.asarray(temporal_r2_mean)
-        metrics["temporal_r2_std"] = np.asarray(temporal_r2_std)
-        metrics["temporal_r2_jitter"] = np.asarray(temporal_r2_jitter)
         metrics["spatial_r2_mean"] = np.asarray(spatial_r2_mean)
         metrics["spatial_r2_std"] = np.asarray(spatial_r2_std)
         metrics["spatial_r2_jitter"] = np.asarray(spatial_r2_jitter)
