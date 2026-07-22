@@ -454,8 +454,9 @@ def fit_antisymmetric_curve(dataset_x_antisymmetric, v_model, ratio_map):
     return disp, anti_model
 
 
-def evaluate_anti_model(disp, num_harmonics=3, branch_idx=0, num_examples=6, exclude_last=5, jump_threshold=0.9, isolation_mean_threshold=0.3, context_radius=5, event_merge_gap=3, global_min_circles=2, min_std_ratio=2.0, distribution_path="anti_disp_distribution.png", jump_analysis_path="anti_disp_jump_analysis.png"):
+def evaluate_anti_model(disp, num_harmonics=3, num_examples=8, exclude_last=5, jump_threshold=0.9, isolation_mean_threshold=0.3, context_radius=5, event_merge_gap=3, max_isolated_duration=2, min_std_ratio=2.0, distribution_path="anti_disp_distribution.png", jump_analysis_path="anti_disp_jump_analysis.png"):
     n_t, n_branches, n_radii = disp.shape
+    n_transitions = n_t - 1
     segment_valid = np.any(np.isfinite(disp) & (disp != 0), axis=0)
     disp_valid = np.isfinite(disp) & segment_valid[None, :, :]
     phase = 2 * np.pi * np.arange(n_t) / n_t
@@ -474,14 +475,14 @@ def evaluate_anti_model(disp, num_harmonics=3, branch_idx=0, num_examples=6, exc
             disp_smooth[:, branch, circle] = design_matrix @ coefficients
             disp_residual[time_valid, branch, circle] = disp[time_valid, branch, circle] - disp_smooth[time_valid, branch, circle]
 
-    temporal_difference = np.full((n_t - 1, n_branches, n_radii), np.nan, dtype=float)
+    temporal_difference = np.full((n_transitions, n_branches, n_radii), np.nan, dtype=float)
     difference_valid = disp_valid[1:] & disp_valid[:-1] & np.isfinite(disp_residual[1:]) & np.isfinite(disp_residual[:-1])
     raw_difference = np.diff(disp_residual, axis=0)
     temporal_difference[difference_valid] = raw_difference[difference_valid]
     fitting_valid = difference_valid.copy()
 
     if exclude_last > 0:
-        fitting_valid[max(0, n_t - 1 - exclude_last):] = False
+        fitting_valid[max(0, n_transitions - exclude_last):] = False
 
     temporal_jump_probability = np.full_like(temporal_difference, np.nan, dtype=float)
     jump_parameters = np.full((n_branches, n_radii, 3), np.nan, dtype=float)
@@ -542,8 +543,7 @@ def evaluate_anti_model(disp, num_harmonics=3, branch_idx=0, num_examples=6, exc
 
             jump_probability, normal_std, jump_std = parameters
             jump_parameters[branch, circle] = [jump_probability, normal_std, jump_std]
-            std_ratio = jump_std / max(normal_std, 1e-12)
-            mixture_reliable[branch, circle] = std_ratio >= min_std_ratio
+            mixture_reliable[branch, circle] = jump_std / max(normal_std, 1e-12) >= min_std_ratio
 
             if not mixture_reliable[branch, circle]:
                 continue
@@ -554,12 +554,108 @@ def evaluate_anti_model(disp, num_harmonics=3, branch_idx=0, num_examples=6, exc
             denominator = (1.0 - jump_probability) * normal_density + jump_probability * jump_density
             temporal_jump_probability[circle_valid, branch, circle] = np.divide(jump_probability * jump_density, denominator, out=np.full_like(values, np.nan), where=denominator > 0)
 
-    branch_idx = int(np.clip(branch_idx, 0, n_branches - 1))
+    probability_valid = np.isfinite(temporal_jump_probability)
+    high_probability = probability_valid & (temporal_jump_probability >= jump_threshold)
+    valid_count = np.sum(probability_valid, axis=(1, 2))
+    overall_mean_probability = np.divide(np.nansum(temporal_jump_probability, axis=(1, 2)), valid_count, out=np.full(n_transitions, np.nan), where=valid_count > 0)
+    branch_high_count = np.sum(high_probability, axis=2)
+    active_branch_count = np.sum(branch_high_count > 0, axis=1)
+    high_segment_count = np.sum(high_probability, axis=(1, 2))
+    frame_spatial_class = np.zeros(n_transitions, dtype=int)
+    frame_spatial_class[high_segment_count > 0] = 1
+    frame_spatial_class[np.max(branch_high_count, axis=1) >= 2] = 2
+    frame_spatial_class[active_branch_count >= 2] = 3
+    events = []
+
+    for branch in range(n_branches):
+        for circle in range(n_radii):
+            if not mixture_reliable[branch, circle]:
+                continue
+
+            high_times = np.flatnonzero(high_probability[:, branch, circle])
+
+            if high_times.size == 0:
+                continue
+
+            groups = []
+            current_group = [int(high_times[0])]
+
+            for time_idx in high_times[1:]:
+                if time_idx - current_group[-1] <= event_merge_gap:
+                    current_group.append(int(time_idx))
+                else:
+                    groups.append(current_group)
+                    current_group = [int(time_idx)]
+
+            groups.append(current_group)
+
+            for group in groups:
+                start = group[0]
+                end = group[-1]
+                duration = end - start + 1
+                group_probability = temporal_jump_probability[group, branch, circle]
+                peak_time = group[int(np.nanargmax(group_probability))]
+                peak_probability = temporal_jump_probability[peak_time, branch, circle]
+                context_start = max(0, start - context_radius)
+                context_end = min(n_transitions - 1, end + context_radius)
+                context_values = temporal_jump_probability[context_start:context_end + 1, branch, circle].copy()
+                context_values[start - context_start:end - context_start + 1] = np.nan
+                finite_context = context_values[np.isfinite(context_values)]
+                context_mean = np.mean(finite_context) if finite_context.size > 0 else np.nan
+                quiet_context = np.isfinite(context_mean) and context_mean < isolation_mean_threshold
+
+                if duration <= max_isolated_duration and quiet_context:
+                    temporal_type = "isolated"
+                elif duration > max_isolated_duration and quiet_context:
+                    temporal_type = "clustered"
+                elif duration <= max_isolated_duration:
+                    temporal_type = "embedded"
+                else:
+                    temporal_type = "sustained"
+
+                interval_active_branches = int(np.max(active_branch_count[start:end + 1]))
+                interval_branch_segments = int(np.max(branch_high_count[start:end + 1, branch]))
+
+                if interval_active_branches >= 2:
+                    spatial_type = "multi-branch global"
+                elif interval_branch_segments >= 2:
+                    spatial_type = "branch-wide"
+                else:
+                    spatial_type = "segment-local"
+
+                events.append({"branch": branch, "circle": circle, "start": start, "end": end, "duration": duration, "peak_time": peak_time, "peak_probability": peak_probability, "context_mean": context_mean, "temporal_type": temporal_type, "spatial_type": spatial_type, "active_branches": interval_active_branches, "branch_segments": interval_branch_segments})
+
+    spatial_names = ["segment-local", "branch-wide", "multi-branch global"]
+    temporal_names = ["isolated", "clustered", "embedded", "sustained"]
+    event_count = np.zeros((3, 4), dtype=int)
+
+    for event in events:
+        spatial_idx = spatial_names.index(event["spatial_type"])
+        temporal_idx = temporal_names.index(event["temporal_type"])
+        event_count[spatial_idx, temporal_idx] += 1
+
+    reliable_count = int(np.sum(mixture_reliable))
+    fitted_count = int(np.sum(np.all(np.isfinite(jump_parameters), axis=2)))
+    usable_transitions = max(n_transitions - exclude_last, 1)
+    event_denominator = max(reliable_count * usable_transitions, 1)
+    event_rate = 100.0 * event_count / event_denominator
+    probability_point_count = int(np.sum(probability_valid))
+    high_probability_fraction = np.sum(high_probability) / max(probability_point_count, 1)
+    valid_frame = valid_count > 0
+    valid_frame_count = max(int(np.sum(valid_frame)), 1)
+    spatial_frame_fraction = np.array([np.sum(frame_spatial_class == spatial_idx) / valid_frame_count for spatial_idx in range(1, 4)])
+    split_transition = usable_transitions // 2
+    early_values = overall_mean_probability[:split_transition]
+    late_values = overall_mean_probability[split_transition:usable_transitions]
+    early_mean = np.nanmean(early_values) if np.any(np.isfinite(early_values)) else np.nan
+    late_mean = np.nanmean(late_values) if np.any(np.isfinite(late_values)) else np.nan
+    late_early_ratio = late_mean / early_mean if np.isfinite(early_mean) and early_mean > 0 else np.nan
+    reliable_fraction = reliable_count / max(fitted_count, 1)
+    summary_metrics = np.array([fitted_count, reliable_count, reliable_fraction, np.nanmean(overall_mean_probability), high_probability_fraction, early_mean, late_mean, late_early_ratio, spatial_frame_fraction[0], spatial_frame_fraction[1], spatial_frame_fraction[2], np.sum(events) / event_denominator * 100.0])
+
     residual_values = disp_residual[np.isfinite(disp_residual) & disp_valid]
     difference_values = temporal_difference[fitting_valid & np.isfinite(temporal_difference)]
-    branch_parameters = jump_parameters[branch_idx]
-    branch_reliable = mixture_reliable[branch_idx]
-    circle_indices = np.arange(n_radii)
+    std_ratio = np.divide(jump_parameters[:, :, 2], jump_parameters[:, :, 1], out=np.full((n_branches, n_radii), np.nan), where=jump_parameters[:, :, 1] > 0)
 
     fig, axes = plt.subplots(1, 3, figsize=(16, 4))
 
@@ -575,84 +671,36 @@ def evaluate_anti_model(disp, num_harmonics=3, branch_idx=0, num_examples=6, exc
 
     axes[1].set_xlabel("Temporal residual difference")
     axes[1].set_ylabel("Probability density")
-    axes[1].set_title(f"Temporal differences, last {exclude_last} excluded")
+    axes[1].set_title(f"All branches, last {exclude_last} excluded")
 
-    axes[2].plot(circle_indices, branch_parameters[:, 1], "o-", label="normal std")
-    axes[2].plot(circle_indices, branch_parameters[:, 2], "o-", label="jump std")
-    unreliable_circle = np.flatnonzero(np.isfinite(branch_parameters[:, 1]) & ~branch_reliable)
-
-    if unreliable_circle.size > 0:
-        axes[2].scatter(unreliable_circle, branch_parameters[unreliable_circle, 2], marker="x", s=100, linewidths=2, color="black", label=f"unreliable: ratio < {min_std_ratio:g}")
-
+    ratio_cmap = plt.get_cmap("viridis").copy()
+    ratio_cmap.set_bad(color="lightgray")
+    ratio_image = axes[2].imshow(np.ma.masked_invalid(std_ratio), origin="lower", aspect="auto", vmin=1, vmax=max(5, np.nanpercentile(std_ratio, 95) if np.any(np.isfinite(std_ratio)) else 5), cmap=ratio_cmap)
     axes[2].set_xlabel("Circle")
-    axes[2].set_ylabel("Standard deviation")
-    axes[2].set_title(f"Circle-specific mixture parameters, branch {branch_idx}")
+    axes[2].set_ylabel("Branch")
+    axes[2].set_title(f"Jump std / normal std\nreliable fraction = {reliable_fraction:.3f}")
+    fig.colorbar(ratio_image, ax=axes[2], label="Standard-deviation ratio")
 
-    probability_axis = axes[2].twinx()
-    probability_axis.plot(circle_indices, branch_parameters[:, 0], "s--", color="tab:red", label="mixture jump probability")
-    probability_axis.set_ylabel("Mixture jump probability")
-    probability_axis.set_ylim(0, 1)
+    unreliable_branch, unreliable_circle = np.where(np.isfinite(std_ratio) & ~mixture_reliable)
+    axes[2].scatter(unreliable_circle, unreliable_branch, marker="x", color="red", s=40, linewidths=1.5, label=f"unreliable: ratio < {min_std_ratio:g}")
 
-    lines_1, labels_1 = axes[2].get_legend_handles_labels()
-    lines_2, labels_2 = probability_axis.get_legend_handles_labels()
-    axes[2].legend(lines_1 + lines_2, labels_1 + labels_2, loc="best")
+    if unreliable_branch.size > 0:
+        axes[2].legend(loc="best")
+
     fig.tight_layout()
     fig.savefig(distribution_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
-    branch_probability = temporal_jump_probability[:, branch_idx, :]
-    branch_valid = np.isfinite(branch_probability)
-    valid_count = np.sum(branch_valid, axis=1)
-    mean_probability = np.divide(np.nansum(branch_probability, axis=1), valid_count, out=np.full(n_t - 1, np.nan), where=valid_count > 0)
-    high_probability = branch_valid & (branch_probability >= jump_threshold)
-    synchronous_count = np.sum(high_probability, axis=1)
-    events = []
-
-    for circle in range(n_radii):
-        high_times = np.flatnonzero(high_probability[:, circle])
-
-        if high_times.size == 0:
-            continue
-
-        groups = []
-        current_group = [int(high_times[0])]
-
-        for time_idx in high_times[1:]:
-            if time_idx - current_group[-1] <= event_merge_gap:
-                current_group.append(int(time_idx))
-            else:
-                groups.append(current_group)
-                current_group = [int(time_idx)]
-
-        groups.append(current_group)
-
-        for group in groups:
-            start = group[0]
-            end = group[-1]
-            group_probability = branch_probability[group, circle]
-            peak_position = int(np.nanargmax(group_probability))
-            peak_time = group[peak_position]
-            peak_probability = branch_probability[peak_time, circle]
-            context_start = max(0, start - context_radius)
-            context_end = min(n_t - 2, end + context_radius)
-            context_values = branch_probability[context_start:context_end + 1, circle].copy()
-            context_values[start - context_start:end - context_start + 1] = np.nan
-            finite_context = context_values[np.isfinite(context_values)]
-            context_mean = np.mean(finite_context) if finite_context.size > 0 else np.nan
-            temporal_type = "isolated" if np.isfinite(context_mean) and context_mean < isolation_mean_threshold else "sustained"
-            max_synchronous_count = int(np.max(synchronous_count[start:end + 1]))
-            spatial_type = "global" if max_synchronous_count >= global_min_circles else "local"
-            events.append({"circle": circle, "start": start, "end": end, "peak_time": peak_time, "peak_probability": peak_probability, "context_mean": context_mean, "temporal_type": temporal_type, "spatial_type": spatial_type, "synchronous_count": max_synchronous_count})
-
+    flattened_probability = temporal_jump_probability.reshape(n_transitions, n_branches * n_radii)
     events.sort(key=lambda event: event["peak_probability"], reverse=True)
-
     selected_events = []
 
-    for event_type in [("local", "isolated"), ("global", "isolated"), ("local", "sustained"), ("global", "sustained")]:
-        matching_events = [event for event in events if event["spatial_type"] == event_type[0] and event["temporal_type"] == event_type[1]]
+    for spatial_type in spatial_names:
+        for temporal_type in temporal_names:
+            matching_events = [event for event in events if event["spatial_type"] == spatial_type and event["temporal_type"] == temporal_type]
 
-        if matching_events:
-            selected_events.append(matching_events[0])
+            if matching_events:
+                selected_events.append(matching_events[0])
 
     for event in events:
         if len(selected_events) >= num_examples:
@@ -662,67 +710,74 @@ def evaluate_anti_model(disp, num_harmonics=3, branch_idx=0, num_examples=6, exc
             selected_events.append(event)
 
     selected_events = selected_events[:num_examples]
-    fig = plt.figure(figsize=(13, 6 + 3 * max(len(selected_events), 1)))
-    grid = fig.add_gridspec(max(len(selected_events), 1) + 1, 2, height_ratios=[1.5] + [1] * max(len(selected_events), 1))
-
+    fig = plt.figure(figsize=(14, 7 + 3 * max(len(selected_events), 1)))
+    grid = fig.add_gridspec(max(len(selected_events), 1) + 1, 2, height_ratios=[1.7] + [1] * max(len(selected_events), 1))
     heatmap_axis = fig.add_subplot(grid[0, 0])
     heatmap_cmap = plt.get_cmap("magma").copy()
     heatmap_cmap.set_bad(color="lightgray")
-    heatmap = heatmap_axis.imshow(np.ma.masked_invalid(branch_probability), origin="lower", aspect="auto", vmin=0, vmax=1, cmap=heatmap_cmap)
-    heatmap_axis.set_xlabel("Circle")
+    heatmap = heatmap_axis.imshow(np.ma.masked_invalid(flattened_probability), origin="lower", aspect="auto", vmin=0, vmax=1, cmap=heatmap_cmap)
+    heatmap_axis.set_xlabel("Branch-circle index")
     heatmap_axis.set_ylabel("Time transition")
-    heatmap_axis.set_title(f"Temporal jump probability, branch {branch_idx}")
+    heatmap_axis.set_title("Temporal jump probability, all branches")
     fig.colorbar(heatmap, ax=heatmap_axis, label="Jump probability")
 
-    marker_map = {("local", "isolated"): ("o", "cyan"), ("global", "isolated"): ("s", "cyan"), ("local", "sustained"): ("o", "lime"), ("global", "sustained"): ("s", "lime")}
+    for branch in range(1, n_branches):
+        heatmap_axis.axvline(branch * n_radii - 0.5, color="white", linewidth=0.7, alpha=0.7)
+
+    heatmap_axis.set_xticks([branch * n_radii + (n_radii - 1) / 2 for branch in range(n_branches)])
+    heatmap_axis.set_xticklabels([f"B{branch}" for branch in range(n_branches)])
+
+    spatial_marker = {"segment-local": "o", "branch-wide": "s", "multi-branch global": "D"}
+    temporal_color = {"isolated": "cyan", "clustered": "deepskyblue", "embedded": "lime", "sustained": "yellow"}
 
     for event in selected_events:
-        marker, color = marker_map[(event["spatial_type"], event["temporal_type"])]
-        heatmap_axis.plot(event["circle"], event["peak_time"], marker=marker, markerfacecolor="none", markeredgecolor=color, markersize=8, markeredgewidth=1.8)
+        x_position = event["branch"] * n_radii + event["circle"]
+        heatmap_axis.plot(x_position, event["peak_time"], marker=spatial_marker[event["spatial_type"]], markerfacecolor="none", markeredgecolor=temporal_color[event["temporal_type"]], markersize=8, markeredgewidth=1.8)
 
+    time_axis = np.arange(n_transitions)
     mean_axis = fig.add_subplot(grid[0, 1])
-    transition_axis = np.arange(n_t - 1)
-    mean_axis.plot(transition_axis, mean_probability, color="tab:blue", label="mean probability")
+    mean_axis.plot(time_axis, overall_mean_probability, color="tab:blue", label="mean probability")
     mean_axis.axhline(jump_threshold, color="tab:red", linestyle="--", label=f"jump threshold = {jump_threshold:.2f}")
 
     if exclude_last > 0:
-        excluded_start = max(0, n_t - 1 - exclude_last)
-        mean_axis.axvspan(excluded_start, n_t - 2, color="gray", alpha=0.25, label="excluded")
+        mean_axis.axvspan(max(0, n_transitions - exclude_last), n_transitions - 1, color="gray", alpha=0.25, label="excluded")
 
     count_axis = mean_axis.twinx()
-    count_axis.step(transition_axis, synchronous_count, where="mid", color="tab:green", alpha=0.6, label="synchronous circles")
-    count_axis.axhline(global_min_circles, color="tab:green", linestyle=":", label=f"global threshold = {global_min_circles}")
-    count_axis.set_ylabel("Number of synchronous circles")
-    count_axis.set_ylim(0, max(n_radii, np.max(synchronous_count) + 1))
+    count_axis.step(time_axis, active_branch_count, where="mid", color="tab:green", label="active branches")
+    count_axis.step(time_axis, high_segment_count, where="mid", color="tab:orange", alpha=0.6, label="high-probability segments")
+    count_axis.axhline(2, color="tab:green", linestyle=":", label="multi-branch threshold")
+    count_axis.set_ylabel("Synchronous count")
+    count_axis.set_ylim(0, max(n_branches, np.max(high_segment_count)) + 1)
 
     mean_axis.set_xlabel("Time transition")
     mean_axis.set_ylabel("Mean jump probability")
     mean_axis.set_ylim(0, 1)
-    mean_axis.set_title("Mean probability and cross-circle synchrony")
+    mean_axis.set_title(f"All-branch probability\nlate/early ratio = {late_early_ratio:.3f}")
     lines_1, labels_1 = mean_axis.get_legend_handles_labels()
     lines_2, labels_2 = count_axis.get_legend_handles_labels()
     mean_axis.legend(lines_1 + lines_2, labels_1 + labels_2, loc="upper left")
 
     if selected_events:
-        time_axis = np.arange(n_t)
+        plot_time = np.arange(n_t)
 
         for row, event in enumerate(selected_events, start=1):
+            branch = event["branch"]
             circle = event["circle"]
             start = event["start"]
             end = event["end"]
             peak_time = event["peak_time"]
-            normal_std = jump_parameters[branch_idx, circle, 1]
-            jump_std = jump_parameters[branch_idx, circle, 2]
-            std_ratio = jump_std / max(normal_std, 1e-12)
+            normal_std = jump_parameters[branch, circle, 1]
+            jump_std = jump_parameters[branch, circle, 2]
+            ratio = jump_std / max(normal_std, 1e-12)
+            context_text = f"{event['context_mean']:.3f}" if np.isfinite(event["context_mean"]) else "nan"
             axis = fig.add_subplot(grid[row, :])
-            axis.plot(time_axis, disp[:, branch_idx, circle], label="disp")
-            axis.plot(time_axis, disp_smooth[:, branch_idx, circle], label="disp smooth")
+            axis.plot(plot_time, disp[:, branch, circle], label="disp")
+            axis.plot(plot_time, disp_smooth[:, branch, circle], label="disp smooth")
             axis.axvspan(start, end + 1, color="red", alpha=0.12)
             axis.axvline(peak_time, color="red", linestyle="--")
             axis.axvline(peak_time + 1, color="red", linestyle="--")
-            context_text = f"{event['context_mean']:.3f}" if np.isfinite(event["context_mean"]) else "nan"
             axis.set_ylabel("Normalized displacement")
-            axis.set_title(f"{event['spatial_type']} {event['temporal_type']} event: circle {circle}, transitions {start} → {end + 1}, peak {peak_time} → {peak_time + 1}, probability = {event['peak_probability']:.4f}, context mean = {context_text}, synchronous circles = {event['synchronous_count']}, std ratio = {std_ratio:.2f}")
+            axis.set_title(f"{event['spatial_type']} / {event['temporal_type']}: branch {branch}, circle {circle}, transitions {start} → {end + 1}, peak probability = {event['peak_probability']:.4f}, context mean = {context_text}, active branches = {event['active_branches']}, branch segments = {event['branch_segments']}, std ratio = {ratio:.2f}")
             axis.legend()
 
         axis.set_xlabel("Time point")
@@ -736,7 +791,7 @@ def evaluate_anti_model(disp, num_harmonics=3, branch_idx=0, num_examples=6, exc
     fig.savefig(jump_analysis_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
-    return disp_smooth, disp_residual, temporal_difference, temporal_jump_probability, jump_parameters
+    return disp_smooth, disp_residual, temporal_difference, temporal_jump_probability, jump_parameters, mixture_reliable, overall_mean_probability, active_branch_count, high_segment_count, frame_spatial_class, event_count, event_rate, summary_metrics
     
 
 @registerPipeline(name="WomersleyModeling")
@@ -784,8 +839,8 @@ class WomersleyModeling(ProcessPipeline):
         v_model, v_model_fft, C_n, Q_n, Tau_n = generate_harmonic_flow_profile(v_pulse_fft, segment_data, ratio_map)
 
         disp, anti_model = fit_antisymmetric_curve(dataset_x_antisymmetric, v_model, ratio_map)
-        disp_smooth, disp_residual, temporal_difference, temporal_jump_probability, jump_parameters = evaluate_anti_model(disp, branch_idx=0)
-
+        disp_smooth, disp_residual, temporal_difference, temporal_jump_probability, jump_parameters, mixture_reliable, overall_mean_probability, active_branch_count, high_segment_count, frame_spatial_class, jump_event_count, jump_event_rate, jump_summary_metrics = evaluate_anti_model(disp)
+        
         metrics: dict = {}
         metrics["dataset_x"] = np.asarray(dataset_x)
         metrics["dataset_x_symmetric"] = np.asarray(dataset_x_symmetric)
