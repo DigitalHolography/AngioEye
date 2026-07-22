@@ -454,28 +454,100 @@ def fit_antisymmetric_curve(dataset_x_antisymmetric, v_model, ratio_map):
     return disp, anti_model
 
 
-def evaluate_anti_model(dataset_x_antisymmetric, anti_model):
-    valid = np.isfinite(dataset_x_antisymmetric) & np.isfinite(anti_model)
-    count = np.sum(valid, axis=1)
-    anti_energy = np.sum(np.where(valid, dataset_x_antisymmetric**2, 0.0), axis=1)
-    residual_energy = np.sum(np.where(valid, (dataset_x_antisymmetric - anti_model) ** 2, 0.0), axis=1)
-    anti_energy = np.where(count >= 3, anti_energy, 0.0)
-    residual_energy = np.where(count >= 3, residual_energy, 0.0)
-    anti_r2 = np.zeros_like(anti_energy)
-    energy_valid = anti_energy > 0
-    anti_r2[energy_valid] = 1.0 - residual_energy[energy_valid] / anti_energy[energy_valid]
+def evaluate_anti_model(disp, num_harmonics=3, figure_path="anti_disp_distribution.png"):
+    n_t, n_branches, n_radii = disp.shape
+    segment_valid = np.any(np.isfinite(disp) & (disp != 0), axis=0)
+    disp_valid = np.isfinite(disp) & segment_valid[None, :, :]
+    phase = 2 * np.pi * np.arange(n_t) / n_t
+    design_matrix = np.column_stack([np.ones(n_t)] + [f(phase * n) for n in range(1, num_harmonics + 1) for f in (np.cos, np.sin)])
+    disp_smooth = np.zeros_like(disp)
+    disp_residual = np.zeros_like(disp)
 
-    def statistics(values, axis):
-        return np.nanmean(values, axis=axis), np.nanstd(values, axis=axis)
+    for branch in range(n_branches):
+        for circle in range(n_radii):
+            time_valid = disp_valid[:, branch, circle]
 
-    def jitter(values, axis):
-        return np.sqrt(np.nanmean(np.diff(values, axis=axis) ** 2, axis=axis))
+            if np.sum(time_valid) < design_matrix.shape[1]:
+                continue
 
-    spatial_r2_mean, spatial_r2_std = statistics(anti_r2, axis=2)
-    spatial_r2_jitter = jitter(anti_r2, axis=2)
+            coefficients = np.linalg.lstsq(design_matrix[time_valid], disp[time_valid, branch, circle], rcond=None)[0]
+            disp_smooth[:, branch, circle] = design_matrix @ coefficients
+            disp_residual[time_valid, branch, circle] = disp[time_valid, branch, circle] - disp_smooth[time_valid, branch, circle]
 
-    return anti_r2, anti_energy, residual_energy, spatial_r2_mean, spatial_r2_std, spatial_r2_jitter
+    residual_values = disp_residual[disp_valid]
+    temporal_difference = np.zeros((n_t - 1, n_branches, n_radii), dtype=float)
+    difference_valid = disp_valid[1:] & disp_valid[:-1]
+    raw_difference = np.diff(disp_residual, axis=0)
+    temporal_difference[difference_valid] = raw_difference[difference_valid]
+    difference_values = temporal_difference[difference_valid]
+    temporal_jump_probability = np.zeros_like(temporal_difference)
+    jump_probability = 0.0
+    normal_std = 0.0
+    jump_std = 0.0
 
+    if difference_values.size >= 10 and np.std(difference_values) > 0:
+        scale = np.std(difference_values)
+        normal_std = max(scale * 0.5, 1e-12)
+        jump_std = max(scale * 2.0, normal_std * 2)
+        jump_probability = 0.1
+
+        for _ in range(200):
+            normal_density = np.exp(-0.5 * (difference_values / normal_std) ** 2) / (np.sqrt(2 * np.pi) * normal_std)
+            jump_density = np.exp(-0.5 * (difference_values / jump_std) ** 2) / (np.sqrt(2 * np.pi) * jump_std)
+            denominator = (1 - jump_probability) * normal_density + jump_probability * jump_density
+            responsibility = np.divide(jump_probability * jump_density, denominator, out=np.zeros_like(difference_values), where=denominator > 0)
+            new_jump_probability = np.mean(responsibility)
+            new_normal_std = np.sqrt(np.sum((1 - responsibility) * difference_values**2) / max(np.sum(1 - responsibility), 1e-12))
+            new_jump_std = np.sqrt(np.sum(responsibility * difference_values**2) / max(np.sum(responsibility), 1e-12))
+
+            if new_normal_std > new_jump_std:
+                new_normal_std, new_jump_std = new_jump_std, new_normal_std
+                new_jump_probability = 1 - new_jump_probability
+
+            if np.allclose([jump_probability, normal_std, jump_std], [new_jump_probability, new_normal_std, new_jump_std], rtol=1e-6, atol=1e-8):
+                jump_probability, normal_std, jump_std = new_jump_probability, new_normal_std, new_jump_std
+                break
+
+            jump_probability = np.clip(new_jump_probability, 1e-6, 1 - 1e-6)
+            normal_std = max(new_normal_std, 1e-12)
+            jump_std = max(new_jump_std, normal_std)
+
+        normal_density = np.exp(-0.5 * (difference_values / normal_std) ** 2) / (np.sqrt(2 * np.pi) * normal_std)
+        jump_density = np.exp(-0.5 * (difference_values / jump_std) ** 2) / (np.sqrt(2 * np.pi) * jump_std)
+        denominator = (1 - jump_probability) * normal_density + jump_probability * jump_density
+        temporal_jump_probability[difference_valid] = np.divide(jump_probability * jump_density, denominator, out=np.zeros_like(difference_values), where=denominator > 0)
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+    if residual_values.size > 0:
+        axes[0].hist(residual_values, bins=60, density=True, alpha=0.7)
+
+    axes[0].set_xlabel("Normalized displacement residual")
+    axes[0].set_ylabel("Probability density")
+    axes[0].set_title("All-point residual distribution")
+
+    if difference_values.size > 0:
+        axes[1].hist(difference_values, bins=60, density=True, alpha=0.7, label="Data")
+
+        if normal_std > 0 and jump_std > 0:
+            x_plot = np.linspace(np.min(difference_values), np.max(difference_values), 500)
+            normal_curve = (1 - jump_probability) * np.exp(-0.5 * (x_plot / normal_std) ** 2) / (np.sqrt(2 * np.pi) * normal_std)
+            jump_curve = jump_probability * np.exp(-0.5 * (x_plot / jump_std) ** 2) / (np.sqrt(2 * np.pi) * jump_std)
+            axes[1].plot(x_plot, normal_curve + jump_curve, label="Gaussian mixture")
+            axes[1].plot(x_plot, normal_curve, linestyle="--", label="Normal component")
+            axes[1].plot(x_plot, jump_curve, linestyle="--", label="Jump component")
+            axes[1].legend()
+
+    axes[1].set_xlabel("Temporal residual difference")
+    axes[1].set_ylabel("Probability density")
+    axes[1].set_title("All-point jump distribution")
+    fig.tight_layout()
+    fig.savefig(figure_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+    jump_parameters = np.array([jump_probability, normal_std, jump_std])
+
+    return disp_smooth, disp_residual, temporal_difference, temporal_jump_probability, jump_parameters
 
 @registerPipeline(name="WomersleyModeling")
 class WomersleyModeling(ProcessPipeline):
@@ -522,7 +594,7 @@ class WomersleyModeling(ProcessPipeline):
         v_model, v_model_fft, C_n, Q_n, Tau_n = generate_harmonic_flow_profile(v_pulse_fft, segment_data, ratio_map)
 
         disp, anti_model = fit_antisymmetric_curve(dataset_x_antisymmetric, v_model, ratio_map)
-        anti_r2, anti_energy, residual_energy, spatial_r2_mean, spatial_r2_std, spatial_r2_jitter = evaluate_anti_model(dataset_x_antisymmetric, anti_model)
+        disp_smooth, disp_residual, temporal_difference, temporal_jump_probability, jump_parameters = evaluate_anti_model(disp)
 
         metrics: dict = {}
         metrics["dataset_x"] = np.asarray(dataset_x)
@@ -541,12 +613,6 @@ class WomersleyModeling(ProcessPipeline):
         metrics["Tau_n"] = np.asarray(Tau_n)
         metrics["disp"] = np.asarray(disp)
         metrics["anti_model"] = np.asarray(anti_model)
-        metrics["anti_r2"] = np.asarray(anti_r2)
-        metrics["anti_energy"] = np.asarray(anti_energy)
-        metrics["residual_energy"] = np.asarray(residual_energy)
-        metrics["spatial_r2_mean"] = np.asarray(spatial_r2_mean)
-        metrics["spatial_r2_std"] = np.asarray(spatial_r2_std)
-        metrics["spatial_r2_jitter"] = np.asarray(spatial_r2_jitter)
 
 
         return ProcessResult(metrics=metrics)
