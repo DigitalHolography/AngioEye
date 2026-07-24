@@ -5,7 +5,7 @@ from .core.base import ProcessPipeline, ProcessResult, registerPipeline, with_at
 from .lowrank_pulsatility_metrics import LowRankPulsatilityMetrics
 
 
-@registerPipeline(name="waveform_shape_metrics_denoised")
+@registerPipeline(name="waveform_shape_metrics_denoised_alternatives")
 class ArterialSegExample(ProcessPipeline):
     """
     Manuscript-aligned waveform-shape metrics on per-beat, per-branch,
@@ -26,15 +26,21 @@ class ArterialSegExample(ProcessPipeline):
 
     Notes
     -----
-    - The registered pipeline name is intentionally kept unchanged for backward
-      compatibility.
+    - Registered under its own name, distinct from "waveform_shape_metrics_denoised"
+      (waveform_shape_metrics_denoised.py, the untouched production reference), so
+      that pipeline stays the default and this one is only run when explicitly
+      selected. Previously this registered under the same name as the original and
+      silently shadowed it (whichever module pkgutil imported last won); that
+      collision is what this rename fixes.
     - Deprecated exploratory higher-harmonic rolloff/support and phase-organization
       metrics are no longer part of the canonical public metric set.
     """
 
     description = (
         "Manuscript-aligned waveform-shape metrics "
-        "(artery + vein; segment + aggregates + global)."
+        "(artery + vein; segment + aggregates + global) -- working copy with "
+        "graph-Laplacian/low-rank-SVD/Kalman denoiser alternatives "
+        "(.laplacian/.lowrank/.kalman) in addition to the original six-step chain."
     )
 
     # ----------------------------
