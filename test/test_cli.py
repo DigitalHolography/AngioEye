@@ -253,7 +253,7 @@ class CliWorkflowRequestTests(unittest.TestCase):
             )
             self.assertEqual((postprocess,), tuple(captured_requests[0].postprocesses))
 
-    def test_missing_postprocess_selection_runs_no_postprocesses(self) -> None:
+    def test_missing_postprocess_selection_uses_settings_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
             input_h5 = tmp_path / "sample_EF.h5"
@@ -265,6 +265,9 @@ class CliWorkflowRequestTests(unittest.TestCase):
             class _Settings:
                 def load_pipeline_visibility(self):
                     return {"waveform_shape_metrics": True}
+
+                def load_postprocess_visibility(self):
+                    return {"HTML summary": True}
 
             def _dispatch(request, _callbacks):
                 captured_requests.append(request)
@@ -294,7 +297,7 @@ class CliWorkflowRequestTests(unittest.TestCase):
             request = captured_requests[0]
             self.assertEqual(tmp_path, request.base_output_dir)
             self.assertEqual((pipeline,), tuple(request.pipelines))
-            self.assertEqual((), tuple(request.postprocesses))
+            self.assertEqual((postprocess,), tuple(request.postprocesses))
             self.assertFalse(request.persist_source)
             self.assertTrue(captured_requests[-1].persist_source)
 
