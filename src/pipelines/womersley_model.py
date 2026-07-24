@@ -683,6 +683,58 @@ def evaluate_anti_model(disp, num_harmonics=3, exclude_last=5, jump_threshold=0.
     create_anti_jump_animation(temporal_jump_probability, mixture_reliable, overall_mean_probability, active_branch_count, high_segment_count, frame_spatial_class, temporal_event_class, global_coherence, global_motion_class)
 
 
+def combine_gifs(gif_paths, output_path, columns=3):
+    from PIL import Image, ImageDraw
+
+    gifs = [Image.open(path) for path in gif_paths]
+    frame_count = min(gif.n_frames for gif in gifs)
+    frame_width = max(gif.width for gif in gifs)
+    frame_height = max(gif.height for gif in gifs)
+    label_height = 30
+    rows = int(np.ceil(len(gifs) / columns))
+    combined_frames = []
+
+    for frame_index in range(frame_count):
+        canvas = Image.new(
+            "RGB",
+            (
+                columns * frame_width,
+                rows * (frame_height + label_height),
+            ),
+            "white",
+        )
+        draw = ImageDraw.Draw(canvas)
+
+        for gif_index, (gif, path) in enumerate(zip(gifs, gif_paths)):
+            gif.seek(frame_index)
+            frame = gif.convert("RGB")
+            row, column = divmod(gif_index, columns)
+            x = column * frame_width
+            y = row * (frame_height + label_height)
+
+            canvas.paste(frame, (x, y + label_height))
+            draw.text(
+                (x + 10, y + 8),
+                Path(path).stem,
+                fill="black",
+            )
+
+        combined_frames.append(canvas)
+
+    duration = gifs[0].info.get("duration", 125)
+
+    combined_frames[0].save(
+        output_path,
+        save_all=True,
+        append_images=combined_frames[1:],
+        duration=duration,
+        loop=0,
+    )
+
+    for gif in gifs:
+        gif.close()
+
+
 @registerPipeline(name="WomersleyModeling")
 class WomersleyModeling(ProcessPipeline):
     description = "Womersley Modeling Pipeline"
@@ -747,21 +799,30 @@ class WomersleyModeling(ProcessPipeline):
         
         tuning_parameter = "context_radius"
         tuning_values = [2, 3, 5, 7, 10]
+        gif_paths = []
         
         for trial_index, tuning_value in enumerate(tuning_values, start=1):
             trial_parameters = anti_model_parameters.copy()
             trial_parameters[tuning_parameter] = tuning_value
         
             value_label = str(tuning_value).replace(".", "p")
-            trial_parameters["animation_path"] = (
+            animation_path = (
                 f"{input_stem}_trial_{trial_index:02d}_"
                 f"{tuning_parameter}_{value_label}.gif"
             )
+        
+            trial_parameters["animation_path"] = animation_path
+            gif_paths.append(animation_path)
         
             evaluate_anti_model(
                 disp,
                 **trial_parameters,
             )
+        
+        combine_gifs(
+            gif_paths,
+            output_path=f"{input_stem}_{tuning_parameter}_comparison.gif",
+        )
         
         metrics: dict = {}
         metrics["dataset_x"] = np.asarray(dataset_x)
