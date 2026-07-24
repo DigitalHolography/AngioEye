@@ -40,7 +40,7 @@ from scipy.stats import spearmanr
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from flicker_epoch_report import CANDIDATE_METRICS, collect_epoch_data  # noqa: E402
-from flicker_stats import (  # noqa: E402
+from postprocess.utils.flicker_stats import (  # noqa: E402
     EPOCH_ORDER,
     cliffs_delta,
     confound_controlled_replication,

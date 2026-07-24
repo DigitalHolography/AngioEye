@@ -1,21 +1,25 @@
 """
 Statistical testing primitives for the low-rank flicker paper's replication
 standard (manuscript Sec. V): per-epoch nonparametric tests (Kruskal-Wallis,
-Holm-adjusted pairwise Mann-Whitney U, Cliff's delta, pooled-baseline test)
-and the confound-controlled replication check (mean/median beat-combination
-x heart-rate-outlier-exclusion/beat-period-regression, 4 combinations, a
-candidate is retained only if all four agree).
+Holm-adjusted pairwise Mann-Whitney U, Cliff's delta, pooled-baseline test),
+the confound-controlled replication check (mean/median beat-combination x
+heart-rate-outlier-exclusion/beat-period-regression, 4 combinations, a
+candidate is retained only if all four agree), and the three-check confound
+battery (raw separability -> V.B replication -> residualization against an
+arbitrary control variable) that flicker-detection analysis scripts have
+been re-implementing by hand, one at a time, since the project started.
 
-Not a pytest test -- a library of functions meant to be imported by a
-reporting script (the way denoising_benchmark.py is imported by
-flicker_denoising_separability.py). Not auto-collected by pytest (filename
-doesn't match test_*.py).
+Promoted from test/flicker_stats.py (an exploratory library module) to a
+real postprocess utility, following the same convention as
+postprocess/utils/stats_groups_comparison.py: pure functions, no I/O, meant
+to be called both from a registered postprocess step
+(flicker_replication_pipeline.py) and directly from analysis scripts.
 """
 
 from __future__ import annotations
 
 import numpy as np
-from scipy.stats import kruskal, mannwhitneyu
+from scipy.stats import kruskal, linregress, mannwhitneyu
 
 EPOCH_ORDER = ["baseline1", "flicker", "baseline2"]
 
@@ -74,6 +78,22 @@ def holm_adjust(p_values: list[float]) -> list[float]:
         running_max = max(running_max, (n - rank) * p[idx])
         adjusted[idx] = min(running_max, 1.0)
     return adjusted.tolist()
+
+
+def mann_whitney_and_auc(baseline: np.ndarray, flicker: np.ndarray) -> tuple[float, float]:
+    """
+    Raw (no confound control) two-sided Mann-Whitney U test between pooled-
+    baseline and flicker acquisition-level values, plus its AUC-equivalent
+    (U / (n_baseline * n_flicker)). This is check 1 of run_confound_battery
+    below -- previously reimplemented independently in build_qc_control_table.py,
+    check_denoising_correction_magnitude.py, and check_bilateral_replication_260720_OSS.py.
+    """
+    baseline = _clean(baseline)
+    flicker = _clean(flicker)
+    if baseline.size < 2 or flicker.size < 2:
+        return np.nan, np.nan
+    stat, p = mannwhitneyu(flicker, baseline, alternative="two-sided")
+    return float(p), float(stat / (baseline.size * flicker.size))
 
 
 def epoch_group_tests(epoch_values: dict[str, np.ndarray]) -> dict:
@@ -219,3 +239,98 @@ def confound_controlled_replication(
         "combinations": combos,
         "retained": bool(significant and consistent_direction),
     }
+
+
+def residualize_against_control(
+    values: np.ndarray, control: np.ndarray
+) -> tuple[np.ndarray, float]:
+    """
+    Linear-regress `values` on `control` (pooled across all acquisitions, any
+    epoch) and return the residuals plus the fit's R^2. The generic form of
+    residualize_against_beat_period's confound-removal step, usable against
+    any control variable (total_pulsatile_rms, valid_fraction,
+    quality_score, ...), not just beat period -- this is what every
+    check_*_vs_*.py / check_*_confounds.py script in this project's history
+    did by hand for one specific (metric, control variable) pair at a time.
+    """
+    values = np.asarray(values, dtype=float)
+    control = np.asarray(control, dtype=float)
+    mask = np.isfinite(values) & np.isfinite(control)
+    if np.sum(mask) < 3:
+        return values.copy(), np.nan
+    fit = linregress(control[mask], values[mask])
+    residuals = values - (fit.slope * control + fit.intercept)
+    return residuals, float(fit.rvalue**2)
+
+
+def run_confound_battery(
+    epoch_native_values: dict[str, np.ndarray],
+    *,
+    beatwise_values: dict[str, list[np.ndarray]] | None = None,
+    beat_periods: dict[str, list[float]] | None = None,
+    control_values: dict[str, np.ndarray] | None = None,
+    control_name: str = "control",
+) -> dict:
+    """
+    The three-check confound battery this project has run by hand, with
+    small variations, in roughly fifteen separate analysis scripts
+    (build_qc_control_table.py's Check 1/3, check_peak_width_qc_confounds.py,
+    check_denoising_correction_magnitude.py,
+    check_bilateral_replication_260720_OSS.py, and others):
+
+      1. Raw pooled-baseline-vs-flicker Mann-Whitney/AUC on the metric's
+         native (already beat-combined) acquisition-level value.
+      2. Sec. V.B 4-combination heart-rate confound-controlled replication
+         (confound_controlled_replication), if per-beat values and beat
+         periods are supplied.
+      3. Residualization against an arbitrary control variable (e.g.
+         total_pulsatile_rms), re-testing the raw Mann-Whitney on what's
+         left, if control_values are supplied.
+
+    epoch_native_values[epoch] is the metric's one-value-per-acquisition
+    array for that epoch (already reduced over beats/vessel-location,
+    matching the project's "native" convention -- e.g.
+    lowrank_pulsatility_metrics.py's acq["A1"]). All other dict arguments
+    are optional and use the same {epoch: ...} shape; omit an argument to
+    skip that check rather than passing an empty dict.
+    """
+    b1 = _clean(epoch_native_values.get("baseline1", []))
+    b2 = _clean(epoch_native_values.get("baseline2", []))
+    fl = _clean(epoch_native_values.get("flicker", []))
+    pooled_baseline = np.concatenate([b1, b2])
+    raw_p, raw_auc = mann_whitney_and_auc(pooled_baseline, fl)
+
+    result: dict = {"raw_p": raw_p, "raw_auc": raw_auc}
+
+    if beatwise_values is not None and beat_periods is not None:
+        result["vb_report"] = confound_controlled_replication(beatwise_values, beat_periods)
+
+    if control_values is not None:
+        all_values = np.concatenate(
+            [np.asarray(epoch_native_values.get(epoch, []), dtype=float) for epoch in EPOCH_ORDER]
+        )
+        all_control = np.concatenate(
+            [np.asarray(control_values.get(epoch, []), dtype=float) for epoch in EPOCH_ORDER]
+        )
+        residuals, r_squared = residualize_against_control(all_values, all_control)
+
+        resid_by_epoch: dict[str, np.ndarray] = {}
+        offset = 0
+        for epoch in EPOCH_ORDER:
+            n = len(np.asarray(epoch_native_values.get(epoch, []), dtype=float))
+            resid_by_epoch[epoch] = residuals[offset : offset + n]
+            offset += n
+
+        resid_pooled_baseline = np.concatenate(
+            [_clean(resid_by_epoch.get("baseline1", [])), _clean(resid_by_epoch.get("baseline2", []))]
+        )
+        resid_p, resid_auc = mann_whitney_and_auc(resid_pooled_baseline, _clean(resid_by_epoch.get("flicker", [])))
+        result["residualized"] = {
+            "control_name": control_name,
+            "r_squared": r_squared,
+            "p": resid_p,
+            "auc": resid_auc,
+            "survives": bool(np.isfinite(resid_p) and resid_p < 0.05),
+        }
+
+    return result

@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import os
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
@@ -66,7 +67,7 @@ def iter_grouped_h5_files(
     batch_root_path = Path(batch_root)
     records: list[GroupedH5File] = []
 
-    for root, _, files in batch_root_path.walk():
+    for root, _, files in os.walk(batch_root_path):
         h5_files = sorted(
             file_name
             for file_name in files
