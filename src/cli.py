@@ -249,7 +249,6 @@ def run_cli(
                 ),
             ),
             zip_output_dir=zip_output_dir,
-            output_filename_for_run=lambda _path, _inputs: None,
         )
         dispatch_result = dispatch_workflow(
             request,

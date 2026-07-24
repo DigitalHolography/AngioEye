@@ -7,6 +7,8 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from input_output import (
+    default_h5_output_dir,
+    default_h5_output_filename,
     found_status_text,
     h5_output_dir,
     holo_input_status,
@@ -174,7 +176,6 @@ class RunTabController(ViewController):
                     output_options=self.collect_output_options(),
                 ),
                 zip_output_dir=self.zip_output_dir,
-                output_filename_for_run=self.minimal_output_filename_for_run,
             )
             dispatch_result = self.dispatch_workflow(request, self.workflow_callbacks())
         except WorkflowInputError as exc:
@@ -298,6 +299,8 @@ class RunTabController(ViewController):
     def default_output_artifact_name(self, input_path: Path) -> str:
         if input_path.is_file() and input_path.suffix.lower() == ".zip":
             return self.default_archive_name(input_path)
+        if input_path.is_file() and is_hdf5_path(input_path):
+            return default_h5_output_filename(input_path)
         return f"{self.default_output_stem(input_path)}.h5"
 
     def apply_input_defaults(self, input_path: Path) -> None:
@@ -307,6 +310,8 @@ class RunTabController(ViewController):
         self.app.holo_input_var.set("")
         if input_path.is_file() and input_path.suffix.lower() == ".zip":
             output_dir = input_path.parent / self.default_output_stem(input_path)
+        elif input_path.is_file() and is_hdf5_path(input_path):
+            output_dir = default_h5_output_dir(input_path)
         else:
             output_dir = input_path if input_path.is_dir() else input_path.parent
 
@@ -588,23 +593,6 @@ class RunTabController(ViewController):
     def _minimal_holo_status_text(self, fallback: str) -> str:
         status = (self.app.holo_status_var.get() or "").strip()
         return status or fallback
-
-    def minimal_output_filename_for_run(
-        self,
-        data_path: Path,
-        inputs: Sequence[Path],
-    ) -> str | None:
-        if self.app.ui_mode != "minimal":
-            return None
-        if self.app.batch_zip_var.get():
-            return None
-        if len(inputs) != 1:
-            return None
-        if not data_path.is_file():
-            return None
-        if not is_hdf5_path(data_path):
-            return None
-        return self.default_output_artifact_name(data_path)
 
     def zip_output_dir(
         self,

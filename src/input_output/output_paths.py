@@ -1,9 +1,46 @@
+from collections.abc import Sequence
 from pathlib import Path
+
+from .hdf5_schema import is_hdf5_path
 
 H5_OUTPUT_DIRNAME = "h5"
 PNG_OUTPUT_DIRNAME = "png"
 HTML_OUTPUT_DIRNAME = "html"
 APP_SUFFIXES = ("HD", "DV", "EF", "AE")
+
+
+def default_h5_output_dir(path: str | Path) -> Path:
+    """Return the default output root for a selected HDF5 input."""
+    try:
+        return app_output_dir(path, "AE")
+    except ValueError:
+        return Path(path).expanduser().parent
+
+
+def default_h5_output_filename(path: str | Path) -> str:
+    """Return the standard AE artifact name for a single HDF5 input."""
+    try:
+        stem = dataset_stem_from_path(path)
+    except ValueError:
+        stem = Path(path).expanduser().stem
+        if stem.casefold().endswith("_ef"):
+            stem = stem[:-3]
+    return f"{stem or 'output'}_AE.h5"
+
+
+def default_output_filename_for_run(
+    data_path: str | Path,
+    inputs: Sequence[Path],
+) -> str | None:
+    """Return the single-file AE name, leaving batch naming to the engine."""
+    data_path_obj = Path(data_path).expanduser()
+    if (
+        len(inputs) == 1
+        and data_path_obj.is_file()
+        and is_hdf5_path(data_path_obj)
+    ):
+        return default_h5_output_filename(inputs[0])
+    return None
 
 
 def h5_output_dir(output_root: str | Path) -> Path:

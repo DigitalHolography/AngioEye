@@ -5,7 +5,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from input_output import InputPlan, prepare_run_input, prepare_run_inputs
+from input_output import (
+    InputPlan,
+    default_h5_output_dir,
+    default_output_filename_for_run,
+    is_hdf5_path,
+    prepare_run_input,
+    prepare_run_inputs,
+)
 
 from ._postprocess_requirements import (
     missing_required_option_errors,
@@ -101,7 +108,7 @@ def build_workflow_request(
     state: WorkflowRequestState,
     *,
     zip_output_dir: ZipOutputDir,
-    output_filename_for_run: OutputFilenameResolver,
+    output_filename_for_run: OutputFilenameResolver = default_output_filename_for_run,
     cwd: Callable[[], Path] = Path.cwd,
 ) -> WorkflowRunRequest:
     input_selection = state.input_selection
@@ -191,7 +198,11 @@ def resolve_workflow_output_dir(
     if input_plan.kind == "zip":
         default_dir = input_path.parent / f"{input_path.stem}_angioeye"
     elif input_plan.kind == "file" and input_path.is_file():
-        default_dir = input_path.parent
+        default_dir = (
+            default_h5_output_dir(input_path)
+            if is_hdf5_path(input_path)
+            else input_path.parent
+        )
     else:
         default_dir = input_path
     default_dir.mkdir(parents=True, exist_ok=True)
