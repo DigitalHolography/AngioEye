@@ -38,7 +38,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import h5py  # noqa: E402
 
-from denoising_benchmark import CANDIDATES, ArterialSegExample  # noqa: E402
+from denoising_benchmark import ArterialSegExample  # noqa: E402
+from postprocess.utils.denoiser_candidates import CANDIDATES  # noqa: E402
 from pipelines.lowrank_pulsatility_metrics import LowRankPulsatilityMetrics  # noqa: E402
 
 RAW_SEGMENT_PATH = "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegment/value"

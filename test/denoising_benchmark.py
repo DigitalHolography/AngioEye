@@ -39,6 +39,7 @@ import h5py  # noqa: E402
 from pipelines.waveform_shape_metrics_denoised_alternatives import (  # noqa: E402
     ArterialSegExample,
 )
+from postprocess.utils.denoiser_candidates import CANDIDATES  # noqa: E402
 
 RAW_SEGMENT_PATH = "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegment/value"
 
@@ -559,18 +560,10 @@ def cmd_sweep_modes(args: argparse.Namespace) -> None:
 # being the exact clean waveform before noise injection, which no real
 # acquisition can give us.
 
-# Each accessor takes the pipeline instance and returns the bound method to
-# call with a v_block. Laplacian/lowrank/Kalman live on nested denoiser
-# objects (pipeline.laplacian / .lowrank / .kalman) rather than directly on
-# the pipeline.
-CANDIDATES = [
-    ("no_denoising (baseline)", None),
-    ("six_step_chain", lambda p: p._denoise_segment_block),
-    ("graph_laplacian", lambda p: p.laplacian._denoise_segment_block),
-    ("lowrank_svd", lambda p: p.lowrank._denoise_segment_block),
-    ("kalman_beat_axis", lambda p: p.kalman._denoise_segment_block_beat_axis),
-    ("kalman_radius_axis", lambda p: p.kalman._denoise_segment_block_radius_axis),
-]
+# CANDIDATES (name, accessor) list now lives in
+# postprocess/utils/denoiser_candidates.py, imported above, so
+# flicker_denoising_separability.py and any other consumer share the same
+# single source of truth instead of reaching into this script for it.
 
 
 def synthetic_pulse_shape(n_time: int) -> np.ndarray:

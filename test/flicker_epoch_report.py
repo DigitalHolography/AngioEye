@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import h5py  # noqa: E402
 
-from flicker_stats import EPOCH_ORDER, confound_controlled_replication  # noqa: E402
+from postprocess.utils.flicker_stats import EPOCH_ORDER, confound_controlled_replication  # noqa: E402
 from pipelines.canonical_mode_shape_metrics import CanonicalModeShapeMetrics  # noqa: E402
 from pipelines.lowrank_pulsatility_metrics import LowRankPulsatilityMetrics  # noqa: E402
 
