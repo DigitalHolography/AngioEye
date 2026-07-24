@@ -637,9 +637,8 @@ def evaluate_anti_model(disp, num_harmonics=3, num_examples=8, exclude_last=5, j
         denominator = (1.0 - jump_probability) * normal_density + jump_probability * jump_density
         temporal_jump_probability[:fitting_end, branch, circle] = np.divide(jump_probability * jump_density, denominator, out=np.full_like(values, np.nan), where=denominator > 0)
 
-    probability_valid = np.isfinite(temporal_jump_probability)
-    high_probability = probability_valid & (temporal_jump_probability >= jump_threshold)
-    valid_count = np.sum(probability_valid, axis=(1, 2))
+    high_probability = temporal_jump_probability >= jump_threshold
+    valid_count = np.sum(np.isfinite(temporal_jump_probability), axis=(1, 2))
     overall_mean_probability = np.divide(np.nansum(temporal_jump_probability, axis=(1, 2)), valid_count, out=np.full(n_transitions, np.nan), where=valid_count > 0)
     branch_high_count = np.sum(high_probability, axis=2)
     active_branch_count = np.sum(branch_high_count > 0, axis=1)
@@ -650,10 +649,10 @@ def evaluate_anti_model(disp, num_harmonics=3, num_examples=8, exclude_last=5, j
     frame_spatial_class[active_branch_count >= 2] = 3
 
     normal_std = fitted_parameters[:, :, 1]
-    standardized_difference = np.divide(temporal_difference, normal_std[None, :, :], out=np.full_like(temporal_difference, np.nan), where=normal_std[None, :, :] > 0)
-    flagged_standardized_difference = np.where(high_probability, standardized_difference, np.nan)
-    signed_sum = np.abs(np.nansum(flagged_standardized_difference, axis=(1, 2)))
-    absolute_sum = np.nansum(np.abs(flagged_standardized_difference), axis=(1, 2))
+    normalized_difference = np.divide(temporal_difference, normal_std[None, :, :], out=np.full_like(temporal_difference, np.nan), where=normal_std[None, :, :] > 0)
+    flagged_normalized_difference = np.where(high_probability, normalized_difference, np.nan)
+    signed_sum = np.abs(np.nansum(flagged_normalized_difference, axis=(1, 2)))
+    absolute_sum = np.nansum(np.abs(flagged_normalized_difference), axis=(1, 2))
     global_coherence = np.divide(signed_sum, absolute_sum, out=np.full(n_transitions, np.nan), where=absolute_sum > 0)
     global_motion_class = np.zeros(n_transitions, dtype=int)
     global_frame = frame_spatial_class == 3
@@ -756,7 +755,7 @@ def evaluate_anti_model(disp, num_harmonics=3, num_examples=8, exclude_last=5, j
     usable_transitions = max(fitting_end, 1)
     event_denominator = max(reliable_count * usable_transitions, 1)
     event_rate = 100.0 * event_count / event_denominator
-    probability_point_count = int(np.sum(probability_valid))
+    probability_point_count = int(np.sum(valid_count))
     high_probability_fraction = np.sum(high_probability) / max(probability_point_count, 1)
     valid_frame = valid_count > 0
     valid_frame_count = max(int(np.sum(valid_frame)), 1)
@@ -917,7 +916,6 @@ def evaluate_anti_model(disp, num_harmonics=3, num_examples=8, exclude_last=5, j
     create_anti_jump_animation(temporal_jump_probability, mixture_reliable, overall_mean_probability, active_branch_count, high_segment_count, frame_spatial_class, temporal_event_class, global_coherence, global_motion_class, jump_threshold=jump_threshold, coherence_threshold=coherence_threshold, animation_path=animation_path, fps=animation_fps)
 
     return disp_smooth, disp_residual, temporal_difference, temporal_jump_probability, fitted_parameters, mixture_reliable, overall_mean_probability, active_branch_count, high_segment_count, frame_spatial_class, temporal_event_class, global_coherence, global_motion_class, event_count, global_direction_event_count, event_rate, summary_metrics
-
 
 
 @registerPipeline(name="WomersleyModeling")
