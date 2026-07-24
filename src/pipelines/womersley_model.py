@@ -581,7 +581,7 @@ def evaluate_anti_model(disp, num_harmonics=3, num_examples=8, exclude_last=5, j
             return None
 
         normal_std = max(0.5 * scale, 1e-12)
-        jump_std = max(2.0 * scale, 2.0 * normal_std)
+        jump_std = max(1.5 * scale, 1e-12)
         jump_probability = 0.1
 
         for _ in range(200):
