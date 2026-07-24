@@ -730,8 +730,38 @@ class WomersleyModeling(ProcessPipeline):
         disp, anti_model = fit_antisymmetric_curve(dataset_x_antisymmetric, v_model, ratio_map)
 
         input_stem = Path(h5file.filename).stem
-        animation_path = f"{input_stem}_anti_disp_jump_animation.gif"
-        evaluate_anti_model(disp, animation_path=animation_path)
+
+        anti_model_parameters = {
+            "num_harmonics": 3,
+            "exclude_last": 5,
+            "jump_threshold": 0.9,
+            "isolation_mean_threshold": 0.3,
+            "context_radius": 5,
+            "event_merge_gap": 3,
+            "max_isolated_duration": 2,
+            "min_std_ratio": 2.0,
+            "normal_std_floor_fraction": 0.25,
+            "coherence_threshold": 0.7,
+            "animation_fps": 8,
+        }
+        
+        tuning_parameter = "context_radius"
+        tuning_values = [2, 3, 5, 7, 10]
+        
+        for trial_index, tuning_value in enumerate(tuning_values, start=1):
+            trial_parameters = anti_model_parameters.copy()
+            trial_parameters[tuning_parameter] = tuning_value
+        
+            value_label = str(tuning_value).replace(".", "p")
+            trial_parameters["animation_path"] = (
+                f"{input_stem}_trial_{trial_index:02d}_"
+                f"{tuning_parameter}_{value_label}.gif"
+            )
+        
+            evaluate_anti_model(
+                disp,
+                **trial_parameters,
+            )
         
         metrics: dict = {}
         metrics["dataset_x"] = np.asarray(dataset_x)
