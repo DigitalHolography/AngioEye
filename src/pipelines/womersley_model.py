@@ -447,8 +447,8 @@ def fit_antisymmetric_curve(dataset_x_antisymmetric, v_model, ratio_map):
                 disp[t_idx, branch, circle] = delta
                 anti_model[t_idx, :, branch, circle] = -delta * gradient_profile
 
-    disp_scale = np.nanmax(np.abs(disp), axis=0, keepdims=True)
-    disp = disp / disp_scale
+    disp_scale = np.max(np.where(np.isfinite(disp), np.abs(disp), 0.0), axis=0, keepdims=True)
+    disp = np.divide(disp, disp_scale, out=np.full_like(disp, np.nan), where=disp_scale > 0)
 
     return disp, anti_model
 
