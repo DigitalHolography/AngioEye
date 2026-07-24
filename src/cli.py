@@ -38,6 +38,7 @@ from pathlib import Path
 from app_settings import (
     AppSettingsStore,
     normalize_pipeline_visibility,
+    normalize_postprocess_visibility,
 )
 from pipelines import PipelineDescriptor, load_pipeline_catalog
 from postprocess import (
@@ -225,6 +226,12 @@ def run_cli(
                 normalize_visibility=normalize_pipeline_visibility,
             )
         selected_postprocess_names = _selected_names(postprocess_file)
+        if not postprocess_file:
+            selected_postprocess_names = _default_selected_names(
+                postprocess_registry,
+                visibility_loader=settings_store.load_postprocess_visibility,
+                normalize_visibility=normalize_postprocess_visibility,
+            )
         work_selection = resolve_work_selection(
             selected_pipeline_names,
             pipeline_registry,
@@ -249,7 +256,6 @@ def run_cli(
                 ),
             ),
             zip_output_dir=zip_output_dir,
-            output_filename_for_run=lambda _path, _inputs: None,
         )
         dispatch_result = dispatch_workflow(
             request,
