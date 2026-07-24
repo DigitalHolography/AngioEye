@@ -572,9 +572,6 @@ def evaluate_anti_model(disp, num_harmonics=3, num_examples=8, exclude_last=5, j
         return np.exp(-0.5 * (values / std) ** 2) / (np.sqrt(2 * np.pi) * std)
 
     def fit_gaussian_mixture(values):
-        if values.size < 10:
-            return None
-
         scale = np.std(values)
 
         if not np.isfinite(scale) or scale <= 1e-12:
@@ -611,29 +608,29 @@ def evaluate_anti_model(disp, num_harmonics=3, num_examples=8, exclude_last=5, j
 
         return jump_probability, normal_std, jump_std
 
-    raw_jump_parameters = np.full((n_branches, n_radii, 3), np.nan, dtype=float)
+    raw_parameters = np.full((n_branches, n_radii, 3), np.nan, dtype=float)
 
     for branch, circle in zip(valid_branch, valid_circle):
         parameters = fit_gaussian_mixture(temporal_difference[:fitting_end, branch, circle])
 
         if parameters is not None:
-            raw_jump_parameters[branch, circle] = parameters
+            raw_parameters[branch, circle] = parameters
 
-    raw_normal_std = raw_jump_parameters[:, :, 1]
-    raw_jump_std = raw_jump_parameters[:, :, 2]
+    raw_normal_std = raw_parameters[:, :, 1]
+    raw_jump_std = raw_parameters[:, :, 2]
     raw_std_ratio = np.divide(raw_jump_std, raw_normal_std, out=np.full((n_branches, n_radii), np.nan), where=raw_normal_std > 0)
     preliminary_reliable = np.isfinite(raw_std_ratio) & (raw_std_ratio >= min_std_ratio)
     reference_values = raw_normal_std[preliminary_reliable]
     normal_std_reference = np.median(reference_values) if reference_values.size > 0 else np.nan
     normal_std_floor = normal_std_floor_fraction * normal_std_reference if np.isfinite(normal_std_reference) else 0.0
-    jump_parameters = raw_jump_parameters.copy()
-    jump_parameters[:, :, 1] = np.maximum(jump_parameters[:, :, 1], normal_std_floor)
-    regularized_std_ratio = np.divide(jump_parameters[:, :, 2], jump_parameters[:, :, 1], out=np.full((n_branches, n_radii), np.nan), where=jump_parameters[:, :, 1] > 0)
+    fitted_parameters = raw_parameters.copy()
+    fitted_parameters[:, :, 1] = np.maximum(fitted_parameters[:, :, 1], normal_std_floor)
+    regularized_std_ratio = np.divide(fitted_parameters[:, :, 2], fitted_parameters[:, :, 1], out=np.full((n_branches, n_radii), np.nan), where=fitted_parameters[:, :, 1] > 0)
     mixture_reliable = np.isfinite(regularized_std_ratio) & (regularized_std_ratio >= min_std_ratio)
     reliable_branch, reliable_circle = np.where(mixture_reliable)
 
     for branch, circle in zip(reliable_branch, reliable_circle):
-        jump_probability, normal_std, jump_std = jump_parameters[branch, circle]
+        jump_probability, normal_std, jump_std = fitted_parameters[branch, circle]
         values = temporal_difference[:fitting_end, branch, circle]
         normal_density = gaussian_density(values, normal_std)
         jump_density = gaussian_density(values, jump_std)
@@ -652,7 +649,7 @@ def evaluate_anti_model(disp, num_harmonics=3, num_examples=8, exclude_last=5, j
     frame_spatial_class[np.max(branch_high_count, axis=1) >= 2] = 2
     frame_spatial_class[active_branch_count >= 2] = 3
 
-    normal_std = jump_parameters[:, :, 1]
+    normal_std = fitted_parameters[:, :, 1]
     standardized_difference = np.divide(temporal_difference, normal_std[None, :, :], out=np.full_like(temporal_difference, np.nan), where=normal_std[None, :, :] > 0)
     flagged_standardized_difference = np.where(high_probability, standardized_difference, np.nan)
     signed_sum = np.abs(np.nansum(flagged_standardized_difference, axis=(1, 2)))
@@ -755,7 +752,7 @@ def evaluate_anti_model(disp, num_harmonics=3, num_examples=8, exclude_last=5, j
             global_direction_event_count[direction_idx, temporal_idx] += 1
 
     reliable_count = int(np.sum(mixture_reliable))
-    fitted_count = int(np.sum(np.all(np.isfinite(jump_parameters), axis=2)))
+    fitted_count = int(np.sum(np.all(np.isfinite(fitted_parameters), axis=2)))
     usable_transitions = max(fitting_end, 1)
     event_denominator = max(reliable_count * usable_transitions, 1)
     event_rate = 100.0 * event_count / event_denominator
@@ -890,8 +887,8 @@ def evaluate_anti_model(disp, num_harmonics=3, num_examples=8, exclude_last=5, j
             start = event["start"]
             end = event["end"]
             peak_time = event["peak_time"]
-            normal_std = jump_parameters[branch, circle, 1]
-            jump_std = jump_parameters[branch, circle, 2]
+            normal_std = fitted_parameters[branch, circle, 1]
+            jump_std = fitted_parameters[branch, circle, 2]
             ratio = jump_std / max(normal_std, 1e-12)
             context_text = f"{event['context_mean']:.3f}" if np.isfinite(event["context_mean"]) else "nan"
             coherence_text = f"{event['global_coherence']:.3f}" if np.isfinite(event["global_coherence"]) else "nan"
@@ -919,7 +916,8 @@ def evaluate_anti_model(disp, num_harmonics=3, num_examples=8, exclude_last=5, j
 
     create_anti_jump_animation(temporal_jump_probability, mixture_reliable, overall_mean_probability, active_branch_count, high_segment_count, frame_spatial_class, temporal_event_class, global_coherence, global_motion_class, jump_threshold=jump_threshold, coherence_threshold=coherence_threshold, animation_path=animation_path, fps=animation_fps)
 
-    return disp_smooth, disp_residual, temporal_difference, temporal_jump_probability, jump_parameters, mixture_reliable, overall_mean_probability, active_branch_count, high_segment_count, frame_spatial_class, temporal_event_class, global_coherence, global_motion_class, event_count, global_direction_event_count, event_rate, summary_metrics
+    return disp_smooth, disp_residual, temporal_difference, temporal_jump_probability, fitted_parameters, mixture_reliable, overall_mean_probability, active_branch_count, high_segment_count, frame_spatial_class, temporal_event_class, global_coherence, global_motion_class, event_count, global_direction_event_count, event_rate, summary_metrics
+
 
 
 @registerPipeline(name="WomersleyModeling")
