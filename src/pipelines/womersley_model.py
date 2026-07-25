@@ -453,7 +453,7 @@ def fit_antisymmetric_curve(dataset_x_antisymmetric, v_model, ratio_map):
     return disp, anti_model
 
 
-def evaluate_anti_model(disp, num_harmonics=3, exclude_last=5, jump_threshold=0.9, isolation_mean_threshold=0.3, context_radius=5, event_merge_gap=3, max_isolated_duration=2, min_std_ratio=2.0, normal_std_floor_fraction=0.25, coherence_threshold=0.7, animation_fps=8, animation_path="anti_disp_jump_animation.gif"):
+def evaluate_anti_model(disp, num_harmonics=3, exclude_last=5, jump_threshold=0.9, min_std_ratio=2.0, normal_std_floor_fraction=0.25, coherence_threshold=0.7, animation_fps=8, animation_path="anti_disp_jump_animation.gif"):
     n_t, n_branches, n_radii = disp.shape
     n_transitions = n_t - 1
 
@@ -554,39 +554,7 @@ def evaluate_anti_model(disp, num_harmonics=3, exclude_last=5, jump_threshold=0.
 
         return high_probability, overall_mean_probability, active_branch_count, high_segment_count, frame_spatial_class, global_coherence, global_motion_class
 
-    def stat_temp(temporal_jump_probability, high_probability, mixture_reliable):
-        temporal_event_class = np.zeros((n_transitions, n_branches, n_radii), dtype=int)
-        temporal_name_to_code = {"isolated": 1, "clustered": 2, "embedded": 3, "sustained": 4}
-
-        for branch, circle in zip(*np.where(mixture_reliable)):
-            high_times = np.flatnonzero(high_probability[:, branch, circle])
-
-            if high_times.size == 0:
-                continue
-
-            groups = np.split(high_times, np.where(np.diff(high_times) > event_merge_gap)[0] + 1)
-
-            for group in groups:
-                start = int(group[0])
-                end = int(group[-1])
-                duration = end - start + 1
-                left_context = temporal_jump_probability[max(0, start - context_radius):start, branch, circle]
-                right_context = temporal_jump_probability[end + 1:min(n_transitions, end + context_radius + 1), branch, circle]
-                context_values = np.concatenate((left_context, right_context))
-                context_values = context_values[np.isfinite(context_values)]
-                context_mean = np.mean(context_values) if context_values.size > 0 else np.nan
-                quiet_context = np.isfinite(context_mean) and context_mean < isolation_mean_threshold
-
-                if duration <= max_isolated_duration:
-                    temporal_type = "isolated" if quiet_context else "embedded"
-                else:
-                    temporal_type = "clustered" if quiet_context else "sustained"
-
-                temporal_event_class[start:end + 1, branch, circle] = temporal_name_to_code[temporal_type]
-
-        return temporal_event_class
-
-    def create_anti_jump_animation(temporal_jump_probability, mixture_reliable, overall_mean_probability, active_branch_count, high_segment_count, frame_spatial_class, temporal_event_class, global_coherence, global_motion_class):
+    def create_anti_jump_animation(temporal_jump_probability, mixture_reliable, overall_mean_probability, active_branch_count, high_segment_count, frame_spatial_class, global_coherence, global_motion_class):
         from matplotlib.animation import FuncAnimation, PillowWriter
 
         fig = plt.figure(figsize=(13, 7))
@@ -605,11 +573,7 @@ def evaluate_anti_model(disp, num_harmonics=3, exclude_last=5, jump_threshold=0.
 
         invalid_branch, invalid_circle = np.where(~mixture_reliable)
         matrix_axis.scatter(invalid_circle, invalid_branch, marker="x", color="red", s=45, linewidths=1.5, label="invalid / unreliable")
-        isolated_marker = matrix_axis.scatter([], [], marker="o", facecolors="none", edgecolors="cyan", s=100, linewidths=2, label="isolated")
-        clustered_marker = matrix_axis.scatter([], [], marker="s", facecolors="none", edgecolors="deepskyblue", s=100, linewidths=2, label="clustered")
-        embedded_marker = matrix_axis.scatter([], [], marker="D", facecolors="none", edgecolors="lime", s=100, linewidths=2, label="embedded")
-        sustained_marker = matrix_axis.scatter([], [], marker="*", facecolors="none", edgecolors="yellow", s=150, linewidths=2, label="sustained")
-        matrix_axis.legend(loc="upper left", bbox_to_anchor=(0, 1.13), ncol=3, fontsize=8)
+        matrix_axis.legend(loc="upper left", bbox_to_anchor=(0, 1.13), fontsize=8)
 
         transition_axis = np.arange(n_transitions)
         probability_axis.plot(transition_axis, overall_mean_probability, color="tab:blue", label="mean probability")
@@ -639,11 +603,6 @@ def evaluate_anti_model(disp, num_harmonics=3, exclude_last=5, jump_threshold=0.
         def update(frame):
             probability_image.set_data(np.ma.masked_invalid(temporal_jump_probability[frame]))
             probability_cursor.set_xdata([frame, frame])
-            event_class = temporal_event_class[frame]
-            isolated_marker.set_offsets(marker_positions(event_class == 1))
-            clustered_marker.set_offsets(marker_positions(event_class == 2))
-            embedded_marker.set_offsets(marker_positions(event_class == 3))
-            sustained_marker.set_offsets(marker_positions(event_class == 4))
             spatial_class = frame_spatial_class[frame]
             coherence = global_coherence[frame]
 
@@ -671,7 +630,7 @@ def evaluate_anti_model(disp, num_harmonics=3, exclude_last=5, jump_threshold=0.
             mean_text = f"{overall_mean_probability[frame]:.3f}" if np.isfinite(overall_mean_probability[frame]) else "nan"
             matrix_axis.set_title(f"Transition {frame} → {frame + 1}: {spatial_text}", color=border_color, fontsize=13)
             information_text.set_text(f"Time transition: {frame} → {frame + 1}\n\nSpatial classification:\n{spatial_text}\n\nMean jump probability: {mean_text}\nActive branches: {active_branch_count[frame]} / {n_branches}\nHigh-probability segments: {high_segment_count[frame]}\nGlobal coherence: {coherence_text}\n\nCoherence ≥ {coherence_threshold:.2f}:\ncoherent global motion\n\nCoherence < {coherence_threshold:.2f}:\nincoherent global degradation")
-            return probability_image, probability_cursor, isolated_marker, clustered_marker, embedded_marker, sustained_marker, information_text
+            return probability_image, probability_cursor, information_text
 
         animation = FuncAnimation(fig, update, frames=n_transitions, interval=1000 / animation_fps, blit=False)
         animation.save(animation_path, writer=PillowWriter(fps=animation_fps), dpi=120)
@@ -679,8 +638,7 @@ def evaluate_anti_model(disp, num_harmonics=3, exclude_last=5, jump_threshold=0.
 
     temporal_difference, temporal_jump_probability, fitted_parameters, mixture_reliable = temp_diff_analysis()
     high_probability, overall_mean_probability, active_branch_count, high_segment_count, frame_spatial_class, global_coherence, global_motion_class = stat_spac(temporal_difference, temporal_jump_probability, fitted_parameters)
-    temporal_event_class = stat_temp(temporal_jump_probability, high_probability, mixture_reliable)
-    create_anti_jump_animation(temporal_jump_probability, mixture_reliable, overall_mean_probability, active_branch_count, high_segment_count, frame_spatial_class, temporal_event_class, global_coherence, global_motion_class)
+    create_anti_jump_animation(temporal_jump_probability, mixture_reliable, overall_mean_probability, active_branch_count, high_segment_count, frame_spatial_class, global_coherence, global_motion_class)
 
 
 def combine_gifs(gif_paths, output_path, columns=3):
@@ -782,48 +740,9 @@ class WomersleyModeling(ProcessPipeline):
         disp, anti_model = fit_antisymmetric_curve(dataset_x_antisymmetric, v_model, ratio_map)
 
         input_stem = Path(h5file.filename).stem
+        animation_path = f"{input_stem}_anti_disp_jump_animation.gif"
+        evaluate_anti_model(disp, animation_path=animation_path)
 
-        anti_model_parameters = {
-            "num_harmonics": 3,
-            "exclude_last": 5,
-            "jump_threshold": 0.9,
-            "isolation_mean_threshold": 0.3,
-            "context_radius": 5,
-            "event_merge_gap": 3,
-            "max_isolated_duration": 2,
-            "min_std_ratio": 2.0,
-            "normal_std_floor_fraction": 0.25,
-            "coherence_threshold": 0.7,
-            "animation_fps": 8,
-        }
-        
-        tuning_parameter = "context_radius"
-        tuning_values = [2, 3, 5, 7, 10]
-        gif_paths = []
-        
-        for trial_index, tuning_value in enumerate(tuning_values, start=1):
-            trial_parameters = anti_model_parameters.copy()
-            trial_parameters[tuning_parameter] = tuning_value
-        
-            value_label = str(tuning_value).replace(".", "p")
-            animation_path = (
-                f"{input_stem}_trial_{trial_index:02d}_"
-                f"{tuning_parameter}_{value_label}.gif"
-            )
-        
-            trial_parameters["animation_path"] = animation_path
-            gif_paths.append(animation_path)
-        
-            evaluate_anti_model(
-                disp,
-                **trial_parameters,
-            )
-        
-        combine_gifs(
-            gif_paths,
-            output_path=f"{input_stem}_{tuning_parameter}_comparison.gif",
-        )
-        
         metrics: dict = {}
         metrics["dataset_x"] = np.asarray(dataset_x)
         metrics["dataset_x_symmetric"] = np.asarray(dataset_x_symmetric)
