@@ -20,16 +20,16 @@ METRIC_LATEX_NAMES: dict[str, str] = {
     "t50_over_T": r"$t_{50}/T$",
     "t75_over_T": r"$t_{75}/T$",
     "t90_over_T": r"$t_{90}/T$",
-    "Qt_width": r"$Q_{t,\mathrm{width}}$",
-    "Qt_skew": r"$Q_{t,\mathrm{skew}}$",
+    "Q_t_width": r"$Q_{t,\mathrm{width}}$",
+    "Q_t_skew": r"$Q_{t,\mathrm{skew}}$",
     "Delta_DTI": r"$\Delta_{\mathrm{DTI}}$",
     "d10_over_D": r"$d_{10}/D$",
     "d25_over_D": r"$d_{25}/D$",
     "d50_over_D": r"$d_{50}/D$",
     "d75_over_D": r"$d_{75}/D$",
     "d90_over_D": r"$d_{90}/D$",
-    "Qd_width": r"$Q_{d,\mathrm{width}}$",
-    "Qd_skew": r"$Q_{d,\mathrm{skew}}$",
+    "Q_d_width": r"$Q_{d,\mathrm{width}}$",
+    "Q_d_skew": r"$Q_{d,\mathrm{skew}}$",
     "R_VTI": r"$R_{\mathrm{VTI}}$",
     "SF_VTI": r"$\mathrm{SF}_{\mathrm{VTI}}$",
     "W50_over_T": r"$W_{50}/T$",
@@ -37,13 +37,13 @@ METRIC_LATEX_NAMES: dict[str, str] = {
     "RI": r"$\mathrm{RI}$",
     "PI": r"$\mathrm{PI}$",
     "CF": r"$\mathrm{CF}$",
-    "tmax_over_T": r"$t_{\max}/T$",
-    "tmin_over_T": r"$t_{\min}/T$",
-    "Srise": r"$S_{\mathrm{rise}}$",
-    "Sfall": r"$S_{\mathrm{fall}}$",
-    "trise_over_T": r"$t_{\mathrm{rise}}/T$",
-    "tfall_over_T": r"$t_{\mathrm{fall}}/T$",
-    "Eslope": r"$E_{\mathrm{slope}}$",
+    "t_max_over_T": r"$t_{\max}/T$",
+    "t_min_over_T": r"$t_{\min}/T$",
+    "S_rise": r"$S_{\mathrm{rise}}$",
+    "S_fall": r"$S_{\mathrm{fall}}$",
+    "t_rise_over_T": r"$t_{\mathrm{rise}}/T$",
+    "t_fall_over_T": r"$t_{\mathrm{fall}}/T$",
+    "E_slope": r"$E_{\mathrm{slope}}$",
     "v_end_over_vbar": r"$\bar{v}_{\mathrm{end}}/\bar{v}$",
     "N_eff_over_T": r"$N_{\mathrm{eff}}/T$",
     "N_t_over_T": r"$N_t/T$",
@@ -200,11 +200,12 @@ def _write_selected_metric_panel_tex(path: Path, rows: list[dict]) -> None:
         file.write("\\centering\n")
         file.write("\\caption{Top metrics selected for WAS/WAS-c by separability AUC.}\n")
         file.write("\\label{tab:selected_metric_panel_top_auc}\n")
-        file.write("\\begin{tabular}{lrrrrr}\n")
+        file.write("\\begin{tabular}{lrrrrrrrrr}\n")
         file.write("\\hline\n")
         file.write(
             "Metric & Threshold & Control SD & Balanced accuracy & "
-            "AUC separability & Mann--Whitney $p$ \\\\\n"
+            "AUC separability & Mann--Whitney $p$ & "
+            "Student $p$ & Welch $p$ & KS $p$ \\\\\n"
         )
         file.write("\\hline\n")
         for row in rows:
@@ -218,7 +219,10 @@ def _write_selected_metric_panel_tex(path: Path, rows: list[dict]) -> None:
                 f"{_format_number(row.get('control_std'))} & "
                 f"{_format_number(row.get('balanced_accuracy'))} & "
                 f"{_format_number(row.get('separability_auc'))} & "
-                f"{_format_p_value(row.get('p_value_mannwhitney'))} \\\\\n"
+                f"{_format_p_value(row.get('p_value_mannwhitney'))} & "
+                f"{_format_p_value(row.get('p_value_student'))} & "
+                f"{_format_p_value(row.get('p_value_welch'))} & "
+                f"{_format_p_value(row.get('p_value_ks'))} \\\\\n"
             )
         file.write("\\hline\n")
         file.write("\\end{tabular}\n")
