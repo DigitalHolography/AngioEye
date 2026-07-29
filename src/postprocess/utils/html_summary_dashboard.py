@@ -30,6 +30,7 @@ from input_output.output_paths import (
 )
 
 WAVEFORM_SHAPE_METRICS_PIPELINE = "waveform_shape_metrics"
+TOPOLOGICAL_METRICS_PIPELINE = "topological_metrics"
 VALID_METRIC_FOLDERS = ["raw", "bandlimited"]
 VALID_VESSELS = ["artery", "vein"]
 VALID_VESSEL_TYPES = ("artery", "vein")
@@ -108,7 +109,6 @@ def extract_group_metrics(group, results_dict, prefix=""):
 
         full_name = f"{prefix}/{metric_name}" if prefix else metric_name
 
-        # Si sous-dossier -> recurse
         if isinstance(item, h5py.Group):
 
             extract_group_metrics(
@@ -117,7 +117,6 @@ def extract_group_metrics(group, results_dict, prefix=""):
                 prefix=full_name
             )
 
-        # Si dataset -> stats
         elif isinstance(item, h5py.Dataset):
 
             try:
@@ -132,7 +131,41 @@ def extract_group_metrics(group, results_dict, prefix=""):
                 print(f"Skipping non numeric dataset: {full_name}")
 
 
-def extract_metrics(h5_path):
+def extract_topological_metrics(h5_path):
+
+    results = defaultdict(
+        lambda: defaultdict(
+            lambda: defaultdict(dict)
+        )
+    )
+
+    with h5py.File(h5_path, "r") as f:
+
+        for vessel in VALID_VESSELS:
+
+            vessel_root = f"/AngioEye/Processing/topological_metrics/{vessel}"
+
+            if vessel_root not in f:
+                continue
+
+            for zone in f[vessel_root]:
+
+                bandlimited_path = (
+                    f"{vessel_root}/{zone}/global/bandlimited"
+                )
+
+                if bandlimited_path not in f:
+                    continue
+
+                extract_group_metrics(
+                    f[bandlimited_path],
+                    results["bandlimited"][zone][vessel]
+                )
+
+    return results
+
+
+def extract_waveform_shape_metrics(h5_path):
 
     results = defaultdict(lambda: defaultdict(dict))
 
@@ -163,8 +196,6 @@ def extract_metrics(h5_path):
                 )
 
     return results
-
-
 
 def choose_zip():
     root = Tk()
@@ -204,16 +235,74 @@ def build_metrics_table_for_file(metrics_dict):
 
     return pd.DataFrame(rows)
 
+def _append_metrics_table(html_parts, df):
+    html_parts.append("""
+    <table>
+        <thead>
+            <tr>
+                <th>Metric (mode : bandlimited)</th>
+                <th class="artery-col">Median (Artery)</th>
+                <th class="artery-col">Std (Artery)</th>
+                <th class="vein-col">Median (Vein)</th>
+                <th class="vein-col">Std (Vein)</th>
+            </tr>
+        </thead>
+        <tbody>
+    """)
+
+    for _, row in df.iterrows():
+        html_parts.append(f"""
+        <tr>
+            <td>{row['metric']}</td>
+            <td class="artery-col">{row['artery_median']:.6g}</td>
+            <td class="artery-col">{row['artery_std']:.6g}</td>
+            <td class="vein-col">{row['vein_median']:.6g}</td>
+            <td class="vein-col">{row['vein_std']:.6g}</td>
+        </tr>
+        """)
+
+    html_parts.append("""
+        </tbody>
+    </table>
+    """)
+
+def _branch_label_map_to_base64(source_path, *, vessel_type, image_dir, base_name):
+    dataset = (
+        f"/AngioEye/Processing/topological_metrics/"
+        f"topology/{vessel_type}/branch_label_map"
+    )
+
+    with h5py.File(source_path, "r") as f:
+        if dataset not in f:
+            return None
+
+        data = np.array(f[dataset])
+
+    image_path = os.path.join(
+        image_dir,
+        f"{base_name}_{vessel_type}_branch_label_map.png",
+    )
+
+    fig, ax = plt.subplots(figsize=(4, 4))
+    ax.imshow(np.rot90(data), cmap="viridis")  
+    ax.axis("off")
+    fig.savefig(image_path, bbox_inches="tight")
+    plt.close(fig)
+
+    return image_file_to_base64(image_path)
+    
 def dataframe_to_html_table(
-    df,
+    waveform_tables,
+    topological_tables,
     title="Metrics Table",
     M_0_path=None,
     mask_vein_path=None,
     mask_artery_path=None,
     f_AVG_mean_path=None,
     artery_velocity_signal_path=None,
-    vein_velocity_signal_path=None
-
+    vein_velocity_signal_path=None,
+    artery_branch_label_map_path=None,
+    vein_branch_label_map_path=None,
 ):
     html_parts = []
 
@@ -330,7 +419,6 @@ def dataframe_to_html_table(
     .vessel-image-grid {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
-        grid-template-rows: repeat(2, auto);
         gap: 20px;
         margin-bottom: 30px;
         align-items: start;
@@ -344,6 +432,14 @@ def dataframe_to_html_table(
 
         modal.style.display = "flex";
         modalImg.src = src;
+    }
+
+    function showZone(zone) {
+        document.querySelectorAll(".zone-table").forEach(div => {
+            div.style.display = "none";
+        });
+
+        document.getElementById(zone).style.display = "block";
     }
 
     function closeImageModal() {
@@ -416,39 +512,80 @@ def dataframe_to_html_table(
     else:
         html_parts.append("<div></div>")
 
+    if artery_branch_label_map_path is not None:
+        html_parts.append(f"""
+        <div>
+            <h2>Artery Branch Label Map</h2>
+            <img
+                src="{artery_branch_label_map_path}"
+                class="image-thumbnail"
+                onclick="openImageModal(this.src)"
+            >
+        </div>
+        """)
+    else:
+        html_parts.append("<div></div>")
+
+    if vein_branch_label_map_path is not None:
+        html_parts.append(f"""
+        <div>
+            <h2>Vein Branch Label Map</h2>
+            <img
+                src="{vein_branch_label_map_path}"
+                class="image-thumbnail"
+                onclick="openImageModal(this.src)"
+            >
+        </div>
+        """)
+    else:
+        html_parts.append("<div></div>")
+
     html_parts.append("</div>")
 
-    html_parts.append("""
-    <table>
-        <thead>
-            <tr>
-                <th>Metric</th>
-                <th class="artery-col">Median (Artery)</th>
-                <th class="artery-col">Std (Artery)</th>
-                <th class="vein-col">Median (Vein)</th>
-                <th class="vein-col">Std (Vein)</th>
-            </tr>
-        </thead>
-        <tbody>
-    """)
+    if waveform_tables:
 
-    for _, row in df.iterrows():
-        html_parts.append(f"""
-        <tr>
-            <td>{row['metric']}</td>
-            <td class="artery-col">{row['artery_median']:.6g}</td>
-            <td class="artery-col">{row['artery_std']:.6g}</td>
-            <td class="vein-col">{row['vein_median']:.6g}</td>
-            <td class="vein-col">{row['vein_std']:.6g}</td>
-        </tr>
+        html_parts.append("<h2>Waveform Shape Metrics</h2>")
+
+        for _, df in waveform_tables:
+                _append_metrics_table(html_parts, df)
+                html_parts.append("<br><br>")
+         
+
+    if topological_tables:
+        
+        html_parts.append("<h2>Topological Metrics</h2>")
+        html_parts.append("""
+        <label for="zone-select"><b>Zone :</b></label>
+        <select id="zone-select" onchange="showZone(this.value)">
         """)
 
-    html_parts.append("""
-        </tbody>
-    </table>
-    </body>
-    </html>
-    """)
+        for i, (zone, _) in enumerate(topological_tables):
+            display_zone = zone.replace("_", " ").title()
+            selected = " selected" if i == 0 else ""
+            html_parts.append(
+                f'<option value="{zone}"{selected}>{display_zone}</option>'
+            )
+
+        html_parts.append("""
+        </select>
+        <br><br>
+        """)
+
+        for i, (zone, df) in enumerate(topological_tables):
+
+            display = "block" if i == 0 else "none"
+
+            html_parts.append(
+                f'<div id="{zone}" class="zone-table" style="display:{display};">'
+            )
+
+            display_zone = zone.replace("_", " ").title()
+            html_parts.append(f"<h3>Zone : {display_zone}</h3>")
+
+            _append_metrics_table(html_parts, df)
+
+            html_parts.append("<br>")
+            html_parts.append("</div>")
 
     return "".join(html_parts)
 
@@ -594,17 +731,51 @@ def _signal_image_to_base64(data, image_dir, filename, *, color, title):
 
 def _build_single_file_html(filepath, *, image_dir, source_path=None):
     filepath = Path(filepath)
-    extracted = extract_metrics(filepath)
-    if not extracted:
-        raise ValueError("No compatible pipeline metrics were found for the dashboard.")
+    waveform = extract_waveform_shape_metrics(filepath)
+    topological = extract_topological_metrics(filepath)
+    
+    waveform_tables = []
+    topological_tables = []
 
-    merged_metrics = defaultdict(dict)
-    for vessel in extracted.get("bandlimited", {}):
-        for metric_name, values in extracted["bandlimited"][vessel].items():
-            merged_metrics[vessel][metric_name] = values
 
-    df = build_metrics_table_for_file(merged_metrics)
+    # Waveform Shape Metrics
+    if waveform and "bandlimited" in waveform:
+        waveform_tables.append(
+            (
+                "Waveform Shape Metrics",
+                build_metrics_table_for_file(
+                    waveform["bandlimited"]
+                ),
+            )
+        )
+
+    # Topological Metrics
+    if topological and "bandlimited" in topological:
+        for zone, zone_metrics in sorted(topological["bandlimited"].items()):
+            df = build_metrics_table_for_file(zone_metrics)
+
+            topological_tables.append((zone, df))
+
+    if not waveform_tables and not topological_tables:
+        raise ValueError(
+            "No compatible pipeline metrics were found for the dashboard."
+        )
+
     base_name = filepath.stem
+
+    artery_branch_label_map_path = _branch_label_map_to_base64(
+        filepath,
+        vessel_type="artery",
+        image_dir=image_dir,
+        base_name=base_name,
+    )
+
+    vein_branch_label_map_path = _branch_label_map_to_base64(
+        filepath,
+        vessel_type="vein",
+        image_dir=image_dir,
+        base_name=base_name,
+    )
 
     M_0_rel_path = None
     mask_rel_path_vein = _segmentation_map_image_to_base64(
@@ -703,7 +874,8 @@ def _build_single_file_html(filepath, *, image_dir, source_path=None):
             )
 
     return dataframe_to_html_table(
-        df,
+        waveform_tables=waveform_tables,
+        topological_tables=topological_tables,
         title=f"Metrics for {filepath.name}",
         M_0_path=M_0_rel_path,
         mask_vein_path=mask_rel_path_vein,
@@ -711,6 +883,8 @@ def _build_single_file_html(filepath, *, image_dir, source_path=None):
         f_AVG_mean_path=f_AVG_mean_rel_path,
         artery_velocity_signal_path=artery_velocity_signal_path,
         vein_velocity_signal_path=vein_velocity_signal_path,
+        artery_branch_label_map_path=artery_branch_label_map_path,
+        vein_branch_label_map_path=vein_branch_label_map_path,
     )
 
 
@@ -731,17 +905,15 @@ def generate_metric_tables_html(zip_path, output_dir="html"):
     reset_output_dir(output_dir)
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        with zipfile.ZipFile(zip_path, "r") as z:
+        with zipfile.ZipFile(zip_path) as z:
             z.extractall(tmpdir)
 
         for root, _, files in os.walk(tmpdir):
             h5_files = sorted(f for f in files if f.endswith(".h5"))
-
             if not h5_files:
                 continue
 
             relative_root = os.path.relpath(root, tmpdir)
-
             if relative_root == ".":
                 relative_root = ""
 
@@ -750,184 +922,16 @@ def generate_metric_tables_html(zip_path, output_dir="html"):
 
             for file in h5_files:
                 filepath = os.path.join(root, file)
-
-                extracted = extract_metrics(filepath)
-
-                merged_metrics = defaultdict(dict)
-
-                for vessel in extracted.get("bandlimited", {}):
-                    for metric_name, values in extracted["bandlimited"][vessel].items():
-                        merged_metrics[vessel][metric_name] = values
-
-                df = build_metrics_table_for_file(merged_metrics)
-
-                base_name = os.path.splitext(file)[0]
-                html_path = os.path.join(output_subdir, f"{base_name}.html")
-
-        
-
-                with h5py.File(filepath, "r") as f:
-                    png_dir_name = f"{base_name}_png"
-                    png_dir = os.path.join(output_subdir, png_dir_name)
-                    os.makedirs(png_dir, exist_ok=True)
-
-                    M_0_rel_path = None
-                    mask_rel_path_vein = None
-                    mask_rel_path_artery = None
-                    f_AVG_mean_rel_path = None
-                    artery_velocity_signal_path = None
-                    vein_velocity_signal_path = None
-
-                    # M_0
-                    M_0_dataset = find_eyeflow_dataset(f, "Maps/M0_ff_img/value")
-                    if M_0_dataset is not None:
-                        M_0_data = np.array(M_0_dataset)
-
-                        M_0_filename = f"{base_name}_M_0.png"
-                        M_0_path = os.path.join(png_dir, M_0_filename)
-
-                        fig, ax = plt.subplots(figsize=(4, 4))
-                        ax.imshow(M_0_data.T, cmap="viridis")
-                        ax.axis("off")
-                        fig.savefig(M_0_path, bbox_inches="tight")
-                        plt.close(fig)
-
-                        M_0_rel_path = image_file_to_base64(M_0_path)
-
-                    # Vein mask
-                    vein_mask_dataset = find_eyeflow_dataset(
-                        f,
-                        "Vein/Segmentation/Mask/value",
-                    )
-                    if vein_mask_dataset is not None:
-                        mask_vein_data = np.array(vein_mask_dataset)
-
-                        mask_vein_filename = f"{base_name}_vein_mask.png"
-                        mask_vein_path = os.path.join(png_dir, mask_vein_filename)
-
-                        fig, ax = plt.subplots(figsize=(4, 4))
-                        ax.imshow(mask_vein_data.T, cmap="gray")
-                        ax.axis("off")
-                        fig.savefig(mask_vein_path, bbox_inches="tight")
-                        plt.close(fig)
-
-                        mask_rel_path_vein = image_file_to_base64(mask_vein_path)
-
-                    # Artery mask
-                    artery_mask_dataset = find_eyeflow_dataset(
-                        f,
-                        "Artery/Segmentation/Mask/value",
-                    )
-                    if artery_mask_dataset is not None:
-                        mask_artery_data = np.array(artery_mask_dataset)
-
-                        mask_artery_filename = f"{base_name}_artery_mask.png"
-                        mask_artery_path = os.path.join(png_dir, mask_artery_filename)
-
-                        fig, ax = plt.subplots(figsize=(4, 4))
-                        ax.imshow(mask_artery_data.T, cmap="gray")
-                        ax.axis("off")
-                        fig.savefig(mask_artery_path, bbox_inches="tight")
-                        plt.close(fig)
-
-                        mask_rel_path_artery = image_file_to_base64(mask_artery_path)
-
-                    # f_AVG_mean map
-                    f_AVG_mean_dataset = find_eyeflow_dataset(
-                        f,
-                        "Maps/f_AVG_mean/value",
-                    )
-                    if f_AVG_mean_dataset is not None:
-                        f_AVG_mean_data = np.array(f_AVG_mean_dataset)
-
-                        f_AVG_mean_filename = f"{base_name}_f_AVG_mean.png"
-                        f_AVG_mean_path = os.path.join(png_dir, f_AVG_mean_filename)
-
-                        fig, ax = plt.subplots(figsize=(4, 4))
-                        ax.imshow(f_AVG_mean_data.T, cmap="viridis")
-                        ax.axis("off")
-                        fig.savefig(f_AVG_mean_path, bbox_inches="tight")
-                        plt.close(fig)
-
-                        f_AVG_mean_rel_path = image_file_to_base64(f_AVG_mean_path)
-
-                    # Artery velocity signal
-                    artery_velocity_dataset = find_eyeflow_dataset(
-                        f,
-                        "Artery/Velocity/VelocitySignal/value",
-                    )
-                    if artery_velocity_dataset is not None:
-                        artery_velocity_signal_data = np.array(
-                            artery_velocity_dataset
-                        )
-
-                        artery_velocity_signal_filename = (
-                            f"{base_name}_artery_velocity_signal.png"
-                        )
-                        artery_velocity_signal_png_path = os.path.join(
-                            png_dir,
-                            artery_velocity_signal_filename
-                        )
-
-                        fig, ax = plt.subplots(figsize=(8, 4))
-                        ax.plot(artery_velocity_signal_data, linewidth=2,color="#EC5241")
-                        ax.set_title("Artery Velocity Signal")
-                        ax.set_xlabel("Sample")
-                        ax.set_ylabel("Velocity")
-                        ax.grid(True)
-
-                        fig.savefig(artery_velocity_signal_png_path, bbox_inches="tight")
-                        plt.close(fig)
-
-                        artery_velocity_signal_path = image_file_to_base64(
-                            artery_velocity_signal_png_path
-                        )
-                    
-                    # Vein velocity signal
-                    vein_velocity_dataset = find_eyeflow_dataset(
-                        f,
-                        "Vein/Velocity/VelocitySignal/value",
-                    )
-                    if vein_velocity_dataset is not None:
-                        vein_velocity_signal_data = np.array(
-                            vein_velocity_dataset
-                        )
-
-                        vein_velocity_signal_filename = (
-                            f"{base_name}_vein_velocity_signal.png"
-                        )
-                        vein_velocity_signal_png_path = os.path.join(
-                            png_dir,
-                            vein_velocity_signal_filename
-                        )
-
-                        fig, ax = plt.subplots(figsize=(8, 4))
-                        ax.plot(vein_velocity_signal_data, linewidth=2, color="#414CEC")
-                        ax.set_title("Vein Velocity Signal")
-                        ax.set_xlabel("Sample")
-                        ax.set_ylabel("Velocity")
-                        ax.grid(True)
-
-                        fig.savefig(vein_velocity_signal_png_path, bbox_inches="tight")
-                        plt.close(fig)
-
-                        vein_velocity_signal_path = image_file_to_base64(
-                            vein_velocity_signal_png_path
-                        )
-
-                html_content = dataframe_to_html_table(
-                    df,
-                    title=f"Metrics for {file}",
-                    M_0_path=M_0_rel_path,
-                    mask_vein_path=mask_rel_path_vein,
-                    mask_artery_path=mask_rel_path_artery,
-                    f_AVG_mean_path=f_AVG_mean_rel_path,
-                    artery_velocity_signal_path=artery_velocity_signal_path,
-                    vein_velocity_signal_path=vein_velocity_signal_path
+                html_path = os.path.join(
+                    output_subdir,
+                    f"{Path(file).stem}.html",
                 )
 
-                with open(html_path, "w", encoding="utf-8") as f:
-                    f.write(html_content)
+                generate_metric_table_html_for_file(
+                    filepath,
+                    html_path,
+                    source_path=filepath,
+                )
 
                 
 
