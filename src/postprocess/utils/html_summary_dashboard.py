@@ -284,7 +284,7 @@ def _branch_label_map_to_base64(source_path, *, vessel_type, image_dir, base_nam
     )
 
     fig, ax = plt.subplots(figsize=(4, 4))
-    ax.imshow(np.rot90(data), cmap="viridis")  
+    ax.imshow(np.rot90(data.T, 1), cmap="viridis")  
     ax.axis("off")
     fig.savefig(image_path, bbox_inches="tight")
     plt.close(fig)
