@@ -16,30 +16,133 @@ _LR = LowRankPulsatilityMetrics()
 EPS = LowRankPulsatilityMetrics.eps
 
 
+def _resolve_prefixed_file(base_dir: Path, prefixes: list[str], suffix: str) -> Path:
+    candidates = [base_dir / f"{prefix}_{suffix}" for prefix in prefixes]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+def _resample_axis(arr: np.ndarray, axis: int, target_size: int) -> np.ndarray:
+    arr = np.asarray(arr)
+    if arr.shape[axis] == target_size:
+        return arr
+
+    moved = np.moveaxis(arr, axis, 0)
+    source_axis = np.arange(moved.shape[0], dtype=float)
+    target_axis = np.linspace(0, moved.shape[0] - 1, target_size)
+    flat = moved.reshape(moved.shape[0], -1)
+    out = np.empty((target_size, flat.shape[1]), dtype=float)
+    for column in range(flat.shape[1]):
+        out[:, column] = np.interp(target_axis, source_axis, flat[:, column])
+    out = out.reshape((target_size, *moved.shape[1:]))
+    return np.moveaxis(out, 0, axis)
+
+
+def _resample_values_for_concat(arrays: list[np.ndarray]):
+    target_shape = tuple(max(arr.shape[axis] for arr in arrays) for axis in range(1, arrays[0].ndim))
+    out = []
+    for arr in arrays:
+        normalized = np.asarray(arr, dtype=float)
+        for offset, target_size in enumerate(target_shape, start=1):
+            normalized = _resample_axis(normalized, offset, target_size)
+        out.append(normalized)
+    return out
+
+
+def _resample_valid_for_concat(arrays: list[np.ndarray], value_target_shape):
+    valid_target_shape = value_target_shape[1:]
+    out = []
+    for arr in arrays:
+        normalized = np.asarray(arr, dtype=float)
+        for offset, target_size in enumerate(valid_target_shape, start=1):
+            normalized = _resample_axis(normalized, offset, target_size)
+        out.append(normalized >= 0.5)
+    return out
+
+
+def _compute_pA_stack_from_A_stack(A_stack: np.ndarray) -> np.ndarray:
+    A_stack = np.asarray(A_stack, dtype=float)
+    Abar = np.nanmean(A_stack, axis=1, keepdims=True)
+    return (A_stack - Abar) ** 2
+
+
 def resolve_file_paths(base_dir, group, quantity):
     base_dir = Path(base_dir)
     group = group.lower()
     quantity = quantity.lower()
 
-    if group in {"ctrl", "control", "baseline", "bl1", "bl2"}:
-        prefix = "ctrl"
+    if group in {"ctrl", "control", "baseline"}:
+        prefixes = ["ctrl"]
+    elif group in {"bl1", "baseline1", "baseline_1"}:
+        prefixes = ["bl1", "ctrl"]
+    elif group in {"bl2", "baseline2", "baseline_2"}:
+        prefixes = ["bl2", "ctrl"]
     elif group in {"pressure", "indentation"}:
-        prefix = "pressure"
-    elif group in {"flicker"}:
-        prefix = "flicker"
+        prefixes = ["pressure"]
+    elif group in {"flicker", "f"}:
+        prefixes = ["flicker", "pressure"]
     else:
         raise ValueError(f"Unknown group: {group}")
 
     if quantity in {"a", "asymmetry"}:
-        return (base_dir / f"{prefix}_asymmetry_A.h5", "Asymmetry/A/value", "QualityControl/ParabolicFitValid/value")
+        return (
+            _resolve_prefixed_file(base_dir, prefixes, "asymmetry_A.h5"),
+            "Asymmetry/A/value",
+            "QualityControl/ParabolicFitValid/value",
+        )
 
     if quantity in {"pa", "p_a", "partition"}:
-        return (base_dir / f"{prefix}_partition_functions_pA.h5", "PartitionFunctions/p_A/value", "QualityControl/ParabolicFitValid/value")
+        return (
+            _resolve_prefixed_file(base_dir, prefixes, "partition_functions_pA.h5"),
+            "PartitionFunctions/p_A/value",
+            "QualityControl/ParabolicFitValid/value",
+        )
 
     raise ValueError(f"Unknown quantity: {quantity}")
 
 
 def load_recording_group(base_dir, group, quantity):
+    if group.lower() in {"ctrl", "control", "baseline"} and not _exact_group_file_exists(
+        base_dir, "ctrl"
+    ):
+        available_baselines = [
+            baseline_group
+            for baseline_group in ("bl1", "bl2")
+            if _exact_group_file_exists(base_dir, baseline_group)
+        ]
+        if len(available_baselines) == 2:
+            first_values, first_phase, first_valid, first_names = load_recording_group(
+                base_dir, "bl1", "A" if quantity.lower() in {"pa", "p_a", "partition"} else quantity
+            )
+            second_values, second_phase, second_valid, second_names = load_recording_group(
+                base_dir, "bl2", "A" if quantity.lower() in {"pa", "p_a", "partition"} else quantity
+            )
+            if first_phase.shape != second_phase.shape or not np.allclose(
+                first_phase, second_phase
+            ):
+                raise ValueError("BL1 and BL2 phase vectors differ; cannot build ctrl")
+            first_values, second_values = _resample_values_for_concat(
+                [first_values, second_values]
+            )
+            value_target_shape = first_values.shape[1:]
+            first_valid, second_valid = _resample_valid_for_concat(
+                [first_valid, second_valid], value_target_shape
+            )
+            if quantity.lower() in {"pa", "p_a", "partition"}:
+                first_values = _compute_pA_stack_from_A_stack(first_values)
+                second_values = _compute_pA_stack_from_A_stack(second_values)
+            names = None
+            if first_names is not None and second_names is not None:
+                names = [*first_names, *second_names]
+            return (
+                np.concatenate([first_values, second_values], axis=0),
+                first_phase,
+                np.concatenate([first_valid, second_valid], axis=0),
+                names,
+            )
+
     h5path, dataset_path, qc_path = resolve_file_paths(base_dir, group, quantity)
 
     with h5py.File(h5path, "r") as h:
@@ -480,6 +583,41 @@ CONTROL_METRIC = "FFA"
 RESIDUALIZE_AGAINST_CONTROL = LOWRANK_METRIC_KEYS
 
 
+def _exact_group_file_exists(base_dir, group):
+    base_dir = Path(base_dir)
+    prefix_by_group = {
+        "ctrl": "ctrl",
+        "pressure": "pressure",
+        "flicker": "flicker",
+        "f": "flicker",
+        "bl1": "bl1",
+        "baseline1": "bl1",
+        "bl2": "bl2",
+        "baseline2": "bl2",
+    }
+    prefix = prefix_by_group.get(group.lower())
+    return bool(prefix and (base_dir / f"{prefix}_asymmetry_A.h5").exists())
+
+
+def _groups_to_summarize(base_dir, control_group, treatment_group):
+    groups = []
+    if treatment_group.lower() in {"flicker", "f"}:
+        for group in ("bl1", "bl2"):
+            if _exact_group_file_exists(base_dir, group):
+                groups.append(group)
+
+    for group in (control_group, treatment_group):
+        if group not in groups:
+            groups.append(group)
+    return tuple(groups)
+
+
+def _can_residualize(control_values):
+    control_values = np.asarray(control_values, dtype=float)
+    finite = control_values[np.isfinite(control_values)]
+    return finite.size >= 3 and not np.allclose(np.nanmin(finite), np.nanmax(finite))
+
+
 def collect_recording_group_table(base_dir, recording_group, representations=LOWRANK_REPRESENTATIONS):
     endpoints = recording_group_endpoints(base_dir, recording_group)
     lowrank = recording_group_lowrank_analysis(base_dir, recording_group, representations=tuple(representations))
@@ -502,20 +640,43 @@ def collect_recording_group_table(base_dir, recording_group, representations=LOW
         rows.append(row)
     return rows
 
-def run_full_analysis(base_dir, representations=LOWRANK_REPRESENTATIONS):
-    ctrl_rows = collect_recording_group_table(base_dir, "ctrl", representations)
-    pressure_rows = collect_recording_group_table(base_dir, "pressure", representations)
+def run_full_analysis(
+    base_dir,
+    representations=LOWRANK_REPRESENTATIONS,
+    control_group="ctrl",
+    treatment_group="pressure",
+):
+    control_rows = collect_recording_group_table(
+        base_dir, control_group, representations
+    )
+    treatment_rows = collect_recording_group_table(
+        base_dir, treatment_group, representations
+    )
 
-    ctrl_by_metric = {key: np.array([row[key] for row in ctrl_rows], dtype=float) for key in METRIC_KEYS}
-    pressure_by_metric = {key: np.array([row[key] for row in pressure_rows], dtype=float) for key in METRIC_KEYS}
+    control_by_metric = {
+        key: np.array([row[key] for row in control_rows], dtype=float)
+        for key in METRIC_KEYS
+    }
+    treatment_by_metric = {
+        key: np.array([row[key] for row in treatment_rows], dtype=float)
+        for key in METRIC_KEYS
+    }
 
     report = {}
     for key in METRIC_KEYS:
-        p, auc = flicker_stats.mann_whitney_and_auc(ctrl_by_metric[key], pressure_by_metric[key])
-        delta = flicker_stats.cliffs_delta(pressure_by_metric[key], ctrl_by_metric[key])
+        p, auc = flicker_stats.mann_whitney_and_auc(
+            control_by_metric[key], treatment_by_metric[key]
+        )
+        delta = flicker_stats.cliffs_delta(
+            treatment_by_metric[key], control_by_metric[key]
+        )
         report[key] = {
-            "ctrl_median": LowRankPulsatilityMetrics._safe_nanmedian(ctrl_by_metric[key]),
-            "pressure_median": LowRankPulsatilityMetrics._safe_nanmedian(pressure_by_metric[key]),
+            "control_median": LowRankPulsatilityMetrics._safe_nanmedian(
+                control_by_metric[key]
+            ),
+            "treatment_median": LowRankPulsatilityMetrics._safe_nanmedian(
+                treatment_by_metric[key]
+            ),
             "raw_p": p,
             "raw_auc": auc,
             "cliffs_delta": delta,
@@ -529,16 +690,31 @@ def run_full_analysis(base_dir, representations=LOWRANK_REPRESENTATIONS):
 
     for key, p_holm in zip(
         LOWRANK_METRIC_KEYS,
-        flicker_stats.holm_adjust([report[key]["raw_p"] for key in LOWRANK_METRIC_KEYS]),
+        flicker_stats.holm_adjust(
+            [report[key]["raw_p"] for key in LOWRANK_METRIC_KEYS]
+        ),
     ):
         report[key]["p_holm"] = p_holm
 
-    control_pooled = np.concatenate([ctrl_by_metric[CONTROL_METRIC], pressure_by_metric[CONTROL_METRIC]])
-    n_ctrl = len(ctrl_by_metric[CONTROL_METRIC])
+    control_pooled = np.concatenate(
+        [control_by_metric[CONTROL_METRIC], treatment_by_metric[CONTROL_METRIC]]
+    )
+    n_control = len(control_by_metric[CONTROL_METRIC])
     for key in RESIDUALIZE_AGAINST_CONTROL:
-        values_pooled = np.concatenate([ctrl_by_metric[key], pressure_by_metric[key]])
-        residuals, r_squared = flicker_stats.residualize_against_control(values_pooled, control_pooled)
-        resid_p, resid_auc = flicker_stats.mann_whitney_and_auc(residuals[:n_ctrl], residuals[n_ctrl:])
+        if _can_residualize(control_pooled):
+            values_pooled = np.concatenate(
+                [control_by_metric[key], treatment_by_metric[key]]
+            )
+            residuals, r_squared = flicker_stats.residualize_against_control(
+                values_pooled, control_pooled
+            )
+            resid_p, resid_auc = flicker_stats.mann_whitney_and_auc(
+                residuals[:n_control], residuals[n_control:]
+            )
+        else:
+            r_squared = np.nan
+            resid_p = np.nan
+            resid_auc = np.nan
         report[key]["residualized"] = {
             "control_name": CONTROL_METRIC,
             "r_squared": r_squared,
@@ -547,16 +723,30 @@ def run_full_analysis(base_dir, representations=LOWRANK_REPRESENTATIONS):
             "survives": bool(np.isfinite(resid_p) and resid_p < 0.05),
         }
 
-    return {"ctrl_rows": ctrl_rows, "pressure_rows": pressure_rows, "report": report}
+    return {
+        "control_group": control_group,
+        "treatment_group": treatment_group,
+        "control_rows": control_rows,
+        "treatment_rows": treatment_rows,
+        "ctrl_rows": control_rows,
+        "pressure_rows": treatment_rows,
+        "report": report,
+    }
 
 def print_full_report(result):
     report = result["report"]
-    print(f"\nctrl vs pressure ({len(result['ctrl_rows'])} vs {len(result['pressure_rows'])} recordings)")
+    control_group = result.get("control_group", "ctrl")
+    treatment_group = result.get("treatment_group", "pressure")
+    print(
+        f"\n{control_group} vs {treatment_group} "
+        f"({len(result['control_rows'])} vs {len(result['treatment_rows'])} recordings)"
+    )
     print("-" * 40)
     for key in METRIC_KEYS:
         r = report[key]
         line = (
-            f"{key:<8} ctrl={r['ctrl_median']:.4g} pressure={r['pressure_median']:.4g} "
+            f"{key:<8} {control_group}={r['control_median']:.4g} "
+            f"{treatment_group}={r['treatment_median']:.4g} "
             f"raw_p={r['raw_p']:.4g} p_holm={r['p_holm']:.4g} "
             f"cliffs_delta={r['cliffs_delta']:.3f} auc={r['raw_auc']:.3f}"
         )
@@ -572,27 +762,123 @@ def print_full_report(result):
 # RUN
 # =============================
 
-def main():
-    base = Path("/Users/admin/Desktop/langevin-internship/wobbling-svd")
+DEFAULT_BASE = Path("/Users/admin/Desktop/langevin-internship/wobbling-svd")
+EYE_DIR_LABELS = {
+    "l": "left",
+    "left": "left",
+    "os": "left",
+    "r": "right",
+    "right": "right",
+    "od": "right",
+}
 
-    for recording_group in ("ctrl", "pressure"):
+
+def _discover_eye_dirs(base_dir, requested_eye_dirs=None):
+    base_dir = Path(base_dir)
+    if requested_eye_dirs:
+        return [(Path(name).name, base_dir / name) for name in requested_eye_dirs]
+
+    discovered = []
+    seen = set()
+    for child in sorted(base_dir.iterdir()) if base_dir.exists() else []:
+        if not child.is_dir():
+            continue
+        label = EYE_DIR_LABELS.get(child.name.lower())
+        if label is None or child in seen:
+            continue
+        discovered.append((label, child))
+        seen.add(child)
+
+    return discovered or [("all", base_dir)]
+
+
+def _run_directory_analysis(base, control_group, treatment_group):
+    groups = _groups_to_summarize(base, control_group, treatment_group)
+
+    for recording_group in groups:
         result = recording_group_endpoints(base, recording_group)
         print_group_summary(recording_group, result)
 
     print("\n=== p_A consistency check (Eq. 6) ===")
-    for recording_group in ("ctrl", "pressure"):
+    for recording_group in groups:
         A_all, _, _, _ = load_recording_group(base, recording_group, "A")
         pA_all, _, _, _ = load_recording_group(base, recording_group, "pA")
-        max_diffs = [validate_pA_matches_A(A_all[i], pA_all[i])["max_abs_diff"] for i in range(A_all.shape[0])]
-        print(f"{recording_group}: worst max_abs_diff across recordings = {max(max_diffs):.2e}")
+        max_diffs = [
+            validate_pA_matches_A(A_all[i], pA_all[i])["max_abs_diff"]
+            for i in range(A_all.shape[0])
+        ]
+        print(
+            f"{recording_group}: worst max_abs_diff across recordings = "
+            f"{max(max_diffs):.2e}"
+        )
 
-    ctrl_lowrank = recording_group_lowrank_analysis(base, "ctrl")
-    pressure_lowrank = recording_group_lowrank_analysis(base, "pressure")
-    print_lowrank_summary("ctrl", ctrl_lowrank)
-    print_lowrank_summary("pressure", pressure_lowrank)
+    for recording_group in groups:
+        lowrank = recording_group_lowrank_analysis(base, recording_group)
+        print_lowrank_summary(recording_group, lowrank)
 
-    full = run_full_analysis(base)
+    full = run_full_analysis(
+        base,
+        control_group=control_group,
+        treatment_group=treatment_group,
+    )
     print_full_report(full)
+
+
+def main(argv=None):
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description=(
+            "Run paper endpoint and low-rank SVD comparisons on exported "
+            "asymmetry HDF5 files."
+        )
+    )
+    parser.add_argument(
+        "base",
+        nargs="?",
+        type=Path,
+        default=DEFAULT_BASE,
+        help=(
+            "Directory containing exported *_asymmetry_A.h5 and "
+            "*_partition_functions_pA.h5 files, or a parent containing L/R "
+            "eye subdirectories."
+        ),
+    )
+    parser.add_argument(
+        "--mode",
+        choices=("flicker", "pressure"),
+        default="flicker",
+        help="Use ctrl-vs-flicker or ctrl-vs-pressure as the primary comparison.",
+    )
+    parser.add_argument(
+        "--control-group",
+        default="ctrl",
+        help="Control group prefix to compare against the provocation group.",
+    )
+    parser.add_argument(
+        "--treatment-group",
+        default=None,
+        help="Override the provocation group; defaults to flicker or pressure by mode.",
+    )
+    parser.add_argument(
+        "--eye-dirs",
+        nargs="*",
+        default=None,
+        help="Optional eye subdirectories under base to run, for example L R.",
+    )
+    args = parser.parse_args(argv)
+
+    treatment_group = args.treatment_group or args.mode
+    exit_code = 0
+    for eye_label, eye_dir in _discover_eye_dirs(args.base, args.eye_dirs):
+        print(f"\n\n=== {eye_label} eye: {eye_dir} ===")
+        try:
+            _run_directory_analysis(eye_dir, args.control_group, treatment_group)
+        except FileNotFoundError as exc:
+            exit_code = 1
+            print(f"Skipping {eye_label} eye: {exc}")
+
+    return exit_code
 
 
 if __name__ == "__main__":
