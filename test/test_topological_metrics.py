@@ -170,6 +170,19 @@ class TopologicalMetricsTests(unittest.TestCase):
                     result.metrics,
                 )
 
+    def test_optic_disc_spatial_inputs_are_normalized_with_branch_maps(self) -> None:
+        center = np.asarray([3.0, 2.0])
+        mask = np.zeros((9, 11), dtype=bool)
+        mask[2, 3] = True
+
+        normalized_center, normalized_mask = (
+            TopologicalMetricsPipeline._normalize_spatial_frame(center, mask)
+        )
+
+        np.testing.assert_array_equal(normalized_center, [3.0, 6.0])
+        self.assertTrue(normalized_mask[6, 3])
+        self.assertFalse(normalized_mask[2, 3])
+
     def test_regions_assign_each_branch_by_area_and_aggregate_per_beat(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "input.h5"
