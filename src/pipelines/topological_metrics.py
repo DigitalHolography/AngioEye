@@ -40,6 +40,7 @@ REGION_AXIS_LABEL = -2
 OPTIC_DISC_CENTER_PATH = "/Topology/OpticDisc/CenterXY/value"
 OPTIC_DISC_MASK_PATH = "/Topology/OpticDisc/Mask/value"
 BEAT_PERIOD_PATH = "/Artery/VelocityPerBeat/beatPeriodSeconds/value"
+EYEFLOW_SPATIAL_Y_INVERTED = True
 
 
 @dataclass(frozen=True)
@@ -146,6 +147,10 @@ class TopologicalMetricsPipeline(ArterialSegExample):
                 f"{OPTIC_DISC_MASK_PATH} must have shape (y, x), got "
                 f"{optic_disc_mask.shape}."
             )
+        optic_disc_center, optic_disc_mask = self._normalize_spatial_frame(
+            optic_disc_center,
+            optic_disc_mask,
+        )
 
         vessel_data = [self._load_vessel(h5file, paths) for paths in VESSEL_PATHS]
         self._validate_spatial_frame(optic_disc_center, optic_disc_mask, vessel_data)
@@ -264,6 +269,20 @@ class TopologicalMetricsPipeline(ArterialSegExample):
                 f"{OPTIC_DISC_CENTER_PATH} must contain one finite (x, y) pair."
             )
         return center
+
+    @staticmethod
+    def _normalize_spatial_frame(
+        optic_disc_center: np.ndarray,
+        optic_disc_mask: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Normalize EyeFlow's inverted-Y spatial frame for topology use."""
+        if not EYEFLOW_SPATIAL_Y_INVERTED:
+            return optic_disc_center, optic_disc_mask
+
+        normalized_center = optic_disc_center.astype(float, copy=True)
+        normalized_center[1] = optic_disc_mask.shape[0] - 1 - normalized_center[1]
+        normalized_mask = np.flip(optic_disc_mask, axis=0).copy()
+        return normalized_center, normalized_mask
 
     @staticmethod
     def _load_vessel(h5file: h5py.File, paths: VesselPaths) -> VesselData:
