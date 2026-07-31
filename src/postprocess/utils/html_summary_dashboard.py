@@ -284,7 +284,7 @@ def _branch_label_map_to_base64(source_path, *, vessel_type, image_dir, base_nam
     )
 
     fig, ax = plt.subplots(figsize=(4, 4))
-    ax.imshow(np.flip(data,axis=1),cmap="viridis")  
+    ax.imshow(np.flip(data.T,axis=0),cmap="viridis")  
     ax.axis("off")
     fig.savefig(image_path, bbox_inches="tight")
     plt.close(fig)
@@ -320,6 +320,10 @@ def dataframe_to_html_table(
             }
             h1 {
                 color: #222;
+                text-align: center;
+                font-size: 36px;
+                font-weight: bold;
+                margin-bottom: 30px;
             }
             h2 {
                 font-weight: normal;
@@ -384,6 +388,50 @@ def dataframe_to_html_table(
         transform: scale(1.02);
     }
 
+    .image-container {
+        text-align: center;
+    }
+
+    .image-thumbnail {
+        width: 100%;
+        max-width: 900px;
+        border: 1px solid #cccccc;
+        border-radius: 8px;
+        cursor: pointer;
+        outline: none;
+        display: inline-block;
+    }
+
+    .image-title {
+        text-align: center;
+        font-weight: normal;
+        margin-bottom: 10px;
+    }
+    .pipeline-title {
+    font-size: 30px;   
+    font-weight: bold;
+    text-decoration: underline;
+    margin-top: 30px;
+    margin-bottom: 20px;
+    }
+
+    .zone-selector {
+    text-align: center;
+    margin: 25px 0;
+    }
+
+    .zone-selector label {
+        font-size: 40px;
+        font-weight: bold;
+        margin-right: 12px;
+    }
+
+    .zone-selector select {
+        font-size: 38px;
+        font-weight: bold;
+        padding: 8px 16px;
+        min-width: 180px;
+    }
     .image-modal {
         display: none;
         position: fixed;
@@ -458,8 +506,8 @@ def dataframe_to_html_table(
 
     if mask_artery_path is not None:
         html_parts.append(f"""
-        <div>
-            <h2>Artery Segmentation</h2>
+        <div class="image-container">
+            <h2 class="image-title">Artery Segmentation</h2>
             <img
                 src="{mask_artery_path}"
                 class="image-thumbnail"
@@ -472,8 +520,8 @@ def dataframe_to_html_table(
 
     if mask_vein_path is not None:
         html_parts.append(f"""
-        <div>
-            <h2>Vein Segmentation</h2>
+        <div class="image-container">
+            <h2 class="image-title">Vein Segmentation</h2>
             <img
                 src="{mask_vein_path}"
                 class="image-thumbnail"
@@ -486,8 +534,8 @@ def dataframe_to_html_table(
 
     if artery_velocity_signal_path is not None:
         html_parts.append(f"""
-        <div>
-            <h2>Artery Velocity Signal</h2>
+        <div class="image-container">
+            <h2 class="image-title">Artery Velocity Signal</h2>
             <img
                 src="{artery_velocity_signal_path}"
                 class="image-thumbnail"
@@ -500,8 +548,8 @@ def dataframe_to_html_table(
 
     if vein_velocity_signal_path is not None:
         html_parts.append(f"""
-        <div>
-            <h2>Vein Velocity Signal</h2>
+        <div class="image-container">
+            <h2 class="image-title">Vein Velocity Signal</h2>
             <img
                 src="{vein_velocity_signal_path}"
                 class="image-thumbnail"
@@ -514,8 +562,8 @@ def dataframe_to_html_table(
 
     if artery_branch_label_map_path is not None:
         html_parts.append(f"""
-        <div>
-            <h2>Artery Branch Label Map</h2>
+        <div class="image-container">
+            <h2 class="image-title">Artery Branch Label Map</h2>
             <img
                 src="{artery_branch_label_map_path}"
                 class="image-thumbnail"
@@ -528,8 +576,8 @@ def dataframe_to_html_table(
 
     if vein_branch_label_map_path is not None:
         html_parts.append(f"""
-        <div>
-            <h2>Vein Branch Label Map</h2>
+        <div class="image-container">
+            <h2 class="image-title">Vein Branch Label Map</h2>
             <img
                 src="{vein_branch_label_map_path}"
                 class="image-thumbnail"
@@ -544,8 +592,7 @@ def dataframe_to_html_table(
 
     if waveform_tables:
 
-        html_parts.append("<h2>Waveform Shape Metrics</h2>")
-
+        html_parts.append('<h2 class="pipeline-title">Waveform Shape Metrics</h2>')
         for _, df in waveform_tables:
                 _append_metrics_table(html_parts, df)
                 html_parts.append("<br><br>")
@@ -553,7 +600,7 @@ def dataframe_to_html_table(
 
     if topological_tables:
         
-        html_parts.append("<h2>Topological Metrics</h2>")
+        html_parts.append('<h2 class="pipeline-title">Topological Metrics</h2>')
         html_parts.append("""
         <label for="zone-select"><b>Zone :</b></label>
         <select id="zone-select" onchange="showZone(this.value)">
@@ -579,8 +626,6 @@ def dataframe_to_html_table(
                 f'<div id="{zone}" class="zone-table" style="display:{display};">'
             )
 
-            display_zone = zone.replace("_", " ").title()
-            html_parts.append(f"<h3>Zone : {display_zone}</h3>")
 
             _append_metrics_table(html_parts, df)
 
