@@ -59,20 +59,14 @@ def open_h5(path: Path | str, mode: str = "r") -> h5py.File:
 
 
 def copy_h5_contents(source_file: Path | str | None, dest: h5py.File) -> None:
-    """Copy an EyeFlow source while preserving its native layout.
-
-    EyeFlow v2 stores its data at the HDF5 root (for example under
-    ``/Processing``). Older inputs are kept under ``/EyeFlow`` so they cannot
-    collide with AngioEye's own output groups.
-    """
+    """Copy an EyeFlow HDF5 into the output file's ``/EyeFlow`` group."""
     if not source_file:
         return
     src_path = Path(source_file)
     if not src_path.exists():
         return
     with open_h5(src_path, "r") as src:
-        is_v2 = "/Processing" in src or src.attrs.get("output_schema") == "eyeflow_v2"
-        target = dest if is_v2 else dest.require_group(EYEFLOW_ROOT)
+        target = dest.require_group(EYEFLOW_ROOT)
         for key, value in src.attrs.items():
             target.attrs[key] = value
         for key in src.keys():
@@ -457,6 +451,9 @@ def write_metrics_trees_to_h5(
     *,
     overwrite: bool = False,
 ) -> None:
+    if not trees:
+        return
+
     with open_h5(h5_path, "r+") as h5file:
         root_group = h5file.require_group(root_path)
         for tree in trees:

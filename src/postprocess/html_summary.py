@@ -35,10 +35,10 @@ def _html_dir_for_path(path, fallback_output_dir):
 
 
 def _source_path_for_file(context: PostprocessContext, index: int, processed_file):
-    if context.input_path.suffix.lower() == ".holo":
-        return context.input_path
     if index < len(context.input_h5_paths):
         return context.input_h5_paths[index]
+    if context.input_path.suffix.lower() == ".holo":
+        return context.input_path
     return processed_file
 
 

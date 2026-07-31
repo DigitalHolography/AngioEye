@@ -50,17 +50,24 @@ def compatible_postprocess_files(
         required_pipeline_options=required_pipeline_options,
     )
     if not pipeline_options:
-        return CompatiblePostprocessFiles(tuple(processed_outputs or input_h5_paths))
+        # A postprocess without pipeline requirements can still run directly on
+        # EyeFlow input.  Prefer a newly generated AngioEye file only when the
+        # user selected pipelines, since that file may contain useful derived
+        # data; with no selected pipelines it would otherwise be an empty,
+        # misleading replacement for the EyeFlow source.
+        if processed_outputs and selected_pipeline_names:
+            return CompatiblePostprocessFiles(tuple(processed_outputs))
+        return CompatiblePostprocessFiles(tuple(input_h5_paths or processed_outputs))
 
     selected = set(selected_pipeline_names)
-    if processed_outputs and _pipeline_options_selected(pipeline_options, selected):
-        return CompatiblePostprocessFiles(tuple(processed_outputs))
 
     compatible: list[Path] = []
     skipped: list[Path] = []
     for output_path, input_path in _paired_paths(processed_outputs, input_h5_paths):
-        if output_path is not None and has_pipeline_output_option(
-            output_path, pipeline_options
+        if (
+            output_path is not None
+            and _pipeline_options_selected(pipeline_options, selected)
+            and has_pipeline_output_option(output_path, pipeline_options)
         ):
             compatible.append(output_path)
             continue

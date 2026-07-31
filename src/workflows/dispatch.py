@@ -9,8 +9,6 @@ from typing import Any, Literal
 from input_output import InputPlan, relative_hdf5_parent
 from pipeline_engine import run_pipeline_file, run_postprocesses
 
-from ._holo import find_ae_h5 as find_holo_ae_h5
-from ._holo import output_dir as holo_output_dir
 from ._holo import reset_output_dir as reset_holo_output_dir
 from ._postprocess_requirements import (
     compatible_postprocess_files,
@@ -105,9 +103,6 @@ def _dispatch_holo_workflow(
             status="Ready.",
         )
 
-    if not request.pipelines and request.postprocesses:
-        return _dispatch_holo_postprocess_workflow(request, callbacks)
-
     try:
         resolved_inputs = resolve_selected_holo_contexts(request.holo_paths)
     except ValueError as exc:
@@ -160,66 +155,6 @@ def _dispatch_holo_workflow(
         skipped_holo_stems=tuple(skipped_holo_stems),
     )
 
-
-def _dispatch_holo_postprocess_workflow(
-    request: WorkflowRunRequest,
-    callbacks: WorkflowCallbacks,
-) -> WorkflowDispatchResult:
-    ae_records: list[tuple[Path, Path]] = []
-    failures: list[str] = []
-    skipped_stems: list[str] = []
-
-    for holo_path in request.holo_paths:
-        holo_path = holo_path.expanduser()
-        ae_h5 = find_holo_ae_h5(holo_path)
-        if ae_h5 is None:
-            skipped_stems.append(holo_path.stem)
-            failures.append(
-                f"{holo_path}: no existing AE HDF5 output found under "
-                f"{holo_output_dir(holo_path)}"
-            )
-            continue
-        ae_records.append((holo_path, ae_h5))
-    callbacks.start_final_progress(
-        len(ae_records) * len(request.postprocesses),
-        "Running postprocess...",
-    )
-
-    for holo_path, ae_h5 in ae_records:
-        run_postprocesses(
-            request.postprocesses,
-            holo_output_dir(holo_path),
-            (ae_h5,),
-            (ae_h5,),
-            holo_path,
-            request.selected_pipeline_names,
-            failures,
-            zip_outputs=False,
-            log=callbacks.log,
-            advance_progress=callbacks.advance_progress,
-            idle_callback=callbacks.idle_callback,
-            resolve_postprocess_files=_postprocess_file_resolver(
-                request.selected_pipeline_names
-            ),
-        )
-
-    summary = (
-        f"Postprocessed {len(ae_records)} existing AE HDF5 file(s)."
-        if ae_records
-        else "No existing AE HDF5 files were available for postprocessing."
-    )
-    return WorkflowDispatchResult(
-        workflow_result=RunWorkflowResult(
-            output_dir=(
-                holo_output_dir(ae_records[0][0]) if ae_records else Path(".")
-            ),
-            processed_outputs=[ae_h5 for _, ae_h5 in ae_records],
-            processed_input_paths=[ae_h5 for _, ae_h5 in ae_records],
-            failures=failures,
-            summary_message=summary,
-        ),
-        skipped_holo_stems=tuple(skipped_stems),
-    )
 
 def _dispatch_file_workflow(
     request: WorkflowRunRequest,

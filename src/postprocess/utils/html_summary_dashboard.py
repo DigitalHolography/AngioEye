@@ -10,18 +10,15 @@ import matplotlib
 import numpy as np
 import pandas as pd
 
-from input_output.eyeflow_schema import get_object
-
 matplotlib.use("Agg", force=True)
 
 import base64
 import html
 from tkinter import Tk, filedialog
 
-from math_utils import nanmedian, nanstd
 import matplotlib.pyplot as plt
+
 from input_output.archive_io import (
-    replace_folder_in_zip,
     reset_output_dir,
 )
 from input_output.hdf5_io import find_eyeflow_dataset, find_first_existing_path
@@ -101,8 +98,15 @@ LATEX_FORMULAS = {
 }
 
 
-def get_metrics_base_candidates(vessel: str) -> list[str]:
-    return pipeline_path_candidates(WAVEFORM_SHAPE_METRICS_PIPELINE, vessel, "global")
+def get_metrics_base_candidates(
+    vessel: str,
+    *parts: str,
+) -> list[str]:
+    return pipeline_path_candidates(
+        WAVEFORM_SHAPE_METRICS_PIPELINE,
+        vessel,
+        *parts,
+    )
 
 
 def extract_group_metrics(group, results_dict, prefix=""):
@@ -133,6 +137,28 @@ def extract_group_metrics(group, results_dict, prefix=""):
 
             except (ValueError, TypeError):
                 print(f"Skipping non numeric dataset: {full_name}")
+
+
+def _iter_metric_mode_groups(group):
+    """Yield raw/bandlimited groups at any depth below a metric region."""
+    for name, item in group.items():
+        if not isinstance(item, h5py.Group):
+            continue
+        if name in VALID_METRIC_FOLDERS:
+            yield name, item
+            continue
+        yield from _iter_metric_mode_groups(item)
+
+
+def _extract_metric_modes(group):
+    global_group = group.get("global")
+    if isinstance(global_group, h5py.Group):
+        return _extract_metric_modes(global_group)
+
+    modes = defaultdict(dict)
+    for mode, mode_group in _iter_metric_mode_groups(group):
+        extract_group_metrics(mode_group, modes[mode])
+    return modes
 
 
 def extract_topological_metrics(h5_path):
@@ -179,25 +205,46 @@ def extract_waveform_shape_metrics(h5_path):
 
             metrics_root_path = find_first_existing_path(
                 f,
-                get_metrics_base_candidates(vessel)
+                get_metrics_base_candidates(vessel, "global"),
             )
 
-            if metrics_root_path is None or metrics_root_path not in f:
+            if metrics_root_path is not None and metrics_root_path in f:
+                metrics_root = f[metrics_root_path]
+                for mode, mode_group in _iter_metric_mode_groups(metrics_root):
+                    extract_group_metrics(mode_group, results[mode][vessel])
+
+            hemifield_root_path = find_first_existing_path(
+                f,
+                get_metrics_base_candidates(vessel, "hemifield"),
+            )
+            if hemifield_root_path is None or hemifield_root_path not in f:
                 continue
 
-            metrics_root = f[metrics_root_path]
+            hemifield_root = f[hemifield_root_path]
+            direct_modes = {
+                mode: mode_group
+                for mode, mode_group in hemifield_root.items()
+                if mode in VALID_METRIC_FOLDERS
+                and isinstance(mode_group, h5py.Group)
+            }
+            if direct_modes:
+                for mode, mode_group in direct_modes.items():
+                    metrics = {}
+                    extract_group_metrics(mode_group, metrics)
+                    results["hemifield"].setdefault("all", {}).setdefault(
+                        mode,
+                        {},
+                    )[vessel] = metrics
+                continue
 
-            for mode in metrics_root.keys():
-
-                if mode not in VALID_METRIC_FOLDERS:
+            for region_name, region_group in hemifield_root.items():
+                if not isinstance(region_group, h5py.Group):
                     continue
-
-                group = metrics_root[mode]
-
-                extract_group_metrics(
-                    group,
-                    results[mode][vessel]
-                )
+                for mode, metrics in _extract_metric_modes(region_group).items():
+                    results["hemifield"].setdefault(region_name, {}).setdefault(
+                        mode,
+                        {},
+                    )[vessel] = metrics
 
     return results
 
@@ -271,7 +318,7 @@ def _append_metrics_table(html_parts, df):
     """)
 
 def _find_topology_branch_label_map(h5file, vessel_type):
-    source_dataset = get_object(
+    source_dataset = find_eyeflow_dataset(
         h5file,
         f"/Segmentation/{vessel_type.title()}/BranchLabelMap/value",
     )
@@ -325,6 +372,7 @@ def _branch_label_map_to_base64(
 def dataframe_to_html_table(
     waveform_tables,
     topological_tables,
+    hemifield_tables=None,
     title="Metrics Table",
     M_0_path=None,
     mask_vein_path=None,
@@ -336,6 +384,7 @@ def dataframe_to_html_table(
     vein_branch_label_map_path=None,
 ):
     html_parts = []
+    hemifield_tables = hemifield_tables or []
 
     html_parts.append("""
     <html>
@@ -521,6 +570,14 @@ def dataframe_to_html_table(
         document.getElementById(zone).style.display = "block";
     }
 
+    function showHemifield(region) {
+        document.querySelectorAll(".hemifield-table").forEach(div => {
+            div.style.display = "none";
+        });
+
+        document.getElementById(region).style.display = "block";
+    }
+
     function closeImageModal() {
         document.getElementById("image-modal").style.display = "none";
     }
@@ -627,6 +684,39 @@ def dataframe_to_html_table(
         for _, df in waveform_tables:
                 _append_metrics_table(html_parts, df)
                 html_parts.append("<br><br>")
+
+    if hemifield_tables:
+        html_parts.append('<h2 class="pipeline-title">Hemifield Analysis</h2>')
+        html_parts.append("""
+        <label for="hemifield-select"><b>Region :</b></label>
+        <select id="hemifield-select" onchange="showHemifield(this.value)">
+        """)
+
+        for index, (region, _) in enumerate(hemifield_tables):
+            display_region = str(region).replace("_", " ").title()
+            selected = " selected" if index == 0 else ""
+            html_parts.append(
+                f'<option value="hemifield-{index}"{selected}>'
+                f"{html.escape(display_region)}</option>"
+            )
+
+        html_parts.append("""
+        </select>
+        <br><br>
+        """)
+
+        for index, (region, df) in enumerate(hemifield_tables):
+            display = "block" if index == 0 else "none"
+            html_parts.append(
+                f'<div id="hemifield-{index}" class="hemifield-table" '
+                f'style="display:{display};">'
+            )
+            html_parts.append(
+                f"<h3>{html.escape(str(region).replace('_', ' ').title())}</h3>"
+            )
+            _append_metrics_table(html_parts, df)
+            html_parts.append("<br><br>")
+            html_parts.append("</div>")
          
 
     if topological_tables:
@@ -817,6 +907,7 @@ def _build_single_file_html(filepath, *, image_dir, source_path=None):
     
     waveform_tables = []
     topological_tables = []
+    hemifield_tables = []
 
 
     # Waveform Shape Metrics
@@ -830,6 +921,18 @@ def _build_single_file_html(filepath, *, image_dir, source_path=None):
             )
         )
 
+    hemifield = waveform.get("hemifield", {}) if waveform else {}
+    for region, region_modes in sorted(hemifield.items()):
+        mode = "bandlimited" if "bandlimited" in region_modes else "raw"
+        if mode not in region_modes:
+            continue
+        hemifield_tables.append(
+            (
+                region,
+                build_metrics_table_for_file(region_modes[mode]),
+            )
+        )
+
     # Topological Metrics
     if topological and "bandlimited" in topological:
         for zone, zone_metrics in sorted(topological["bandlimited"].items()):
@@ -837,7 +940,7 @@ def _build_single_file_html(filepath, *, image_dir, source_path=None):
 
             topological_tables.append((zone, df))
 
-    if not waveform_tables and not topological_tables:
+    if not waveform_tables and not hemifield_tables and not topological_tables:
         raise ValueError(
             "No compatible pipeline metrics were found for the dashboard."
         )
@@ -889,7 +992,7 @@ def _build_single_file_html(filepath, *, image_dir, source_path=None):
                 cmap="viridis",
             )
 
-        vein_mask = get_object(f, "/Segmentation/Vein/Mask/value")
+        vein_mask = find_eyeflow_dataset(f, "/Segmentation/Vein/Mask/value")
         if mask_rel_path_vein is None and isinstance(vein_mask, h5py.Dataset):
             mask_rel_path_vein = _array_image_to_base64(
                 np.array(vein_mask),
@@ -898,7 +1001,7 @@ def _build_single_file_html(filepath, *, image_dir, source_path=None):
                 cmap="gray",
             )
 
-        artery_mask = get_object(f, "/Segmentation/Artery/Mask/value")
+        artery_mask = find_eyeflow_dataset(f, "/Segmentation/Artery/Mask/value")
         if mask_rel_path_artery is None and isinstance(artery_mask, h5py.Dataset):
             mask_rel_path_artery = _array_image_to_base64(
                 np.array(artery_mask),
@@ -907,7 +1010,10 @@ def _build_single_file_html(filepath, *, image_dir, source_path=None):
                 cmap="gray",
             )
 
-        frms_map = get_object(f, "/Processing/FrequencyMaps/fRMS_avg/value")
+        frms_map = find_eyeflow_dataset(
+            f,
+            "/Processing/FrequencyMaps/fRMS_avg/value",
+        )
         if f_AVG_mean_rel_path is None and isinstance(frms_map, h5py.Dataset):
             f_AVG_mean_rel_path = _array_image_to_base64(
                 np.array(frms_map),
@@ -916,7 +1022,10 @@ def _build_single_file_html(filepath, *, image_dir, source_path=None):
                 cmap="viridis",
             )
 
-        artery_velocity = get_object(f, "/Processing/Velocity/Artery/Raw/value")
+        artery_velocity = find_eyeflow_dataset(
+            f,
+            "/Processing/Velocity/Artery/Raw/value",
+        )
         if artery_velocity_signal_path is None and isinstance(
             artery_velocity, h5py.Dataset
         ):
@@ -928,7 +1037,10 @@ def _build_single_file_html(filepath, *, image_dir, source_path=None):
                 title="Artery Velocity Signal",
             )
 
-        vein_velocity = get_object(f, "/Processing/Velocity/Vein/Raw/value")
+        vein_velocity = find_eyeflow_dataset(
+            f,
+            "/Processing/Velocity/Vein/Raw/value",
+        )
         if vein_velocity_signal_path is None and isinstance(
             vein_velocity, h5py.Dataset
         ):
@@ -943,6 +1055,7 @@ def _build_single_file_html(filepath, *, image_dir, source_path=None):
     return dataframe_to_html_table(
         waveform_tables=waveform_tables,
         topological_tables=topological_tables,
+        hemifield_tables=hemifield_tables,
         title=f"Metrics for {filepath.name}",
         M_0_path=M_0_rel_path,
         mask_vein_path=mask_rel_path_vein,

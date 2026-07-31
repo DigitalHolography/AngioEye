@@ -16,6 +16,7 @@ from input_output import (  # noqa: E402
     ANGIOEYE_SIGNALS_ROOT,
     EYEFLOW_ROOT,
     find_eyeflow_dataset,
+    find_pipeline_group,
     read_signal_datasets,
 )
 from pipeline_engine import run_pipeline_file, run_postprocesses  # noqa: E402
@@ -45,6 +46,22 @@ class _Pipeline:
 
 
 class PipelineEngineTests(unittest.TestCase):
+    def test_run_pipeline_file_without_pipelines_omits_empty_processing_group(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            input_path = tmp_path / "sample.h5"
+            with h5py.File(input_path, "w"):
+                pass
+
+            output_path = run_pipeline_file(
+                input_path,
+                [],
+                tmp_path / "outputs",
+            )
+
+            with h5py.File(output_path, "r") as h5file:
+                self.assertNotIn(ANGIOEYE_PROCESSING_ROOT, h5file)
+
     def test_run_pipeline_file_uses_unique_output_names_and_writes_h5(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
@@ -113,6 +130,44 @@ class PipelineEngineTests(unittest.TestCase):
                 self.assertEqual(
                     "from-eyeflow",
                     h5file[EYEFLOW_ROOT].attrs["source_attr"],
+                )
+
+    def test_persisted_eyeflow_v2_source_stays_under_eyeflow_namespace(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            input_path = tmp_path / "sample_EF.h5"
+            with h5py.File(input_path, "w") as h5file:
+                h5file.attrs["output_schema"] = "eyeflow_v2"
+                h5file.create_dataset(
+                    "/Processing/VelocityPerBeat/Artery/Raw/value",
+                    data=[1.0, 2.0],
+                )
+                h5file.require_group(
+                    "/Processing/Metrics/waveform_shape_metrics"
+                )
+
+            output_path = run_pipeline_file(
+                input_path,
+                [_PipelineDescriptor()],
+                tmp_path / "persisted",
+                persist_source=True,
+            )
+
+            with h5py.File(output_path, "r") as h5file:
+                self.assertIn(
+                    f"{EYEFLOW_ROOT}/Processing/VelocityPerBeat/Artery/Raw/value",
+                    h5file,
+                )
+                self.assertNotIn(
+                    "/Processing/VelocityPerBeat/Artery/Raw/value",
+                    h5file,
+                )
+                self.assertEqual(
+                    "eyeflow_v2",
+                    h5file[EYEFLOW_ROOT].attrs["output_schema"],
+                )
+                self.assertIsNotNone(
+                    find_pipeline_group(h5file, "waveform_shape_metrics")
                 )
 
     def test_signals_are_copied_without_persisting_the_eye_flow_source(self):

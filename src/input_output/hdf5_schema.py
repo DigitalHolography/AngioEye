@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import h5py
 
-from .hdf5_io import find_child_group_by_attr, safe_h5_key
+from .hdf5_io import EYEFLOW_ROOT, find_child_group_by_attr, safe_h5_key
 
 HDF5_SUFFIXES = frozenset({".h5", ".hdf5"})
 ANGIOEYE_ROOT = "/AngioEye"
@@ -12,6 +13,9 @@ ANGIOEYE_PROCESSING_ROOT = f"{ANGIOEYE_ROOT}/Processing"
 ANGIOEYE_POSTPROCESS_ROOT = f"{ANGIOEYE_ROOT}/Postprocessing"
 ANGIOEYE_SIGNALS_ROOT = f"{ANGIOEYE_ROOT}/Signals"
 LEGACY_PIPELINES_ROOT = "/Pipelines"
+EYEFLOW_METRICS_ROOT = "/Processing/Metrics"
+EYEFLOW_NAMESPACED_METRICS_ROOT = f"{EYEFLOW_ROOT}{EYEFLOW_METRICS_ROOT}"
+EYEFLOW_LEGACY_METRICS_ROOT = "/Metrics"
 
 
 def is_hdf5_path(path: str | Path) -> bool:
@@ -34,6 +38,12 @@ def pipeline_path_candidates(pipeline_name: str, *parts: str) -> list[str]:
         [
             f"{ANGIOEYE_PROCESSING_ROOT}/{safe_name}",
             f"{ANGIOEYE_PROCESSING_ROOT}/{pipeline_name}",
+            f"{EYEFLOW_NAMESPACED_METRICS_ROOT}/{safe_name}",
+            f"{EYEFLOW_NAMESPACED_METRICS_ROOT}/{pipeline_name}",
+            f"{EYEFLOW_METRICS_ROOT}/{safe_name}",
+            f"{EYEFLOW_METRICS_ROOT}/{pipeline_name}",
+            f"{EYEFLOW_LEGACY_METRICS_ROOT}/{safe_name}",
+            f"{EYEFLOW_LEGACY_METRICS_ROOT}/{pipeline_name}",
             f"{LEGACY_PIPELINES_ROOT}/{safe_name}",
             f"{LEGACY_PIPELINES_ROOT}/{pipeline_name}",
         ],
@@ -62,6 +72,14 @@ def get_processing_root(
         return group if isinstance(group, h5py.Group) else None
     if create:
         return h5file.require_group(ANGIOEYE_PROCESSING_ROOT)
+    for processing_path in (
+        EYEFLOW_NAMESPACED_METRICS_ROOT,
+        EYEFLOW_METRICS_ROOT,
+        EYEFLOW_LEGACY_METRICS_ROOT,
+    ):
+        if processing_path in h5file:
+            group = h5file[processing_path]
+            return group if isinstance(group, h5py.Group) else None
     if LEGACY_PIPELINES_ROOT in h5file:
         group = h5file[LEGACY_PIPELINES_ROOT]
         return group if isinstance(group, h5py.Group) else None
