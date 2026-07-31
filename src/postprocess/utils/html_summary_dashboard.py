@@ -1,33 +1,37 @@
 ﻿import os
+import shutil
 import tempfile
 import zipfile
 from collections import defaultdict
 from pathlib import Path
-import shutil
+
 import h5py
+import matplotlib
 import numpy as np
 import pandas as pd
-import matplotlib
+
+from input_output.eyeflow_schema import get_object
 
 matplotlib.use("Agg", force=True)
 
-import matplotlib.pyplot as plt
-from matplotlib.ticker import FormatStrFormatter
-from tkinter import Tk, filedialog
-import html
 import base64
+import html
+from tkinter import Tk, filedialog
+
 from math_utils import nanmedian, nanstd
-from input_output.hdf5_io import find_eyeflow_dataset, find_first_existing_path
-from input_output.hdf5_schema import pipeline_path_candidates
+import matplotlib.pyplot as plt
 from input_output.archive_io import (
     replace_folder_in_zip,
     reset_output_dir,
 )
+from input_output.hdf5_io import find_eyeflow_dataset, find_first_existing_path
+from input_output.hdf5_schema import find_pipeline_group, pipeline_path_candidates
 from input_output.output_paths import (
     PNG_OUTPUT_DIRNAME,
     dataset_stem_from_path,
     find_companion_file,
 )
+from math_utils import nanmedian, nanstd
 
 WAVEFORM_SHAPE_METRICS_PIPELINE = "waveform_shape_metrics"
 TOPOLOGICAL_METRICS_PIPELINE = "topological_metrics"
@@ -140,25 +144,25 @@ def extract_topological_metrics(h5_path):
     )
 
     with h5py.File(h5_path, "r") as f:
+        pipeline_group = find_pipeline_group(f, TOPOLOGICAL_METRICS_PIPELINE)
+        if pipeline_group is None:
+            return results
 
         for vessel in VALID_VESSELS:
-
-            vessel_root = f"/AngioEye/Processing/topological_metrics/{vessel}"
-
-            if vessel_root not in f:
+            vessel_group = pipeline_group.get(vessel)
+            if not isinstance(vessel_group, h5py.Group):
                 continue
 
-            for zone in f[vessel_root]:
-
-                bandlimited_path = (
-                    f"{vessel_root}/{zone}/global/bandlimited"
-                )
-
-                if bandlimited_path not in f:
+            for zone in vessel_group:
+                zone_group = vessel_group.get(zone)
+                if not isinstance(zone_group, h5py.Group):
+                    continue
+                bandlimited_group = zone_group.get("global/bandlimited")
+                if not isinstance(bandlimited_group, h5py.Group):
                     continue
 
                 extract_group_metrics(
-                    f[bandlimited_path],
+                    bandlimited_group,
                     results["bandlimited"][zone][vessel]
                 )
 
@@ -266,17 +270,44 @@ def _append_metrics_table(html_parts, df):
     </table>
     """)
 
-def _branch_label_map_to_base64(source_path, *, vessel_type, image_dir, base_name):
-    dataset = (
-        f"/AngioEye/Processing/topological_metrics/"
-        f"topology/{vessel_type}/branch_label_map"
+def _find_topology_branch_label_map(h5file, vessel_type):
+    source_dataset = get_object(
+        h5file,
+        f"/Segmentation/{vessel_type.title()}/BranchLabelMap/value",
     )
+    if isinstance(source_dataset, h5py.Dataset):
+        return source_dataset
 
-    with h5py.File(source_path, "r") as f:
-        if dataset not in f:
-            return None
+    pipeline_group = find_pipeline_group(h5file, TOPOLOGICAL_METRICS_PIPELINE)
+    if pipeline_group is None:
+        return None
+    dataset = pipeline_group.get(f"topology/{vessel_type}/branch_label_map")
+    return dataset if isinstance(dataset, h5py.Dataset) else None
 
-        data = np.array(f[dataset])
+
+def _branch_label_map_to_base64(
+    source_path,
+    *,
+    vessel_type,
+    image_dir,
+    base_name,
+    fallback_path=None,
+):
+    data = None
+    for candidate in (source_path, fallback_path):
+        if (
+            candidate is None
+            or not Path(candidate).exists()
+            or not h5py.is_hdf5(candidate)
+        ):
+            continue
+        with h5py.File(candidate, "r") as f:
+            dataset = _find_topology_branch_label_map(f, vessel_type)
+            if dataset is not None:
+                data = np.array(dataset)
+                break
+    if data is None:
+        return None
 
     image_path = os.path.join(
         image_dir,
@@ -776,6 +807,11 @@ def _signal_image_to_base64(data, image_dir, filename, *, color, title):
 
 def _build_single_file_html(filepath, *, image_dir, source_path=None):
     filepath = Path(filepath)
+    source_h5_path = filepath
+    if source_path is not None:
+        candidate = Path(source_path)
+        if candidate.suffix.lower() in {".h5", ".hdf5"} and candidate.exists():
+            source_h5_path = candidate
     waveform = extract_waveform_shape_metrics(filepath)
     topological = extract_topological_metrics(filepath)
     
@@ -809,17 +845,19 @@ def _build_single_file_html(filepath, *, image_dir, source_path=None):
     base_name = filepath.stem
 
     artery_branch_label_map_path = _branch_label_map_to_base64(
-        filepath,
+        source_h5_path,
         vessel_type="artery",
         image_dir=image_dir,
         base_name=base_name,
+        fallback_path=filepath,
     )
 
     vein_branch_label_map_path = _branch_label_map_to_base64(
-        filepath,
+        source_h5_path,
         vessel_type="vein",
         image_dir=image_dir,
         base_name=base_name,
+        fallback_path=filepath,
     )
 
     M_0_rel_path = None
@@ -851,67 +889,51 @@ def _build_single_file_html(filepath, *, image_dir, source_path=None):
                 cmap="viridis",
             )
 
-        vein_mask_dataset = find_eyeflow_dataset(
-            f,
-            "Vein/Segmentation/Mask/value",
-        )
-        if mask_rel_path_vein is None and vein_mask_dataset is not None:
+        vein_mask = get_object(f, "/Segmentation/Vein/Mask/value")
+        if mask_rel_path_vein is None and isinstance(vein_mask, h5py.Dataset):
             mask_rel_path_vein = _array_image_to_base64(
-                np.array(vein_mask_dataset),
+                np.array(vein_mask),
                 image_dir,
                 f"{base_name}_vein_mask.png",
                 cmap="gray",
             )
 
-        artery_mask_dataset = find_eyeflow_dataset(
-            f,
-            "Artery/Segmentation/Mask/value",
-        )
-        if mask_rel_path_artery is None and artery_mask_dataset is not None:
+        artery_mask = get_object(f, "/Segmentation/Artery/Mask/value")
+        if mask_rel_path_artery is None and isinstance(artery_mask, h5py.Dataset):
             mask_rel_path_artery = _array_image_to_base64(
-                np.array(artery_mask_dataset),
+                np.array(artery_mask),
                 image_dir,
                 f"{base_name}_artery_mask.png",
                 cmap="gray",
             )
 
-        f_AVG_mean_dataset = find_eyeflow_dataset(f, "Maps/f_AVG_mean/value")
-        if f_AVG_mean_rel_path is None and f_AVG_mean_dataset is not None:
+        frms_map = get_object(f, "/Processing/FrequencyMaps/fRMS_avg/value")
+        if f_AVG_mean_rel_path is None and isinstance(frms_map, h5py.Dataset):
             f_AVG_mean_rel_path = _array_image_to_base64(
-                np.array(f_AVG_mean_dataset),
+                np.array(frms_map),
                 image_dir,
                 f"{base_name}_f_AVG_mean.png",
                 cmap="viridis",
             )
 
-        if (
-            artery_velocity_signal_path is None
-            and (
-                artery_velocity_dataset := find_eyeflow_dataset(
-                    f,
-                    "Artery/Velocity/VelocitySignal/value",
-                )
-            ) is not None
+        artery_velocity = get_object(f, "/Processing/Velocity/Artery/Raw/value")
+        if artery_velocity_signal_path is None and isinstance(
+            artery_velocity, h5py.Dataset
         ):
             artery_velocity_signal_path = _signal_image_to_base64(
-                np.array(artery_velocity_dataset),
+                np.array(artery_velocity),
                 image_dir,
                 f"{base_name}_artery_velocity_signal.png",
                 color="#EC5241",
                 title="Artery Velocity Signal",
             )
 
-        if (
-            vein_velocity_signal_path is None
-            and (
-                vein_velocity_dataset := find_eyeflow_dataset(
-                    f,
-                    "Vein/Velocity/VelocitySignal/value",
-                )
-            ) is not None
+        vein_velocity = get_object(f, "/Processing/Velocity/Vein/Raw/value")
+        if vein_velocity_signal_path is None and isinstance(
+            vein_velocity, h5py.Dataset
         ):
             vein_velocity_signal_path = _signal_image_to_base64(
-                np.array(vein_velocity_dataset),
+                np.array(vein_velocity),
                 image_dir,
                 f"{base_name}_vein_velocity_signal.png",
                 color="#414CEC",
