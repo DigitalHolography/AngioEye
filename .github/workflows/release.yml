@@ -115,11 +115,8 @@ jobs:
               throw "Tag '$tagName' points to $tagCommitSha, but origin/dev is $devSha. Create the release tag from the current dev HEAD."
           }
 
-          git merge-base --is-ancestor $mainSha $tagCommitSha
-          if ($LASTEXITCODE -eq 1) {
-              throw "origin/main ($mainSha) is not an ancestor of tagged dev ($tagCommitSha). Merge or rebase main into dev, verify the result, then create a new release tag. Releasing diverged branches would overwrite main-only changes."
-          }
-          Assert-LastExit "Could not verify that origin/main is an ancestor of tagged dev."
+          # main and dev intentionally diverge: the release commit is a squash
+          # based on main, while dev retains its normal development history.
 
           $releaseApiUrl = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/tags/$tagName"
           $releaseExists = $false
@@ -299,10 +296,8 @@ jobs:
 
           git push --atomic origin `
               HEAD:refs/heads/main `
-              HEAD:refs/heads/dev `
               "refs/tags/${env:TAG_NAME}:refs/tags/${env:TAG_NAME}" `
               "--force-with-lease=refs/heads/main`:${env:MAIN_SHA}" `
-              "--force-with-lease=refs/heads/dev`:${env:TAG_COMMIT_SHA}" `
               "--force-with-lease=refs/tags/${env:TAG_NAME}`:${env:TAG_REF_SHA}"
 
       - name: Publish GitHub release

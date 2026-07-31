@@ -5,12 +5,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from input_output import InputPlan, prepare_run_input, prepare_run_inputs
+from input_output import (
+    InputPlan,
+    default_h5_output_dir,
+    default_output_filename_for_run,
+    is_hdf5_path,
+    prepare_run_input,
+    prepare_run_inputs,
+)
 
 from ._postprocess_requirements import (
     missing_required_option_errors,
     missing_required_pipeline_errors,
 )
+from ._stem_inputs import resolve_selected_holo_contexts
 from .dispatch import OutputFilenameResolver, WorkflowInputError, WorkflowRunRequest
 from .runs import ZipOutputDir
 
@@ -101,7 +109,7 @@ def build_workflow_request(
     state: WorkflowRequestState,
     *,
     zip_output_dir: ZipOutputDir,
-    output_filename_for_run: OutputFilenameResolver,
+    output_filename_for_run: OutputFilenameResolver = default_output_filename_for_run,
     cwd: Callable[[], Path] = Path.cwd,
 ) -> WorkflowRunRequest:
     input_selection = state.input_selection
@@ -125,17 +133,26 @@ def build_workflow_request(
             ) from exc
         request_mode = input_plan.kind
 
-    reusable_h5_paths = (
-        input_plan.h5_paths
-        if input_plan is not None and not input_plan.is_zip
-        else ()
-    )
+    if input_plan is not None and not input_plan.is_zip:
+        reusable_h5_paths = input_plan.h5_paths
+    elif input_selection.convention == "holo":
+        try:
+            resolved_holo_inputs = resolve_selected_holo_contexts(
+                input_selection.holo_paths
+            )
+        except (OSError, RuntimeError, ValueError):
+            reusable_h5_paths = ()
+        else:
+            reusable_h5_paths = tuple(
+                context.h5_path for context in resolved_holo_inputs.contexts
+            )
+    else:
+        reusable_h5_paths = ()
     requirement_errors = missing_required_pipeline_errors(
         postprocesses=work_selection.postprocesses,
         selected_pipeline_names=work_selection.pipeline_names,
         reusable_h5_paths=reusable_h5_paths,
-        defer_when_no_reusable_paths=bool(input_plan and input_plan.is_zip)
-        or (input_selection.convention == "holo" and not work_selection.pipelines),
+        defer_when_no_reusable_paths=bool(input_plan and input_plan.is_zip),
     )
     requirement_errors.extend(
         missing_required_option_errors(
@@ -191,7 +208,11 @@ def resolve_workflow_output_dir(
     if input_plan.kind == "zip":
         default_dir = input_path.parent / f"{input_path.stem}_angioeye"
     elif input_plan.kind == "file" and input_path.is_file():
-        default_dir = input_path.parent
+        default_dir = (
+            default_h5_output_dir(input_path)
+            if is_hdf5_path(input_path)
+            else input_path.parent
+        )
     else:
         default_dir = input_path
     default_dir.mkdir(parents=True, exist_ok=True)

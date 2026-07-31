@@ -18,8 +18,10 @@ from input_output.output_paths import companion_output_dir, h5_output_parent
 from postprocess.core.base import PostprocessContext
 from postprocess.html_summary import WaveformMetricSummaryTablesPostprocess
 from postprocess.utils.html_summary_dashboard import (
+    extract_waveform_shape_metrics,
     find_segmentation_map_png,
     find_velocity_signal_png,
+    generate_metric_table_html_for_file,
 )
 from workflows import HoloInputContext, ZipBatchSettings, find_ae_h5, run_holo_workflow
 
@@ -47,7 +49,98 @@ def _write_ef_companion_pngs_to_zip(archive: zipfile.ZipFile, ef_prefix: str) ->
         archive.writestr(f"{ef_prefix}/png/{filename}", b"png")
 
 
+def _write_eyeflow_hemifield_file(path: Path, *, namespaced: bool) -> None:
+    root = "/EyeFlow" if namespaced else ""
+    metrics_root = f"{root}/Processing/Metrics/waveform_shape_metrics"
+    segmentation_root = f"{root}/Segmentation"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with h5py.File(path, "w") as h5file:
+        for vessel in ("artery", "vein"):
+            h5file.create_dataset(
+                f"{metrics_root}/{vessel}/global/bandlimited/RI",
+                data=[0.7],
+            )
+            for region, value in (("nasal", 0.6), ("temporal", 0.8)):
+                h5file.create_dataset(
+                    f"{metrics_root}/{vessel}/hemifield/"
+                    f"{region}/global/bandlimited/RI",
+                    data=[value],
+                )
+                h5file.create_dataset(
+                    f"{metrics_root}/{vessel}/hemifield/"
+                    f"{region}/by_branch/branch_1/bandlimited/RI",
+                    data=[value + 0.01],
+                )
+            h5file.create_dataset(
+                f"{segmentation_root}/{vessel.title()}/BranchLabelMap/value",
+                data=[[1, 2], [3, 4]],
+            )
+
+
 class HtmlSummaryPathTests(unittest.TestCase):
+    def test_html_summary_reads_new_hemifield_metrics_and_maps(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            h5_path = tmp_path / "sample_EF.h5"
+            _write_eyeflow_hemifield_file(h5_path, namespaced=False)
+
+            metrics = extract_waveform_shape_metrics(h5_path)
+
+            self.assertIn("hemifield", metrics)
+            self.assertIn("nasal", metrics["hemifield"])
+            self.assertIn(
+                "RI",
+                metrics["hemifield"]["nasal"]["bandlimited"]["artery"],
+            )
+            self.assertAlmostEqual(
+                0.6,
+                metrics["hemifield"]["nasal"]["bandlimited"]["artery"][
+                    "RI"
+                ]["median"],
+            )
+
+            html_path = tmp_path / "html" / "sample.html"
+            generate_metric_table_html_for_file(h5_path, html_path)
+            html_text = html_path.read_text(encoding="utf-8")
+            self.assertIn("Hemifield Analysis", html_text)
+            self.assertIn("Nasal", html_text)
+            self.assertIn('id="hemifield-select"', html_text)
+            self.assertIn("showHemifield", html_text)
+            self.assertIn("Artery Branch Label Map", html_text)
+
+    def test_html_summary_reads_namespaced_eyeflow_hemifield_metrics(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            h5_path = Path(tmp_dir) / "sample_AE.h5"
+            _write_eyeflow_hemifield_file(h5_path, namespaced=True)
+
+            metrics = extract_waveform_shape_metrics(h5_path)
+
+            self.assertIn("temporal", metrics["hemifield"])
+            self.assertIn(
+                "RI",
+                metrics["hemifield"]["temporal"]["bandlimited"]["vein"],
+            )
+
+    def test_html_summary_reads_legacy_eyeflow_metrics_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            h5_path = Path(tmp_dir) / "legacy_EF.h5"
+            with h5py.File(h5_path, "w") as h5file:
+                h5file.create_dataset(
+                    "/Metrics/waveform_shape_metrics/artery/"
+                    "global/bandlimited/RI",
+                    data=[0.7],
+                )
+                h5file.create_dataset(
+                    "/Topology/Artery/BranchLabelMap/value",
+                    data=[[1, 2], [3, 4]],
+                )
+
+            metrics = extract_waveform_shape_metrics(h5_path)
+
+            self.assertAlmostEqual(
+                0.7,
+                metrics["bandlimited"]["artery"]["RI"]["median"],
+            )
     def test_companion_paths_resolve_across_app_folders(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir) / "sample"

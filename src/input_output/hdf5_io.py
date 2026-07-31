@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping, Sequence
+import json
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -8,22 +9,27 @@ from typing import Any
 import h5py
 import numpy as np
 
+from app_settings import app_version
+
+from .eyeflow_schema import VELOCITY_PER_BEAT, get_object
+
 UTF8_STRING_DTYPE = h5py.string_dtype(encoding="utf-8")
+EYEFLOW_ROOT = "/EyeFlow"
 GroupCache = dict[str, h5py.Group]
 
 _SIGNAL_DATASET_PATHS = (
-    (
-        "artery/raw",
-        "/Artery/VelocityPerBeat/VelocitySignalPerBeat/value",
-    ),
+    ("artery/raw", VELOCITY_PER_BEAT[("artery", "raw")]),
+    ("artery/bandlimited", VELOCITY_PER_BEAT[("artery", "bandlimited")]),
+    ("vein/raw", VELOCITY_PER_BEAT[("vein", "raw")]),
+    ("vein/bandlimited", VELOCITY_PER_BEAT[("vein", "bandlimited")]),
+)
+_LEGACY_SIGNAL_DATASET_PATHS = (
+    ("artery/raw", "/Artery/VelocityPerBeat/VelocitySignalPerBeat/value"),
     (
         "artery/bandlimited",
         "/Artery/VelocityPerBeat/VelocitySignalPerBeatBandLimited/value",
     ),
-    (
-        "vein/raw",
-        "/Vein/VelocityPerBeat/VelocitySignalPerBeat/value",
-    ),
+    ("vein/raw", "/Vein/VelocityPerBeat/VelocitySignalPerBeat/value"),
     (
         "vein/bandlimited",
         "/Vein/VelocityPerBeat/VelocitySignalPerBeatBandLimited/value",
@@ -53,17 +59,18 @@ def open_h5(path: Path | str, mode: str = "r") -> h5py.File:
 
 
 def copy_h5_contents(source_file: Path | str | None, dest: h5py.File) -> None:
-    """Copy all attributes and top-level objects from an existing HDF5 into dest."""
+    """Copy an EyeFlow HDF5 into the output file's ``/EyeFlow`` group."""
     if not source_file:
         return
     src_path = Path(source_file)
     if not src_path.exists():
         return
     with open_h5(src_path, "r") as src:
+        target = dest.require_group(EYEFLOW_ROOT)
         for key, value in src.attrs.items():
-            dest.attrs[key] = value
+            target.attrs[key] = value
         for key in src.keys():
-            src.copy(src[key], dest, name=key)
+            src.copy(src[key], target, name=key)
 
 
 def copy_signal_datasets(
@@ -89,14 +96,64 @@ def copy_signal_datasets(
         write_signal_datasets(read_signal_datasets(src), dest)
 
 
+def _initialize_app_versions(
+    h5file: h5py.File,
+    source_file: Path | str | None,
+) -> None:
+    """Write application versions as one JSON dictionary dataset."""
+
+    if "app_versions" in h5file:
+        del h5file["app_versions"]
+
+    app_versions: dict[str, str] = {}
+    if source_file:
+        with open_h5(source_file, "r") as source_h5:
+            if "app_versions" in source_h5:
+                app_versions = json.loads(source_h5["app_versions"][()])
+
+    app_versions["AE_version"] = app_version()
+    h5file.create_dataset(
+        "app_versions",
+        data=json.dumps(app_versions),
+        dtype=UTF8_STRING_DTYPE,
+    )
+
+
 def read_signal_datasets(source: h5py.Group | h5py.File) -> dict[str, np.ndarray]:
     """Read the canonical EyeFlow signals from an already-open HDF5 file."""
     signals: dict[str, np.ndarray] = {}
-    for destination_path, source_path in _SIGNAL_DATASET_PATHS:
-        source_dataset = source.get(source_path)
+    for (destination_path, source_path), (_, legacy_source_path) in zip(
+        _SIGNAL_DATASET_PATHS,
+        _LEGACY_SIGNAL_DATASET_PATHS,
+        strict=True,
+    ):
+        source_dataset = get_object(source, source_path)
+        if source_dataset is None:
+            source_dataset = find_eyeflow_dataset(source, legacy_source_path)
+        if source_dataset is None:
+            source_dataset = source.get(
+                f"/AngioEye/Signals/{destination_path.strip('/')}"
+            )
         if isinstance(source_dataset, h5py.Dataset):
             signals[destination_path] = np.asarray(source_dataset)
     return signals
+
+
+def find_eyeflow_dataset(
+    group_or_file: h5py.Group | h5py.File,
+    path: str,
+) -> h5py.Dataset | None:
+    """Find a dataset in the v2, namespaced, or legacy root layout."""
+    dataset = get_object(group_or_file, path)
+    if isinstance(dataset, h5py.Dataset):
+        return dataset
+
+    normalized_path = str(path).strip("/")
+    for candidate in (f"{EYEFLOW_ROOT}/{normalized_path}", f"/{normalized_path}"):
+        dataset = group_or_file.get(candidate)
+        if isinstance(dataset, h5py.Dataset):
+            return dataset
+    return None
 
 
 def write_signal_datasets(
@@ -135,6 +192,7 @@ def create_h5_file(
             copy_signal_datasets(source_file, h5file)
         else:
             write_signal_datasets(signal_datasets, h5file)
+        _initialize_app_versions(h5file, source_file)
         if source_file:
             h5file.attrs["source_file"] = str(source_file)
     return out_path
@@ -393,6 +451,9 @@ def write_metrics_trees_to_h5(
     *,
     overwrite: bool = False,
 ) -> None:
+    if not trees:
+        return
+
     with open_h5(h5_path, "r+") as h5file:
         root_group = h5file.require_group(root_path)
         for tree in trees:

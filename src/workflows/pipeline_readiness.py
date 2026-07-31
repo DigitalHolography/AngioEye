@@ -7,6 +7,7 @@ from typing import Any
 import h5py
 
 from input_output import prepare_run_input, prepare_run_inputs
+from input_output.eyeflow_schema import has_path
 
 from ._stem_inputs import resolve_selected_holo_contexts
 from .request_state import WorkflowInputSelection
@@ -87,7 +88,9 @@ def pipeline_input_status(
     for input_label, h5_path in inputs.files:
         try:
             with h5py.File(h5_path, "r") as h5file:
-                missing = tuple(path for path in required_paths if path not in h5file)
+                missing = tuple(
+                    path for path in required_paths if not has_path(h5file, path)
+                )
         except (OSError, ValueError):
             unreadable.append(input_label)
             continue

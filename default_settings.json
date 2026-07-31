@@ -20,7 +20,7 @@
     "topological_metrics": false,
     "waveform_harmonic_organization": false,
     "waveform_harmonic_organization_SVD": false,
-    "waveform_shape_metrics": true,
+    "waveform_shape_metrics": false,
     "waveform_shape_metrics_denoised": false,
     "waveform_shape_metrics_filter_sweep": false
   },

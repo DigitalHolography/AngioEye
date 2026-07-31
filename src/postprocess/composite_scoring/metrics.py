@@ -90,8 +90,8 @@ METRIC_PANEL: dict[str, Metric] = {
     M_T90_TIMING: Metric(name="t90_over_T"),
 
     # Time-quantile geometry
-    M_QT_WIDTH: Metric(name="Qt_width"),
-    M_QT_SKEW: Metric(name="Qt_skew"),
+    M_QT_WIDTH: Metric(name="Q_t_width"),
+    M_QT_SKEW: Metric(name="Q_t_skew"),
 
     # Cumulative-distance geometry
     M_DELTA_DTI: Metric(name="Delta_DTI"),
@@ -100,8 +100,8 @@ METRIC_PANEL: dict[str, Metric] = {
     M_D50_FRACTION: Metric(name="d50_over_D"),
     M_D75_FRACTION: Metric(name="d75_over_D"),
     M_D90_FRACTION: Metric(name="d90_over_D"),
-    M_QD_WIDTH: Metric(name="Qd_width"),
-    M_QD_SKEW: Metric(name="Qd_skew"),
+    M_QD_WIDTH: Metric(name="Q_d_width"),
+    M_QD_SKEW: Metric(name="Q_d_skew"),
     M_EARLY_LATE_BALANCE: Metric(name="R_VTI"),
     M_STROKE_FRACTION: Metric(name="SF_VTI"),
 
@@ -115,13 +115,13 @@ METRIC_PANEL: dict[str, Metric] = {
     M_CREST_FACTOR: Metric(name="CF"),
 
     # Event timings and slope kinetics
-    M_PEAK_TIMING: Metric(name="tmax_over_T"),
-    M_TROUGH_TIMING: Metric(name="tmin_over_T"),
-    M_UPSTROKE_STEEPNESS: Metric(name="Srise"),
-    M_DOWNSTROKE_STEEPNESS: Metric(name="Sfall"),
-    M_UPSTROKE_TIMING: Metric(name="trise_over_T"),
-    M_DOWNSTROKE_TIMING: Metric(name="tfall_over_T"),
-    M_SLOPE_ENERGY: Metric(name="Eslope"),
+    M_PEAK_TIMING: Metric(name="t_max_over_T"),
+    M_TROUGH_TIMING: Metric(name="t_min_over_T"),
+    M_UPSTROKE_STEEPNESS: Metric(name="S_rise"),
+    M_DOWNSTROKE_STEEPNESS: Metric(name="S_fall"),
+    M_UPSTROKE_TIMING: Metric(name="t_rise_over_T"),
+    M_DOWNSTROKE_TIMING: Metric(name="t_fall_over_T"),
+    M_SLOPE_ENERGY: Metric(name="E_slope"),
 
     # Late-cycle persistence / temporal support
     M_LATE_CYCLE_MEAN_FRACTION: Metric(name="v_end_over_vbar"),
@@ -131,11 +131,7 @@ METRIC_PANEL: dict[str, Metric] = {
     # Spectral and representation-fidelity descriptors
     # The paper defines ELF/EHF. If your pipeline stores E_low/E_high instead,
     # keep numerator_name/denominator_name but adapt names to the HDF5 datasets.
-    M_LOW_FREQ_SPECTRAL_RATIO: Metric(
-        name="E_LF_over_E_HF",
-        numerator_name="E_LF",
-        denominator_name="E_HF",
-    ),
+    M_LOW_FREQ_SPECTRAL_RATIO: Metric(name="E_LF_over_E_HF"),
     M_RECONSTRUCTION_FIDELITY: Metric(name="eta_h"),
 }
 
