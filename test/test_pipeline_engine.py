@@ -14,6 +14,9 @@ if str(SRC_DIR) not in sys.path:
 from input_output import (  # noqa: E402
     ANGIOEYE_PROCESSING_ROOT,
     ANGIOEYE_SIGNALS_ROOT,
+    EYEFLOW_ROOT,
+    find_eyeflow_dataset,
+    read_signal_datasets,
 )
 from pipeline_engine import run_pipeline_file, run_postprocesses  # noqa: E402
 from pipelines import ProcessResult  # noqa: E402
@@ -87,6 +90,7 @@ class PipelineEngineTests(unittest.TestCase):
             tmp_path = Path(tmp_dir)
             input_path = tmp_path / "sample.h5"
             with h5py.File(input_path, "w") as h5file:
+                h5file.attrs["source_attr"] = "from-eyeflow"
                 h5file.create_dataset("eyeflow", data=[1, 2, 3])
 
             default_output = run_pipeline_file(
@@ -104,7 +108,12 @@ class PipelineEngineTests(unittest.TestCase):
             with h5py.File(default_output, "r") as h5file:
                 self.assertNotIn("eyeflow", h5file)
             with h5py.File(persisted_output, "r") as h5file:
-                self.assertIn("eyeflow", h5file)
+                self.assertIn(f"{EYEFLOW_ROOT}/eyeflow", h5file)
+                self.assertNotIn("eyeflow", h5file)
+                self.assertEqual(
+                    "from-eyeflow",
+                    h5file[EYEFLOW_ROOT].attrs["source_attr"],
+                )
 
     def test_signals_are_copied_without_persisting_the_eye_flow_source(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -156,6 +165,26 @@ class PipelineEngineTests(unittest.TestCase):
                     signal_path = f"{ANGIOEYE_SIGNALS_ROOT}/{signal_name}"
                     self.assertIn(signal_path, h5file)
                     self.assertEqual(expected, h5file[signal_path][()].tolist())
+
+    def test_signal_reader_accepts_namespaced_eyeflow_data(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "namespaced.h5"
+            with h5py.File(path, "w") as h5file:
+                h5file.create_dataset(
+                    f"{EYEFLOW_ROOT}/Artery/VelocityPerBeat/"
+                    "VelocitySignalPerBeat/value",
+                    data=[1.0, 2.0],
+                )
+
+            with h5py.File(path, "r") as h5file:
+                signals = read_signal_datasets(h5file)
+                dataset = find_eyeflow_dataset(
+                    h5file,
+                    "Artery/VelocityPerBeat/VelocitySignalPerBeat/value",
+                )
+
+            self.assertEqual([1.0, 2.0], signals["artery/raw"].tolist())
+            self.assertIsNotNone(dataset)
 
     def test_run_postprocesses_propagates_metadata_failures(self):
         calls: list[str] = []

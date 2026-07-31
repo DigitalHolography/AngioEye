@@ -19,6 +19,7 @@ from .archive_io import (
     temporary_zip_from_tree,
 )
 from .hdf5_io import (
+    EYEFLOW_ROOT,
     MetricsTree,
     append_metrics_trees_to_h5,
     copy_h5_contents,
@@ -26,6 +27,7 @@ from .hdf5_io import (
     create_h5_file,
     create_unique_group,
     find_child_group_by_attr,
+    find_eyeflow_dataset,
     find_first_existing_path,
     iter_h5_arrays,
     open_h5,
@@ -99,12 +101,14 @@ from .output_paths import (
 
 __all__ = [
     "MetricsTree",
+    "EYEFLOW_ROOT",
     "append_metrics_trees_to_h5",
     "copy_h5_contents",
     "copy_signal_datasets",
     "create_h5_file",
     "create_unique_group",
     "find_child_group_by_attr",
+    "find_eyeflow_dataset",
     "find_first_existing_path",
     "iter_h5_arrays",
     "open_h5",

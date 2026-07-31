@@ -47,6 +47,8 @@ class VesselPaths:
     name: str
     branch_ids: str
     branch_label_map: str
+    branch_label_map_axes: tuple[str, str]
+    branch_label_map_y_inverted: bool
     segment_center_xy: str
     raw_waveform: str
     bandlimited_waveform: str
@@ -67,6 +69,8 @@ VESSEL_PATHS = (
         name="artery",
         branch_ids="/Topology/Artery/BranchIds/value",
         branch_label_map="/Topology/Artery/BranchLabelMap/value",
+        branch_label_map_axes=("y", "x"),
+        branch_label_map_y_inverted=True,
         segment_center_xy="/Topology/Artery/SegmentCenterXY/value",
         raw_waveform=(
             "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegment/value"
@@ -80,6 +84,8 @@ VESSEL_PATHS = (
         name="vein",
         branch_ids="/Topology/Vein/BranchIds/value",
         branch_label_map="/Topology/Vein/BranchLabelMap/value",
+        branch_label_map_axes=("y", "x"),
+        branch_label_map_y_inverted=True,
         segment_center_xy="/Topology/Vein/SegmentCenterXY/value",
         raw_waveform=(
             "/Vein/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegment/value"
@@ -159,10 +165,12 @@ class TopologicalMetricsPipeline(ArterialSegExample):
                 "unit": "pixel",
             },
         )
+        # Keep the internal topology frame as [y, x], but serialize image
+        # outputs as [x, y] so HDF viewers can use D0=X and D1=Y directly.
         metrics["topology/optic_disc/mask"] = with_attrs(
-            optic_disc_mask,
+            optic_disc_mask.T.copy(),
             {
-                "dimDesc": ["y", "x"],
+                "dimDesc": ["x", "y"],
                 "coordinate_system": "image_pixel",
                 "image_origin": "lower_left",
                 "y_axis_direction": "increasing_toward_north",
@@ -216,8 +224,8 @@ class TopologicalMetricsPipeline(ArterialSegExample):
                 ),
                 "boundary_policy": (
                     "x < center_x is west; x >= center_x is east; "
-                    "EyeFlow uses a bottom-up y-axis: y < center_y is south; "
-                    "y >= center_y is north"
+                    "the normalized topology frame uses a bottom-up y-axis: "
+                    "y < center_y is south; y >= center_y is north"
                 ),
                 "branch_aggregation": (
                     "median of all per-segment metric values within an EyeFlow "
@@ -278,10 +286,21 @@ class TopologicalMetricsPipeline(ArterialSegExample):
                     "bandlimited",
                 )
             )
+        branch_label_map = np.asarray(h5file[paths.branch_label_map], dtype=np.int32)
+        if paths.branch_label_map_axes == ("x", "y"):
+            # Keep this conversion for older inputs that used [x, y]. Current
+            # EyeFlow maps use D0=Y and D1=X, i.e. the canonical [y, x] order.
+            branch_label_map = branch_label_map.T.copy()
+        if paths.branch_label_map_y_inverted:
+            # EyeFlow's Y direction is vertically inverted relative to the
+            # topology pipeline's lower-left, bottom-up image frame. Normalize
+            # it once at the input boundary for both artery and vein maps.
+            branch_label_map = np.flip(branch_label_map, axis=0).copy()
+
         data = VesselData(
             paths=paths,
             branch_ids=branch_ids,
-            branch_label_map=np.asarray(h5file[paths.branch_label_map], dtype=np.int32),
+            branch_label_map=branch_label_map,
             segment_center_xy=np.asarray(h5file[paths.segment_center_xy], dtype=float),
             raw_waveform=raw_waveform,
             bandlimited_waveform=bandlimited_waveform,
@@ -434,8 +453,8 @@ class TopologicalMetricsPipeline(ArterialSegExample):
         """Assign every branch and all of its radii to one area-majority region.
 
         ``BranchLabelMap`` is indexed as ``[y, x]`` while ``SegmentCenterXY``
-        stores coordinates as ``[x, y]``. Both use EyeFlow's bottom-up Y frame,
-        so no transpose, rotation, or vertical flip is applied here.
+        stores coordinates as ``[x, y]``. Both are already normalized to the
+        pipeline's bottom-up Y frame at the input boundary.
         """
         n_branches, n_radii = segment_center_xy.shape[:2]
         if branch_ids.size != n_branches:
@@ -525,11 +544,11 @@ class TopologicalMetricsPipeline(ArterialSegExample):
             )
         )
         metrics[f"{prefix}/branch_label_map"] = with_attrs(
-            branch_label_map,
+            branch_label_map.T.copy(),
             {
                 "axis_label": REGION_AXIS_LABEL,
                 "axis_thickness_pixels": axis_thickness,
-                "dimDesc": ["y", "x"],
+                "dimDesc": ["x", "y"],
                 "background_label": 0,
                 "branch_labels": "original EyeFlow BranchIds values",
                 "coordinate_system": "image_pixel",

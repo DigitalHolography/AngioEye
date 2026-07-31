@@ -17,7 +17,7 @@ from tkinter import Tk, filedialog
 import html
 import base64
 from math_utils import nanmedian, nanstd
-from input_output.hdf5_io import find_first_existing_path
+from input_output.hdf5_io import find_eyeflow_dataset, find_first_existing_path
 from input_output.hdf5_schema import pipeline_path_candidates
 from input_output.archive_io import (
     replace_folder_in_zip,
@@ -626,33 +626,43 @@ def _build_single_file_html(filepath, *, image_dir, source_path=None):
     )
 
     with h5py.File(filepath, "r") as f:
-        if M_0_rel_path is None and "/Maps/M0_ff_img/value" in f:
+        M_0_dataset = find_eyeflow_dataset(f, "Maps/M0_ff_img/value")
+        if M_0_rel_path is None and M_0_dataset is not None:
             M_0_rel_path = _array_image_to_base64(
-                np.array(f["/Maps/M0_ff_img/value"]),
+                np.array(M_0_dataset),
                 image_dir,
                 f"{base_name}_M_0.png",
                 cmap="viridis",
             )
 
-        if mask_rel_path_vein is None and "/Vein/Segmentation/Mask/value" in f:
+        vein_mask_dataset = find_eyeflow_dataset(
+            f,
+            "Vein/Segmentation/Mask/value",
+        )
+        if mask_rel_path_vein is None and vein_mask_dataset is not None:
             mask_rel_path_vein = _array_image_to_base64(
-                np.array(f["/Vein/Segmentation/Mask/value"]),
+                np.array(vein_mask_dataset),
                 image_dir,
                 f"{base_name}_vein_mask.png",
                 cmap="gray",
             )
 
-        if mask_rel_path_artery is None and "/Artery/Segmentation/Mask/value" in f:
+        artery_mask_dataset = find_eyeflow_dataset(
+            f,
+            "Artery/Segmentation/Mask/value",
+        )
+        if mask_rel_path_artery is None and artery_mask_dataset is not None:
             mask_rel_path_artery = _array_image_to_base64(
-                np.array(f["/Artery/Segmentation/Mask/value"]),
+                np.array(artery_mask_dataset),
                 image_dir,
                 f"{base_name}_artery_mask.png",
                 cmap="gray",
             )
 
-        if f_AVG_mean_rel_path is None and "/Maps/f_AVG_mean/value" in f:
+        f_AVG_mean_dataset = find_eyeflow_dataset(f, "Maps/f_AVG_mean/value")
+        if f_AVG_mean_rel_path is None and f_AVG_mean_dataset is not None:
             f_AVG_mean_rel_path = _array_image_to_base64(
-                np.array(f["/Maps/f_AVG_mean/value"]),
+                np.array(f_AVG_mean_dataset),
                 image_dir,
                 f"{base_name}_f_AVG_mean.png",
                 cmap="viridis",
@@ -660,10 +670,15 @@ def _build_single_file_html(filepath, *, image_dir, source_path=None):
 
         if (
             artery_velocity_signal_path is None
-            and "/Artery/Velocity/VelocitySignal/value" in f
+            and (
+                artery_velocity_dataset := find_eyeflow_dataset(
+                    f,
+                    "Artery/Velocity/VelocitySignal/value",
+                )
+            ) is not None
         ):
             artery_velocity_signal_path = _signal_image_to_base64(
-                np.array(f["/Artery/Velocity/VelocitySignal/value"]),
+                np.array(artery_velocity_dataset),
                 image_dir,
                 f"{base_name}_artery_velocity_signal.png",
                 color="#EC5241",
@@ -672,10 +687,15 @@ def _build_single_file_html(filepath, *, image_dir, source_path=None):
 
         if (
             vein_velocity_signal_path is None
-            and "/Vein/Velocity/VelocitySignal/value" in f
+            and (
+                vein_velocity_dataset := find_eyeflow_dataset(
+                    f,
+                    "Vein/Velocity/VelocitySignal/value",
+                )
+            ) is not None
         ):
             vein_velocity_signal_path = _signal_image_to_base64(
-                np.array(f["/Vein/Velocity/VelocitySignal/value"]),
+                np.array(vein_velocity_dataset),
                 image_dir,
                 f"{base_name}_vein_velocity_signal.png",
                 color="#414CEC",
@@ -759,8 +779,9 @@ def generate_metric_tables_html(zip_path, output_dir="html"):
                     vein_velocity_signal_path = None
 
                     # M_0
-                    if "/Maps/M0_ff_img/value" in f:
-                        M_0_data = np.array(f["/Maps/M0_ff_img/value"])
+                    M_0_dataset = find_eyeflow_dataset(f, "Maps/M0_ff_img/value")
+                    if M_0_dataset is not None:
+                        M_0_data = np.array(M_0_dataset)
 
                         M_0_filename = f"{base_name}_M_0.png"
                         M_0_path = os.path.join(png_dir, M_0_filename)
@@ -774,8 +795,12 @@ def generate_metric_tables_html(zip_path, output_dir="html"):
                         M_0_rel_path = image_file_to_base64(M_0_path)
 
                     # Vein mask
-                    if "/Vein/Segmentation/Mask/value" in f:
-                        mask_vein_data = np.array(f["/Vein/Segmentation/Mask/value"])
+                    vein_mask_dataset = find_eyeflow_dataset(
+                        f,
+                        "Vein/Segmentation/Mask/value",
+                    )
+                    if vein_mask_dataset is not None:
+                        mask_vein_data = np.array(vein_mask_dataset)
 
                         mask_vein_filename = f"{base_name}_vein_mask.png"
                         mask_vein_path = os.path.join(png_dir, mask_vein_filename)
@@ -789,8 +814,12 @@ def generate_metric_tables_html(zip_path, output_dir="html"):
                         mask_rel_path_vein = image_file_to_base64(mask_vein_path)
 
                     # Artery mask
-                    if "/Artery/Segmentation/Mask/value" in f:
-                        mask_artery_data = np.array(f["/Artery/Segmentation/Mask/value"])
+                    artery_mask_dataset = find_eyeflow_dataset(
+                        f,
+                        "Artery/Segmentation/Mask/value",
+                    )
+                    if artery_mask_dataset is not None:
+                        mask_artery_data = np.array(artery_mask_dataset)
 
                         mask_artery_filename = f"{base_name}_artery_mask.png"
                         mask_artery_path = os.path.join(png_dir, mask_artery_filename)
@@ -804,8 +833,12 @@ def generate_metric_tables_html(zip_path, output_dir="html"):
                         mask_rel_path_artery = image_file_to_base64(mask_artery_path)
 
                     # f_AVG_mean map
-                    if "/Maps/f_AVG_mean/value" in f:
-                        f_AVG_mean_data = np.array(f["/Maps/f_AVG_mean/value"])
+                    f_AVG_mean_dataset = find_eyeflow_dataset(
+                        f,
+                        "Maps/f_AVG_mean/value",
+                    )
+                    if f_AVG_mean_dataset is not None:
+                        f_AVG_mean_data = np.array(f_AVG_mean_dataset)
 
                         f_AVG_mean_filename = f"{base_name}_f_AVG_mean.png"
                         f_AVG_mean_path = os.path.join(png_dir, f_AVG_mean_filename)
@@ -819,9 +852,13 @@ def generate_metric_tables_html(zip_path, output_dir="html"):
                         f_AVG_mean_rel_path = image_file_to_base64(f_AVG_mean_path)
 
                     # Artery velocity signal
-                    if "/Artery/Velocity/VelocitySignal/value" in f:
+                    artery_velocity_dataset = find_eyeflow_dataset(
+                        f,
+                        "Artery/Velocity/VelocitySignal/value",
+                    )
+                    if artery_velocity_dataset is not None:
                         artery_velocity_signal_data = np.array(
-                            f["/Artery/Velocity/VelocitySignal/value"]
+                            artery_velocity_dataset
                         )
 
                         artery_velocity_signal_filename = (
@@ -847,9 +884,13 @@ def generate_metric_tables_html(zip_path, output_dir="html"):
                         )
                     
                     # Vein velocity signal
-                    if "/Vein/Velocity/VelocitySignal/value" in f:
+                    vein_velocity_dataset = find_eyeflow_dataset(
+                        f,
+                        "Vein/Velocity/VelocitySignal/value",
+                    )
+                    if vein_velocity_dataset is not None:
                         vein_velocity_signal_data = np.array(
-                            f["/Vein/Velocity/VelocitySignal/value"]
+                            vein_velocity_dataset
                         )
 
                         vein_velocity_signal_filename = (

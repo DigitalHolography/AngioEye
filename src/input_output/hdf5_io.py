@@ -12,6 +12,7 @@ import numpy as np
 from app_settings import app_version
 
 UTF8_STRING_DTYPE = h5py.string_dtype(encoding="utf-8")
+EYEFLOW_ROOT = "/EyeFlow"
 GroupCache = dict[str, h5py.Group]
 
 _SIGNAL_DATASET_PATHS = (
@@ -56,17 +57,18 @@ def open_h5(path: Path | str, mode: str = "r") -> h5py.File:
 
 
 def copy_h5_contents(source_file: Path | str | None, dest: h5py.File) -> None:
-    """Copy all attributes and top-level objects from an existing HDF5 into dest."""
+    """Copy an EyeFlow HDF5 into the output file's ``/EyeFlow`` group."""
     if not source_file:
         return
     src_path = Path(source_file)
     if not src_path.exists():
         return
     with open_h5(src_path, "r") as src:
+        eyeflow_group = dest.require_group(EYEFLOW_ROOT)
         for key, value in src.attrs.items():
-            dest.attrs[key] = value
+            eyeflow_group.attrs[key] = value
         for key in src.keys():
-            src.copy(src[key], dest, name=key)
+            src.copy(src[key], eyeflow_group, name=key)
 
 
 def copy_signal_datasets(
@@ -119,10 +121,27 @@ def read_signal_datasets(source: h5py.Group | h5py.File) -> dict[str, np.ndarray
     """Read the canonical EyeFlow signals from an already-open HDF5 file."""
     signals: dict[str, np.ndarray] = {}
     for destination_path, source_path in _SIGNAL_DATASET_PATHS:
-        source_dataset = source.get(source_path)
+        source_dataset = find_eyeflow_dataset(source, source_path)
+        if source_dataset is None:
+            source_dataset = source.get(
+                f"/AngioEye/Signals/{destination_path.strip('/')}"
+            )
         if isinstance(source_dataset, h5py.Dataset):
             signals[destination_path] = np.asarray(source_dataset)
     return signals
+
+
+def find_eyeflow_dataset(
+    group_or_file: h5py.Group | h5py.File,
+    path: str,
+) -> h5py.Dataset | None:
+    """Find an EyeFlow dataset in the namespaced or legacy root layout."""
+    normalized_path = str(path).strip("/")
+    for candidate in (f"{EYEFLOW_ROOT}/{normalized_path}", f"/{normalized_path}"):
+        dataset = group_or_file.get(candidate)
+        if isinstance(dataset, h5py.Dataset):
+            return dataset
+    return None
 
 
 def write_signal_datasets(

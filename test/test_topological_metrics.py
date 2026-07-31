@@ -50,12 +50,15 @@ def _write_vessel(
     paths = VESSEL_PATHS[vessel_index]
     n_branches, n_radii = centers.shape[:2]
     branch_ids = np.arange(1, n_branches + 1, dtype=np.int32)
+    # EyeFlow stores BranchLabelMap as [D0, D1] = [y, x], with its Y
+    # direction inverted. These are the raw locations corresponding, after
+    # normalization, to a south-west and a north-east branch respectively.
     label_map = np.zeros((21, 21), dtype=np.int32)
     for branch_index, branch_id in enumerate(branch_ids):
         if branch_index % 2 == 0:
-            label_map[2:6, 2:8] = branch_id
+            label_map[15:19, 2:8] = branch_id
         else:
-            label_map[15:19, 14:20] = branch_id
+            label_map[2:6, 14:20] = branch_id
 
     raw = np.full(
         (sample_count, n_beats, n_branches, n_radii),
@@ -135,6 +138,38 @@ def _write_topological_input(path: Path, *, source_metrics: bool = False) -> Non
 
 
 class TopologicalMetricsTests(unittest.TestCase):
+    def test_branch_label_maps_are_normalized_from_eyeflow_y_inverted_frame(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "input.h5"
+            _write_topological_input(path)
+
+            with h5py.File(path, "r+") as h5file:
+                # The physical point is north-west: after the Y flip it must
+                # be at [y_high, x_low]. Store it in EyeFlow's raw [D0, D1]
+                # layout, where D0=Y and Y is inverted.
+                for paths in VESSEL_PATHS:
+                    del h5file[paths.branch_label_map]
+                    raw_map = np.zeros((21, 21), dtype=np.int32)
+                    raw_map[4, 1] = 1
+                    if paths.name == "artery":
+                        raw_map[16, 19] = 2
+                    h5file.create_dataset(paths.branch_label_map, data=raw_map)
+
+            with h5py.File(path, "r") as h5file:
+                result = TopologicalMetricsPipeline().run(h5file)
+
+            for vessel in ("artery", "vein"):
+                self.assertIn(
+                    f"{vessel}/north_west/by_branch/branch_1/raw/t_max_over_T",
+                    result.metrics,
+                )
+                self.assertNotIn(
+                    f"{vessel}/south_west/by_branch/branch_1/raw/t_max_over_T",
+                    result.metrics,
+                )
+
     def test_regions_assign_each_branch_by_area_and_aggregate_per_beat(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "input.h5"
@@ -148,11 +183,21 @@ class TopologicalMetricsTests(unittest.TestCase):
                 "angioeye_recomputed_from_waveforms",
                 result.attrs["metric_source"],
             )
+            self.assertEqual(
+                ["x", "y"],
+                result.metrics["topology/optic_disc/mask"].attrs["dimDesc"],
+            )
             self.assertNotIn("topology/artery/region_membership", result.metrics)
             self.assertNotIn("regions/names", result.metrics)
             self.assertEqual(list(REGION_NAMES), result.metrics["topology/names"])
             label_map = result.metrics["topology/artery/branch_label_map"].data
             self.assertEqual((21, 21), label_map.shape)
+            self.assertEqual(
+                ["x", "y"],
+                result.metrics["topology/artery/branch_label_map"].attrs[
+                    "dimDesc"
+                ],
+            )
             np.testing.assert_array_equal(
                 label_map[:, 10],
                 np.full(21, REGION_AXIS_LABEL, dtype=np.int32),
@@ -161,7 +206,10 @@ class TopologicalMetricsTests(unittest.TestCase):
                 label_map[10, :],
                 np.full(21, REGION_AXIS_LABEL, dtype=np.int32),
             )
-            self.assertEqual(1, int(label_map[2, 2]))
+            # Exported image layout is [x, y], while the internal layout is
+            # [y, x]. Branch 1 occupies canonical y=2:6, x=2:8.
+            self.assertEqual(1, int(label_map[7, 3]))
+            self.assertEqual(0, int(label_map[3, 7]))
             self.assertEqual(OPTIC_DISC_LABEL, int(label_map[8, 8]))
             self.assertNotIn(
                 "topology/artery/branch_label_map_visualization_rgb",
@@ -347,6 +395,10 @@ class TopologicalMetricsTests(unittest.TestCase):
                 self.assertEqual(
                     OPTIC_DISC_LABEL,
                     h5file[label_map_path].attrs["optic_disc_label"],
+                )
+                self.assertEqual(
+                    ["x", "y"],
+                    list(h5file[label_map_path].attrs["dimDesc"]),
                 )
                 self.assertNotIn(
                     "/AngioEye/Processing/topological_metrics/topology/artery/"
