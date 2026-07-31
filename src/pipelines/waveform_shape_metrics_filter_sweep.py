@@ -1,6 +1,8 @@
 import numpy as np
 
-from .core.base import ProcessPipeline, ProcessResult, registerPipeline, with_attrs
+from input_output.eyeflow_schema import has_path, require_dataset
+
+from .core.base import ProcessResult, registerPipeline, with_attrs
 
 # À adapter si le nom du fichier contenant ArterialSegExample est différent.
 # Exemple possible :
@@ -465,17 +467,21 @@ class WaveformShapeMetricsFilterSweep(ArterialSegExample):
     def run(self, h5file) -> ProcessResult:
         metrics = {}
 
-        if self.T_input not in h5file:
+        if not has_path(h5file, self.T_input):
             return ProcessResult(metrics=metrics)
 
-        T = np.asarray(h5file[self.T_input])
+        T = np.asarray(require_dataset(h5file, self.T_input))
 
         artery_have_seg = (
-            self.v_raw_segment_input in h5file and self.v_band_segment_input in h5file
+            has_path(h5file, self.v_raw_segment_input)
+            and has_path(h5file, self.v_band_segment_input)
         )
 
         if artery_have_seg:
-            v_raw_seg = np.asarray(h5file[self.v_raw_segment_input], dtype=float)
+            v_raw_seg = np.asarray(
+                require_dataset(h5file, self.v_raw_segment_input),
+                dtype=float,
+            )
 
             self._pack_filter_sweep_segment_outputs(
                 metrics=metrics,

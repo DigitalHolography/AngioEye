@@ -1,6 +1,12 @@
 import numpy as np
 
-from math_utils import nancv, nanmean, nanmad, nanmedian, nanstd
+from input_output.eyeflow_schema import (
+    BEAT_PERIOD,
+    SEGMENT_VELOCITY_PER_BEAT,
+    has_path,
+    require_dataset,
+)
+from math_utils import nancv, nanmad, nanmean, nanmedian, nanstd
 
 from .core.base import ProcessPipeline, ProcessResult, registerPipeline
 
@@ -24,14 +30,9 @@ class LowRankPulsatilityMetrics(ProcessPipeline):
         "summaries relevant to flicker-provocation studies."
     )
 
-    T_input = "/Artery/VelocityPerBeat/beatPeriodSeconds/value"
-    v_band_segment_input = (
-        "/Artery/VelocityPerBeat/Segments/"
-        "VelocitySignalPerBeatPerSegmentBandLimited/value"
-    )
-    v_raw_segment_input = (
-        "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegment/value"
-    )
+    T_input = BEAT_PERIOD
+    v_band_segment_input = SEGMENT_VELOCITY_PER_BEAT[("artery", "bandlimited")]
+    v_raw_segment_input = SEGMENT_VELOCITY_PER_BEAT[("artery", "raw")]
 
     eps = 1e-12
     min_valid_samples_fraction = 0.95
@@ -562,7 +563,7 @@ class LowRankPulsatilityMetrics(ProcessPipeline):
 
     def run(self, h5file) -> ProcessResult:
         metrics = {}
-        T = self._normalize_T(np.asarray(h5file[self.T_input]))
+        T = self._normalize_T(np.asarray(require_dataset(h5file, self.T_input)))
 
         rep_map = {
             "raw": self.v_raw_segment_input,
@@ -570,14 +571,14 @@ class LowRankPulsatilityMetrics(ProcessPipeline):
         }
 
         for rep_name, dataset_path in rep_map.items():
-            if dataset_path not in h5file:
+            if not has_path(h5file, dataset_path):
                 metrics[f"{rep_name}/qc/input_available"] = np.asarray(
                     0, dtype=np.uint8
                 )
                 continue
 
             metrics[f"{rep_name}/qc/input_available"] = np.asarray(1, dtype=np.uint8)
-            v_block = np.asarray(h5file[dataset_path], dtype=float)
+            v_block = np.asarray(require_dataset(h5file, dataset_path), dtype=float)
             rep = self._compute_representation(v_block=v_block, T=T)
             self._append_representation_metrics(
                 metrics=metrics, rep_name=rep_name, rep=rep

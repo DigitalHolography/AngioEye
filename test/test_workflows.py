@@ -7,6 +7,8 @@ import zipfile
 from pathlib import Path
 from unittest import mock
 
+import h5py
+
 SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
@@ -26,14 +28,14 @@ from workflows import (  # noqa: E402
     run_holo_workflow,
     run_zip_workflow,
 )
+from workflows._postprocess_requirements import (  # noqa: E402
+    compatible_postprocess_files,
+    missing_required_option_errors,
+    missing_required_pipeline_errors,
+)
 from workflows._standard_pipeline_runs import (  # noqa: E402
     run_filesystem_pipeline_run,
     run_zip_pipeline_run,
-)
-from workflows._postprocess_requirements import (  # noqa: E402
-    compatible_postprocess_files,
-    missing_required_pipeline_errors,
-    missing_required_option_errors,
 )
 
 
@@ -49,6 +51,13 @@ def process_pool_run_pipeline_file(
     output_path = target_dir / (output_filename or f"{h5_path.stem}_result.h5")
     output_path.write_text("result", encoding="utf-8")
     return output_path
+
+
+def _write_pipeline_group(path: Path, pipeline_name: str, root: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with h5py.File(path, "w") as h5file:
+        group = h5file.require_group(f"{root}/{pipeline_name}")
+        group.attrs["pipeline"] = pipeline_name
 
 
 class PostprocessRequirementTests(unittest.TestCase):
@@ -81,18 +90,25 @@ class PostprocessRequirementTests(unittest.TestCase):
         )
 
     def test_selected_required_pipeline_keeps_processed_outputs(self):
-        processed_output = Path("new_result.h5")
-        input_h5 = Path("input.h5")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            processed_output = tmp_path / "new_result.h5"
+            input_h5 = tmp_path / "input.h5"
+            _write_pipeline_group(
+                processed_output,
+                "waveform_shape_metrics",
+                "/AngioEye/Processing",
+            )
 
-        result = compatible_postprocess_files(
-            processed_outputs=(processed_output,),
-            input_h5_paths=(input_h5,),
-            required_pipelines=("waveform_shape_metrics",),
-            selected_pipeline_names=("waveform_shape_metrics",),
-        )
+            result = compatible_postprocess_files(
+                processed_outputs=(processed_output,),
+                input_h5_paths=(input_h5,),
+                required_pipelines=("waveform_shape_metrics",),
+                selected_pipeline_names=("waveform_shape_metrics",),
+            )
 
-        self.assertEqual((processed_output,), result.files)
-        self.assertEqual((), result.skipped)
+            self.assertEqual((processed_output,), result.files)
+            self.assertEqual((), result.skipped)
 
     def test_unselected_required_pipeline_still_skips_incompatible_files(self):
         processed_output = Path("new_result.h5")
@@ -109,27 +125,108 @@ class PostprocessRequirementTests(unittest.TestCase):
         self.assertEqual((input_h5,), result.skipped)
 
     def test_selected_alternative_required_pipeline_keeps_processed_outputs(self):
-        processed_output = Path("new_result.h5")
-        input_h5 = Path("input.h5")
-
-        result = compatible_postprocess_files(
-            processed_outputs=(processed_output,),
-            input_h5_paths=(input_h5,),
-            required_pipelines=(
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            processed_output = tmp_path / "new_result.h5"
+            input_h5 = tmp_path / "input.h5"
+            _write_pipeline_group(
+                processed_output,
                 "waveform_shape_metrics",
-                "waveform_shape_metrics_denoised",
-            ),
-            required_pipeline_options=(
-                (
+                "/AngioEye/Processing",
+            )
+
+            result = compatible_postprocess_files(
+                processed_outputs=(processed_output,),
+                input_h5_paths=(input_h5,),
+                required_pipelines=(
                     "waveform_shape_metrics",
                     "waveform_shape_metrics_denoised",
                 ),
-            ),
-            selected_pipeline_names=("waveform_shape_metrics",),
-        )
+                required_pipeline_options=(
+                    (
+                        "waveform_shape_metrics",
+                        "waveform_shape_metrics_denoised",
+                    ),
+                ),
+                selected_pipeline_names=("waveform_shape_metrics",),
+            )
 
-        self.assertEqual((processed_output,), result.files)
-        self.assertEqual((), result.skipped)
+            self.assertEqual((processed_output,), result.files)
+            self.assertEqual((), result.skipped)
+
+    def test_native_eyeflow_pipeline_is_used_when_ae_pipeline_was_not_selected(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            processed_output = tmp_path / "old_result.h5"
+            input_h5 = tmp_path / "eyeflow.h5"
+            _write_pipeline_group(
+                processed_output,
+                "topological_metrics",
+                "/AngioEye/Processing",
+            )
+            _write_pipeline_group(
+                input_h5,
+                "waveform_shape_metrics",
+                "/Processing/Metrics",
+            )
+
+            result = compatible_postprocess_files(
+                processed_outputs=(processed_output,),
+                input_h5_paths=(input_h5,),
+                required_pipelines=("waveform_shape_metrics",),
+                selected_pipeline_names=(),
+            )
+
+            self.assertEqual((input_h5,), result.files)
+            self.assertEqual((), result.skipped)
+
+    def test_selected_ae_pipeline_wins_when_both_files_have_required_data(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            processed_output = tmp_path / "new_result.h5"
+            input_h5 = tmp_path / "eyeflow.h5"
+            _write_pipeline_group(
+                processed_output,
+                "waveform_shape_metrics",
+                "/AngioEye/Processing",
+            )
+            _write_pipeline_group(
+                input_h5,
+                "waveform_shape_metrics",
+                "/Processing/Metrics",
+            )
+
+            result = compatible_postprocess_files(
+                processed_outputs=(processed_output,),
+                input_h5_paths=(input_h5,),
+                required_pipelines=("waveform_shape_metrics",),
+                selected_pipeline_names=("waveform_shape_metrics",),
+            )
+
+            self.assertEqual((processed_output,), result.files)
+            self.assertEqual((), result.skipped)
+
+    def test_requirement_free_postprocess_uses_eyeflow_when_no_pipeline_selected(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            processed_output = tmp_path / "empty_result.h5"
+            input_h5 = tmp_path / "eyeflow.h5"
+            processed_output.write_text("empty", encoding="utf-8")
+            input_h5.write_text("source", encoding="utf-8")
+
+            result = compatible_postprocess_files(
+                processed_outputs=(processed_output,),
+                input_h5_paths=(input_h5,),
+                required_pipelines=(),
+                selected_pipeline_names=(),
+            )
+
+            self.assertEqual((input_h5,), result.files)
+            self.assertEqual((), result.skipped)
 
     def test_pipeline_option_groups_require_each_group(self):
         postprocess = type(
@@ -855,6 +952,64 @@ class WorkflowDispatchTests(unittest.TestCase):
             self.assertIsNotNone(result.workflow_result)
             self.assertEqual(1, len(run_holo.call_args.kwargs["contexts"]))
             self.assertTrue((tmp_path / "sample" / "sample_AE").is_dir())
+
+    def test_holo_postprocess_uses_eyeflow_when_no_ae_pipeline_is_selected(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            holo_path = tmp_path / "sample.holo"
+            holo_path.write_text("holo", encoding="utf-8")
+            ef_h5 = tmp_path / "sample" / "sample_EF" / "h5" / "sample.h5"
+            _write_pipeline_group(
+                ef_h5,
+                "waveform_shape_metrics",
+                "/Processing/Metrics",
+            )
+            stale_ae_h5 = (
+                tmp_path / "sample" / "sample_AE" / "h5" / "sample_AE.h5"
+            )
+            _write_pipeline_group(
+                stale_ae_h5,
+                "topological_metrics",
+                "/AngioEye/Processing",
+            )
+
+            processed_files: list[tuple[Path, ...]] = []
+
+            class _Postprocess:
+                name = "Waveform summary"
+
+                def run(self, context):
+                    processed_files.append(context.processed_files)
+                    return type("Result", (), {"summary": "", "metadata": {}})()
+
+            class _Descriptor:
+                name = "Waveform summary"
+                required_pipelines = ()
+                required_pipeline_options = (("waveform_shape_metrics",),)
+
+                @staticmethod
+                def instantiate():
+                    return _Postprocess()
+
+            request = self._request(
+                tmp_path,
+                mode="holo",
+                pipelines=[],
+                postprocesses=[_Descriptor()],
+                selected_pipeline_names=[],
+                holo_paths=[holo_path],
+            )
+
+            result = dispatch_workflow(request, self._callbacks())
+
+            self.assertEqual([(ef_h5,)], processed_files)
+            self.assertIsNotNone(result.workflow_result)
+            self.assertTrue(result.workflow_result.processed_outputs)
+            with h5py.File(stale_ae_h5, "r") as h5file:
+                self.assertNotIn(
+                    "/AngioEye/Processing/topological_metrics",
+                    h5file,
+                )
 
     def test_dispatch_routes_holo_path_list_inputs(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

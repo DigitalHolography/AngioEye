@@ -18,6 +18,7 @@ from ._postprocess_requirements import (
     missing_required_option_errors,
     missing_required_pipeline_errors,
 )
+from ._stem_inputs import resolve_selected_holo_contexts
 from .dispatch import OutputFilenameResolver, WorkflowInputError, WorkflowRunRequest
 from .runs import ZipOutputDir
 
@@ -132,17 +133,26 @@ def build_workflow_request(
             ) from exc
         request_mode = input_plan.kind
 
-    reusable_h5_paths = (
-        input_plan.h5_paths
-        if input_plan is not None and not input_plan.is_zip
-        else ()
-    )
+    if input_plan is not None and not input_plan.is_zip:
+        reusable_h5_paths = input_plan.h5_paths
+    elif input_selection.convention == "holo":
+        try:
+            resolved_holo_inputs = resolve_selected_holo_contexts(
+                input_selection.holo_paths
+            )
+        except (OSError, RuntimeError, ValueError):
+            reusable_h5_paths = ()
+        else:
+            reusable_h5_paths = tuple(
+                context.h5_path for context in resolved_holo_inputs.contexts
+            )
+    else:
+        reusable_h5_paths = ()
     requirement_errors = missing_required_pipeline_errors(
         postprocesses=work_selection.postprocesses,
         selected_pipeline_names=work_selection.pipeline_names,
         reusable_h5_paths=reusable_h5_paths,
-        defer_when_no_reusable_paths=bool(input_plan and input_plan.is_zip)
-        or (input_selection.convention == "holo" and not work_selection.pipelines),
+        defer_when_no_reusable_paths=bool(input_plan and input_plan.is_zip),
     )
     requirement_errors.extend(
         missing_required_option_errors(

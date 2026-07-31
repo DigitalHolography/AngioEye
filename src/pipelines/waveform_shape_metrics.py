@@ -2,10 +2,19 @@ from functools import cache
 
 import numpy as np
 
+from input_output.eyeflow_schema import (
+    BEAT_PERIOD,
+    SEGMENT_VELOCITY_PER_BEAT,
+    VELOCITY_PER_BEAT,
+    has_path,
+    require_dataset,
+)
+from math_utils import (
+    harmonic_pack as build_harmonic_pack,
+)
 from math_utils import (
     nanargmax,
     nanargmin,
-    harmonic_pack as build_harmonic_pack,
     nanmax,
     nanmean,
     nanmedian,
@@ -52,35 +61,21 @@ class ArterialSegExample(ProcessPipeline):
     # ----------------------------
     # Arterial inputs
     # ----------------------------
-    v_raw_segment_input = (
-        "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegment/value"
-    )
-    v_band_segment_input = (
-        "/Artery/VelocityPerBeat/Segments/"
-        "VelocitySignalPerBeatPerSegmentBandLimited/value"
-    )
-    v_raw_global_input = "/Artery/VelocityPerBeat/VelocitySignalPerBeat/value"
-    v_band_global_input = (
-        "/Artery/VelocityPerBeat/VelocitySignalPerBeatBandLimited/value"
-    )
+    v_raw_segment_input = SEGMENT_VELOCITY_PER_BEAT[("artery", "raw")]
+    v_band_segment_input = SEGMENT_VELOCITY_PER_BEAT[("artery", "bandlimited")]
+    v_raw_global_input = VELOCITY_PER_BEAT[("artery", "raw")]
+    v_band_global_input = VELOCITY_PER_BEAT[("artery", "bandlimited")]
 
     # ----------------------------
     # Venous inputs
     # ----------------------------
-    v_raw_segment_input_vein = (
-        "/Vein/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegment/value"
-    )
-    v_band_segment_input_vein = (
-        "/Vein/VelocityPerBeat/Segments/"
-        "VelocitySignalPerBeatPerSegmentBandLimited/value"
-    )
-    v_raw_global_input_vein = "/Vein/VelocityPerBeat/VelocitySignalPerBeat/value"
-    v_band_global_input_vein = (
-        "/Vein/VelocityPerBeat/VelocitySignalPerBeatBandLimited/value"
-    )
+    v_raw_segment_input_vein = SEGMENT_VELOCITY_PER_BEAT[("vein", "raw")]
+    v_band_segment_input_vein = SEGMENT_VELOCITY_PER_BEAT[("vein", "bandlimited")]
+    v_raw_global_input_vein = VELOCITY_PER_BEAT[("vein", "raw")]
+    v_band_global_input_vein = VELOCITY_PER_BEAT[("vein", "bandlimited")]
 
     # Beat period input
-    T_input = "/Artery/VelocityPerBeat/beatPeriodSeconds/value"
+    T_input = BEAT_PERIOD
 
     eps = 1e-12
 
@@ -1553,7 +1548,7 @@ class ArterialSegExample(ProcessPipeline):
             "E_slope": r"$E_{\mathrm{slope}}=\frac{T^3}{M_0^2}\int_0^T \dot v(t)^2\,dt$",
         }
 
-        T = np.asarray(h5file[self.T_input])
+        T = np.asarray(require_dataset(h5file, self.T_input))
         metrics = {}
 
         vessel_configs = [
@@ -1577,23 +1572,31 @@ class ArterialSegExample(ProcessPipeline):
             vessel_prefix = cfg["prefix"]
 
             have_seg = (
-                cfg["v_raw_segment_input"] in h5file
-                and cfg["v_band_segment_input"] in h5file
+                has_path(h5file, cfg["v_raw_segment_input"])
+                and has_path(h5file, cfg["v_band_segment_input"])
             )
             if have_seg:
-                v_raw_seg = np.asarray(h5file[cfg["v_raw_segment_input"]])
-                v_band_seg = np.asarray(h5file[cfg["v_band_segment_input"]])
+                v_raw_seg = np.asarray(
+                    require_dataset(h5file, cfg["v_raw_segment_input"])
+                )
+                v_band_seg = np.asarray(
+                    require_dataset(h5file, cfg["v_band_segment_input"])
+                )
                 self._pack_segment_outputs(
                     metrics, vessel_prefix, v_raw_seg, v_band_seg, T
                 )
 
             have_glob = (
-                cfg["v_raw_global_input"] in h5file
-                and cfg["v_band_global_input"] in h5file
+                has_path(h5file, cfg["v_raw_global_input"])
+                and has_path(h5file, cfg["v_band_global_input"])
             )
             if have_glob:
-                v_raw_gl = np.asarray(h5file[cfg["v_raw_global_input"]])
-                v_band_gl = np.asarray(h5file[cfg["v_band_global_input"]])
+                v_raw_gl = np.asarray(
+                    require_dataset(h5file, cfg["v_raw_global_input"])
+                )
+                v_band_gl = np.asarray(
+                    require_dataset(h5file, cfg["v_band_global_input"])
+                )
                 self._pack_global_outputs(
                     metrics,
                     vessel_prefix,

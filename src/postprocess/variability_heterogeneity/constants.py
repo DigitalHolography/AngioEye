@@ -1,6 +1,25 @@
+from input_output.hdf5_schema import pipeline_path_candidates
+
+
+def _segment_metric_folders() -> tuple[str, ...]:
+    folders: list[str] = []
+    for pipeline_name in (
+        "waveform_shape_metrics_denoised",
+        "waveform_shape_metrics",
+    ):
+        folders.extend(
+            path.rstrip("/")
+            for path in pipeline_path_candidates(
+                pipeline_name,
+                "artery",
+                "by_segment",
+            )
+        )
+    return tuple(folders)
+
+
 SEGMENT_METRIC_FOLDERS = (
-    "/AngioEye/Processing/waveform_shape_metrics_denoised/artery/by_segment/",
-    "/AngioEye/Processing/waveform_shape_metrics/artery/by_segment/",
+    *_segment_metric_folders(),
 )
 SEGMENT_MODE = "bandlimited_segment"
 EPS = 1e-12

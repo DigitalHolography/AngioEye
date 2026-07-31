@@ -5,9 +5,16 @@ from dataclasses import dataclass
 import h5py
 import numpy as np
 
+from input_output.eyeflow_schema import (
+    BEAT_PERIOD,
+    SEGMENT_VELOCITY_PER_BEAT,
+    get_object,
+    missing_paths,
+    require_dataset,
+)
 from math_utils import nanmedian
 
-from .core.base import ProcessResult, registerPipeline, with_attrs
+from .core.base import ProcessResult, with_attrs
 from .waveform_shape_metrics import ArterialSegExample
 
 REGION_NAMES = (
@@ -37,9 +44,9 @@ TRIGONOMETRIC_QUADRANT_INDICES = tuple(
 OPTIC_DISC_LABEL = -1
 REGION_AXIS_LABEL = -2
 
-OPTIC_DISC_CENTER_PATH = "/Topology/OpticDisc/CenterXY/value"
-OPTIC_DISC_MASK_PATH = "/Topology/OpticDisc/Mask/value"
-BEAT_PERIOD_PATH = "/Artery/VelocityPerBeat/beatPeriodSeconds/value"
+OPTIC_DISC_CENTER_PATH = "/Segmentation/OpticDisc/CenterXY/value"
+OPTIC_DISC_MASK_PATH = "/Segmentation/OpticDisc/Mask/value"
+BEAT_PERIOD_PATH = BEAT_PERIOD
 EYEFLOW_SPATIAL_Y_INVERTED = True
 
 
@@ -60,7 +67,7 @@ class VesselPaths:
             "bandlimited": "bandlimited_segment",
         }[signal_type]
         return (
-            f"/Metrics/waveform_shape_metrics/{self.name}/by_segment/"
+            f"/Processing/Metrics/waveform_shape_metrics/{self.name}/by_segment/"
             f"{segment_group}/{metric_name}"
         )
 
@@ -68,33 +75,23 @@ class VesselPaths:
 VESSEL_PATHS = (
     VesselPaths(
         name="artery",
-        branch_ids="/Topology/Artery/BranchIds/value",
-        branch_label_map="/Topology/Artery/BranchLabelMap/value",
+        branch_ids="/Segmentation/Artery/BranchIds/value",
+        branch_label_map="/Segmentation/Artery/BranchLabelMap/value",
         branch_label_map_axes=("y", "x"),
-        branch_label_map_y_inverted=True,
-        segment_center_xy="/Topology/Artery/SegmentCenterXY/value",
-        raw_waveform=(
-            "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegment/value"
-        ),
-        bandlimited_waveform=(
-            "/Artery/VelocityPerBeat/Segments/"
-            "VelocitySignalPerBeatPerSegmentBandLimited/value"
-        ),
+        branch_label_map_y_inverted=EYEFLOW_SPATIAL_Y_INVERTED,
+        segment_center_xy="/Segmentation/Artery/SegmentCenterXY/value",
+        raw_waveform=SEGMENT_VELOCITY_PER_BEAT[("artery", "raw")],
+        bandlimited_waveform=SEGMENT_VELOCITY_PER_BEAT[("artery", "bandlimited")],
     ),
     VesselPaths(
         name="vein",
-        branch_ids="/Topology/Vein/BranchIds/value",
-        branch_label_map="/Topology/Vein/BranchLabelMap/value",
+        branch_ids="/Segmentation/Vein/BranchIds/value",
+        branch_label_map="/Segmentation/Vein/BranchLabelMap/value",
         branch_label_map_axes=("y", "x"),
-        branch_label_map_y_inverted=True,
-        segment_center_xy="/Topology/Vein/SegmentCenterXY/value",
-        raw_waveform=(
-            "/Vein/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegment/value"
-        ),
-        bandlimited_waveform=(
-            "/Vein/VelocityPerBeat/Segments/"
-            "VelocitySignalPerBeatPerSegmentBandLimited/value"
-        ),
+        branch_label_map_y_inverted=EYEFLOW_SPATIAL_Y_INVERTED,
+        segment_center_xy="/Segmentation/Vein/SegmentCenterXY/value",
+        raw_waveform=SEGMENT_VELOCITY_PER_BEAT[("vein", "raw")],
+        bandlimited_waveform=SEGMENT_VELOCITY_PER_BEAT[("vein", "bandlimited")],
     ),
 )
 
@@ -126,10 +123,16 @@ class VesselData:
     bandlimited_waveform: np.ndarray
 
 
-@registerPipeline(name="topological_metrics")
 class TopologicalMetricsPipeline(ArterialSegExample):
-    """Regional waveform-shape summaries indexed by EyeFlow topology."""
+    """Legacy topology computation retained for compatibility, not registered.
 
+    Topological metrics are no longer exposed as an AngioEye pipeline. The
+    HTML summary still understands their historical output and renders
+    EyeFlow topology maps directly; this class remains importable for old
+    callers and fixtures.
+    """
+
+    name = "topological_metrics"
     description = (
         "Waveform-shape metrics by optic-disc-centred quadrants, half-planes, "
         "and the individual branches present in each region "
@@ -141,7 +144,10 @@ class TopologicalMetricsPipeline(ArterialSegExample):
     def run(self, h5file: h5py.File) -> ProcessResult:
         self._require_inputs(h5file)
         optic_disc_center = self._optic_disc_center(h5file)
-        optic_disc_mask = np.asarray(h5file[OPTIC_DISC_MASK_PATH], dtype=bool)
+        optic_disc_mask = np.asarray(
+            require_dataset(h5file, OPTIC_DISC_MASK_PATH),
+            dtype=bool,
+        )
         if optic_disc_mask.ndim != 2:
             raise ValueError(
                 f"{OPTIC_DISC_MASK_PATH} must have shape (y, x), got "
@@ -251,7 +257,7 @@ class TopologicalMetricsPipeline(ArterialSegExample):
 
     @classmethod
     def missing_required_paths(cls, h5file: h5py.File) -> tuple[str, ...]:
-        return tuple(path for path in cls.required_h5_paths if path not in h5file)
+        return missing_paths(h5file, cls.required_h5_paths)
 
     @classmethod
     def _require_inputs(cls, h5file: h5py.File) -> None:
@@ -263,7 +269,10 @@ class TopologicalMetricsPipeline(ArterialSegExample):
 
     @staticmethod
     def _optic_disc_center(h5file: h5py.File) -> np.ndarray:
-        center = np.asarray(h5file[OPTIC_DISC_CENTER_PATH], dtype=float).reshape(-1)
+        center = np.asarray(
+            require_dataset(h5file, OPTIC_DISC_CENTER_PATH),
+            dtype=float,
+        ).reshape(-1)
         if center.size != 2 or not np.all(np.isfinite(center)):
             raise ValueError(
                 f"{OPTIC_DISC_CENTER_PATH} must contain one finite (x, y) pair."
@@ -286,10 +295,16 @@ class TopologicalMetricsPipeline(ArterialSegExample):
 
     @staticmethod
     def _load_vessel(h5file: h5py.File, paths: VesselPaths) -> VesselData:
-        branch_ids = np.asarray(h5file[paths.branch_ids], dtype=np.int32).reshape(-1)
-        raw_waveform = np.asarray(h5file[paths.raw_waveform], dtype=float)
+        branch_ids = np.asarray(
+            require_dataset(h5file, paths.branch_ids),
+            dtype=np.int32,
+        ).reshape(-1)
+        raw_waveform = np.asarray(
+            require_dataset(h5file, paths.raw_waveform),
+            dtype=float,
+        )
         bandlimited_waveform = np.asarray(
-            h5file[paths.bandlimited_waveform],
+            require_dataset(h5file, paths.bandlimited_waveform),
             dtype=float,
         )
         if branch_ids.size == 0:
@@ -305,7 +320,10 @@ class TopologicalMetricsPipeline(ArterialSegExample):
                     "bandlimited",
                 )
             )
-        branch_label_map = np.asarray(h5file[paths.branch_label_map], dtype=np.int32)
+        branch_label_map = np.asarray(
+            require_dataset(h5file, paths.branch_label_map),
+            dtype=np.int32,
+        )
         if paths.branch_label_map_axes == ("x", "y"):
             # Keep this conversion for older inputs that used [x, y]. Current
             # EyeFlow maps use D0=Y and D1=X, i.e. the canonical [y, x] order.
@@ -320,7 +338,10 @@ class TopologicalMetricsPipeline(ArterialSegExample):
             paths=paths,
             branch_ids=branch_ids,
             branch_label_map=branch_label_map,
-            segment_center_xy=np.asarray(h5file[paths.segment_center_xy], dtype=float),
+            segment_center_xy=np.asarray(
+                require_dataset(h5file, paths.segment_center_xy),
+                dtype=float,
+            ),
             raw_waveform=raw_waveform,
             bandlimited_waveform=bandlimited_waveform,
         )
@@ -452,7 +473,10 @@ class TopologicalMetricsPipeline(ArterialSegExample):
 
     @staticmethod
     def _beat_periods(h5file: h5py.File, n_beats: int) -> np.ndarray:
-        periods = np.asarray(h5file[BEAT_PERIOD_PATH], dtype=float).reshape(-1)
+        periods = np.asarray(
+            require_dataset(h5file, BEAT_PERIOD_PATH),
+            dtype=float,
+        ).reshape(-1)
         if periods.size != n_beats:
             raise ValueError(
                 f"{BEAT_PERIOD_PATH} contains {periods.size} beat period(s), but "
@@ -623,7 +647,7 @@ class TopologicalMetricsPipeline(ArterialSegExample):
         source_metrics: dict[str, np.ndarray] = {}
         for metric_name in metric_names:
             path = vessel.paths.source_metric_path(signal_type, metric_name)
-            dataset = h5file.get(path)
+            dataset = get_object(h5file, path)
             if not isinstance(dataset, h5py.Dataset) or dataset.shape != expected_shape:
                 break
             source_metrics[metric_name] = np.asarray(dataset, dtype=float)

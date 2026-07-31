@@ -1,12 +1,14 @@
+from pathlib import Path
+
 import h5py
 import matplotlib.pyplot as plt
-from pathlib import Path
 import numpy as np
 from scipy.interpolate import interp1d
-
-from math_utils import fft, ifft, irfft, nanargmax, nanmax, nanmean, rfft, rfftfreq
 from scipy.optimize import curve_fit
 from scipy.special import jv
+
+from input_output.eyeflow_schema import BEAT_PERIOD, require_dataset
+from math_utils import irfft, rfft
 
 from .core.base import ProcessPipeline, ProcessResult, registerPipeline
 
@@ -646,25 +648,22 @@ def evaluate_anti_model(disp, num_harmonics=3, exclude_last=5, jump_threshold=0.
 class WomersleyModeling(ProcessPipeline):
     description = "Womersley Modeling Pipeline"
 
-    v_profile_path = "/Artery/CrossSections/VelocityProfilesSegInterpOneBeat/value"
-    b_period_path = "/Artery/VelocityPerBeat/beatPeriodSeconds/value"
+    v_profile_path = "/Processing/CrossSections/Artery/VelocityProfile/value"
+    b_period_path = BEAT_PERIOD
 
     def run(self, h5file: h5py.File) -> ProcessResult:
         """
         Executes the Womersley Modeling pipeline.
         """
-        obj = h5file[self.v_profile_path]
-        if not isinstance(obj, h5py.Dataset):
-            raise ValueError(
-                f"Expected a dataset at {self.v_profile_path}, but found {type(obj)}"
-            )
+        obj = require_dataset(h5file, self.v_profile_path)
         dataset = np.asarray(obj[:], dtype=float)
+        if dataset.ndim == 5:
+            # eyeflow_v2: [x, time, beat, branch, radius].  This model consumes
+            # one representative beat in historical [time, x, branch, radius]
+            # order.
+            dataset = np.nanmedian(dataset, axis=2).transpose(1, 0, 2, 3)
 
-        obj = h5file[self.b_period_path]
-        if not isinstance(obj, h5py.Dataset):
-            raise ValueError(
-                f"Expected a dataset at {self.b_period_path}, but found {type(obj)}"
-            )
+        obj = require_dataset(h5file, self.b_period_path)
         # b_period = np.mean(obj[:])
         # print(f"b_period: {b_period}")
 

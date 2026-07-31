@@ -1,15 +1,20 @@
 import numpy as np
 
+from input_output.eyeflow_schema import (
+    BEAT_PERIOD,
+    VELOCITY_PER_BEAT,
+    has_path,
+    require_dataset,
+)
 from math_utils import (
+    irfft_normalized,
+    nanmad,
     nanmax,
     nanmean,
     nanmedian,
     nanmin,
     nanstd,
-    nancv,
-    nanmad,
     rfft_normalized,
-    irfft_normalized,
     rfftfreq,
 )
 
@@ -45,15 +50,11 @@ class WindkesselRC(ProcessPipeline):
         "with intrinsic QC primitives for downstream postprocessing."
     )
 
-    v_raw_global_input_artery = "/Artery/VelocityPerBeat/VelocitySignalPerBeat/value"
-    v_band_global_input_artery = (
-        "/Artery/VelocityPerBeat/VelocitySignalPerBeatBandLimited/value"
-    )
-    v_raw_global_input_vein = "/Vein/VelocityPerBeat/VelocitySignalPerBeat/value"
-    v_band_global_input_vein = (
-        "/Vein/VelocityPerBeat/VelocitySignalPerBeatBandLimited/value"
-    )
-    T_input = "/Artery/VelocityPerBeat/beatPeriodSeconds/value"
+    v_raw_global_input_artery = VELOCITY_PER_BEAT[("artery", "raw")]
+    v_band_global_input_artery = VELOCITY_PER_BEAT[("artery", "bandlimited")]
+    v_raw_global_input_vein = VELOCITY_PER_BEAT[("vein", "raw")]
+    v_band_global_input_vein = VELOCITY_PER_BEAT[("vein", "bandlimited")]
+    T_input = BEAT_PERIOD
 
     eps = 1e-12
 
@@ -772,10 +773,10 @@ class WindkesselRC(ProcessPipeline):
             metrics[f"{base}/summary/{key}"] = np.asarray(val)
 
     def run(self, h5file) -> ProcessResult:
-        if self.T_input not in h5file:
+        if not has_path(h5file, self.T_input):
             raise ValueError(f"Missing beat period input required by Windkessel_RC: {self.T_input}")
 
-        T = np.asarray(h5file[self.T_input], dtype=float)
+        T = np.asarray(require_dataset(h5file, self.T_input), dtype=float)
         n_beats = int(T.shape[1]) if T.ndim == 2 else int(T.size)
         required_inputs = {
             "raw": (self.v_raw_global_input_artery, self.v_raw_global_input_vein),
@@ -784,10 +785,10 @@ class WindkesselRC(ProcessPipeline):
         metrics: dict = {}
 
         for rep_name, (qa_path, qv_path) in required_inputs.items():
-            if qa_path not in h5file or qv_path not in h5file:
+            if not has_path(h5file, qa_path) or not has_path(h5file, qv_path):
                 continue
-            qa = np.asarray(h5file[qa_path], dtype=float)
-            qv = np.asarray(h5file[qv_path], dtype=float)
+            qa = np.asarray(require_dataset(h5file, qa_path), dtype=float)
+            qv = np.asarray(require_dataset(h5file, qv_path), dtype=float)
             rep_result = self._analyze_representation(qa, qv, T, rep_name)
             for method_name in ("freq", "time_integral", "arx"):
                 self._pack_method_outputs(metrics, rep_name, method_name, rep_result[method_name])

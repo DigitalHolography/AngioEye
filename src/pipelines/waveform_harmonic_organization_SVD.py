@@ -1,5 +1,11 @@
 import numpy as np
 
+from input_output.eyeflow_schema import (
+    BEAT_PERIOD,
+    SEGMENT_VELOCITY_PER_BEAT,
+    has_path,
+    require_dataset,
+)
 from math_utils import rfft_normalized
 
 from .core.base import ProcessPipeline, ProcessResult, registerPipeline, with_attrs
@@ -35,11 +41,11 @@ class WaveformHarmonicOrganizationSVD(ProcessPipeline):
     Inputs
     ------
     - raw per-segment arterial waveforms:
-        /Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegment/value
+        /Processing/VelocityPerBeat/Artery/Segments/Raw/value
     - raw per-segment venous waveforms:
-        /Vein/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegment/value
+        /Processing/VelocityPerBeat/Vein/Segments/Raw/value
     - beat periods:
-        /Artery/VelocityPerBeat/beatPeriodSeconds/value
+        /Processing/VelocityPerBeat/BeatPeriodSeconds/value
 
     Expected segment layout
     -----------------------
@@ -55,13 +61,9 @@ class WaveformHarmonicOrganizationSVD(ProcessPipeline):
     # ----------------------------
     # Inputs
     # ----------------------------
-    v_raw_segment_input_artery = (
-        "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegment/value"
-    )
-    v_raw_segment_input_vein = (
-        "/Vein/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegment/value"
-    )
-    T_input = "/Artery/VelocityPerBeat/beatPeriodSeconds/value"
+    v_raw_segment_input_artery = SEGMENT_VELOCITY_PER_BEAT[("artery", "raw")]
+    v_raw_segment_input_vein = SEGMENT_VELOCITY_PER_BEAT[("vein", "raw")]
+    T_input = BEAT_PERIOD
 
     # ----------------------------
     # Parameters
@@ -1134,7 +1136,7 @@ class WaveformHarmonicOrganizationSVD(ProcessPipeline):
         )
 
     def run(self, h5file) -> ProcessResult:
-        T = np.asarray(h5file[self.T_input])
+        T = np.asarray(require_dataset(h5file, self.T_input))
         metrics = {}
 
         vessel_configs = [
@@ -1151,8 +1153,10 @@ class WaveformHarmonicOrganizationSVD(ProcessPipeline):
         for cfg in vessel_configs:
             vessel_prefix = cfg["prefix"]
 
-            if cfg["v_raw_segment_input"] in h5file:
-                v_raw_seg = np.asarray(h5file[cfg["v_raw_segment_input"]])
+            if has_path(h5file, cfg["v_raw_segment_input"]):
+                v_raw_seg = np.asarray(
+                    require_dataset(h5file, cfg["v_raw_segment_input"])
+                )
                 self._pack_vessel_outputs(metrics, vessel_prefix, v_raw_seg, T)
 
         return ProcessResult(metrics=metrics)

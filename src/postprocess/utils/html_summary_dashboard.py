@@ -1,33 +1,34 @@
 ﻿import os
+import shutil
 import tempfile
 import zipfile
 from collections import defaultdict
 from pathlib import Path
-import shutil
+
 import h5py
+import matplotlib
 import numpy as np
 import pandas as pd
-import matplotlib
 
 matplotlib.use("Agg", force=True)
 
-import matplotlib.pyplot as plt
-from matplotlib.ticker import FormatStrFormatter
-from tkinter import Tk, filedialog
-import html
 import base64
-from math_utils import nanmedian, nanstd
-from input_output.hdf5_io import find_eyeflow_dataset, find_first_existing_path
-from input_output.hdf5_schema import pipeline_path_candidates
+import html
+from tkinter import Tk, filedialog
+
+import matplotlib.pyplot as plt
+
 from input_output.archive_io import (
-    replace_folder_in_zip,
     reset_output_dir,
 )
+from input_output.hdf5_io import find_eyeflow_dataset, find_first_existing_path
+from input_output.hdf5_schema import find_pipeline_group, pipeline_path_candidates
 from input_output.output_paths import (
     PNG_OUTPUT_DIRNAME,
     dataset_stem_from_path,
     find_companion_file,
 )
+from math_utils import nanmedian, nanstd
 
 WAVEFORM_SHAPE_METRICS_PIPELINE = "waveform_shape_metrics"
 TOPOLOGICAL_METRICS_PIPELINE = "topological_metrics"
@@ -97,8 +98,15 @@ LATEX_FORMULAS = {
 }
 
 
-def get_metrics_base_candidates(vessel: str) -> list[str]:
-    return pipeline_path_candidates(WAVEFORM_SHAPE_METRICS_PIPELINE, vessel, "global")
+def get_metrics_base_candidates(
+    vessel: str,
+    *parts: str,
+) -> list[str]:
+    return pipeline_path_candidates(
+        WAVEFORM_SHAPE_METRICS_PIPELINE,
+        vessel,
+        *parts,
+    )
 
 
 def extract_group_metrics(group, results_dict, prefix=""):
@@ -131,6 +139,28 @@ def extract_group_metrics(group, results_dict, prefix=""):
                 print(f"Skipping non numeric dataset: {full_name}")
 
 
+def _iter_metric_mode_groups(group):
+    """Yield raw/bandlimited groups at any depth below a metric region."""
+    for name, item in group.items():
+        if not isinstance(item, h5py.Group):
+            continue
+        if name in VALID_METRIC_FOLDERS:
+            yield name, item
+            continue
+        yield from _iter_metric_mode_groups(item)
+
+
+def _extract_metric_modes(group):
+    global_group = group.get("global")
+    if isinstance(global_group, h5py.Group):
+        return _extract_metric_modes(global_group)
+
+    modes = defaultdict(dict)
+    for mode, mode_group in _iter_metric_mode_groups(group):
+        extract_group_metrics(mode_group, modes[mode])
+    return modes
+
+
 def extract_topological_metrics(h5_path):
 
     results = defaultdict(
@@ -140,25 +170,25 @@ def extract_topological_metrics(h5_path):
     )
 
     with h5py.File(h5_path, "r") as f:
+        pipeline_group = find_pipeline_group(f, TOPOLOGICAL_METRICS_PIPELINE)
+        if pipeline_group is None:
+            return results
 
         for vessel in VALID_VESSELS:
-
-            vessel_root = f"/AngioEye/Processing/topological_metrics/{vessel}"
-
-            if vessel_root not in f:
+            vessel_group = pipeline_group.get(vessel)
+            if not isinstance(vessel_group, h5py.Group):
                 continue
 
-            for zone in f[vessel_root]:
-
-                bandlimited_path = (
-                    f"{vessel_root}/{zone}/global/bandlimited"
-                )
-
-                if bandlimited_path not in f:
+            for zone in vessel_group:
+                zone_group = vessel_group.get(zone)
+                if not isinstance(zone_group, h5py.Group):
+                    continue
+                bandlimited_group = zone_group.get("global/bandlimited")
+                if not isinstance(bandlimited_group, h5py.Group):
                     continue
 
                 extract_group_metrics(
-                    f[bandlimited_path],
+                    bandlimited_group,
                     results["bandlimited"][zone][vessel]
                 )
 
@@ -175,25 +205,46 @@ def extract_waveform_shape_metrics(h5_path):
 
             metrics_root_path = find_first_existing_path(
                 f,
-                get_metrics_base_candidates(vessel)
+                get_metrics_base_candidates(vessel, "global"),
             )
 
-            if metrics_root_path is None or metrics_root_path not in f:
+            if metrics_root_path is not None and metrics_root_path in f:
+                metrics_root = f[metrics_root_path]
+                for mode, mode_group in _iter_metric_mode_groups(metrics_root):
+                    extract_group_metrics(mode_group, results[mode][vessel])
+
+            hemifield_root_path = find_first_existing_path(
+                f,
+                get_metrics_base_candidates(vessel, "hemifield"),
+            )
+            if hemifield_root_path is None or hemifield_root_path not in f:
                 continue
 
-            metrics_root = f[metrics_root_path]
+            hemifield_root = f[hemifield_root_path]
+            direct_modes = {
+                mode: mode_group
+                for mode, mode_group in hemifield_root.items()
+                if mode in VALID_METRIC_FOLDERS
+                and isinstance(mode_group, h5py.Group)
+            }
+            if direct_modes:
+                for mode, mode_group in direct_modes.items():
+                    metrics = {}
+                    extract_group_metrics(mode_group, metrics)
+                    results["hemifield"].setdefault("all", {}).setdefault(
+                        mode,
+                        {},
+                    )[vessel] = metrics
+                continue
 
-            for mode in metrics_root.keys():
-
-                if mode not in VALID_METRIC_FOLDERS:
+            for region_name, region_group in hemifield_root.items():
+                if not isinstance(region_group, h5py.Group):
                     continue
-
-                group = metrics_root[mode]
-
-                extract_group_metrics(
-                    group,
-                    results[mode][vessel]
-                )
+                for mode, metrics in _extract_metric_modes(region_group).items():
+                    results["hemifield"].setdefault(region_name, {}).setdefault(
+                        mode,
+                        {},
+                    )[vessel] = metrics
 
     return results
 
@@ -266,17 +317,44 @@ def _append_metrics_table(html_parts, df):
     </table>
     """)
 
-def _branch_label_map_to_base64(source_path, *, vessel_type, image_dir, base_name):
-    dataset = (
-        f"/AngioEye/Processing/topological_metrics/"
-        f"topology/{vessel_type}/branch_label_map"
+def _find_topology_branch_label_map(h5file, vessel_type):
+    source_dataset = find_eyeflow_dataset(
+        h5file,
+        f"/Segmentation/{vessel_type.title()}/BranchLabelMap/value",
     )
+    if isinstance(source_dataset, h5py.Dataset):
+        return source_dataset
 
-    with h5py.File(source_path, "r") as f:
-        if dataset not in f:
-            return None
+    pipeline_group = find_pipeline_group(h5file, TOPOLOGICAL_METRICS_PIPELINE)
+    if pipeline_group is None:
+        return None
+    dataset = pipeline_group.get(f"topology/{vessel_type}/branch_label_map")
+    return dataset if isinstance(dataset, h5py.Dataset) else None
 
-        data = np.array(f[dataset])
+
+def _branch_label_map_to_base64(
+    source_path,
+    *,
+    vessel_type,
+    image_dir,
+    base_name,
+    fallback_path=None,
+):
+    data = None
+    for candidate in (source_path, fallback_path):
+        if (
+            candidate is None
+            or not Path(candidate).exists()
+            or not h5py.is_hdf5(candidate)
+        ):
+            continue
+        with h5py.File(candidate, "r") as f:
+            dataset = _find_topology_branch_label_map(f, vessel_type)
+            if dataset is not None:
+                data = np.array(dataset)
+                break
+    if data is None:
+        return None
 
     image_path = os.path.join(
         image_dir,
@@ -294,6 +372,7 @@ def _branch_label_map_to_base64(source_path, *, vessel_type, image_dir, base_nam
 def dataframe_to_html_table(
     waveform_tables,
     topological_tables,
+    hemifield_tables=None,
     title="Metrics Table",
     M_0_path=None,
     mask_vein_path=None,
@@ -305,6 +384,7 @@ def dataframe_to_html_table(
     vein_branch_label_map_path=None,
 ):
     html_parts = []
+    hemifield_tables = hemifield_tables or []
 
     html_parts.append("""
     <html>
@@ -490,6 +570,14 @@ def dataframe_to_html_table(
         document.getElementById(zone).style.display = "block";
     }
 
+    function showHemifield(region) {
+        document.querySelectorAll(".hemifield-table").forEach(div => {
+            div.style.display = "none";
+        });
+
+        document.getElementById(region).style.display = "block";
+    }
+
     function closeImageModal() {
         document.getElementById("image-modal").style.display = "none";
     }
@@ -596,6 +684,39 @@ def dataframe_to_html_table(
         for _, df in waveform_tables:
                 _append_metrics_table(html_parts, df)
                 html_parts.append("<br><br>")
+
+    if hemifield_tables:
+        html_parts.append('<h2 class="pipeline-title">Hemifield Analysis</h2>')
+        html_parts.append("""
+        <label for="hemifield-select"><b>Region :</b></label>
+        <select id="hemifield-select" onchange="showHemifield(this.value)">
+        """)
+
+        for index, (region, _) in enumerate(hemifield_tables):
+            display_region = str(region).replace("_", " ").title()
+            selected = " selected" if index == 0 else ""
+            html_parts.append(
+                f'<option value="hemifield-{index}"{selected}>'
+                f"{html.escape(display_region)}</option>"
+            )
+
+        html_parts.append("""
+        </select>
+        <br><br>
+        """)
+
+        for index, (region, df) in enumerate(hemifield_tables):
+            display = "block" if index == 0 else "none"
+            html_parts.append(
+                f'<div id="hemifield-{index}" class="hemifield-table" '
+                f'style="display:{display};">'
+            )
+            html_parts.append(
+                f"<h3>{html.escape(str(region).replace('_', ' ').title())}</h3>"
+            )
+            _append_metrics_table(html_parts, df)
+            html_parts.append("<br><br>")
+            html_parts.append("</div>")
          
 
     if topological_tables:
@@ -776,11 +897,17 @@ def _signal_image_to_base64(data, image_dir, filename, *, color, title):
 
 def _build_single_file_html(filepath, *, image_dir, source_path=None):
     filepath = Path(filepath)
+    source_h5_path = filepath
+    if source_path is not None:
+        candidate = Path(source_path)
+        if candidate.suffix.lower() in {".h5", ".hdf5"} and candidate.exists():
+            source_h5_path = candidate
     waveform = extract_waveform_shape_metrics(filepath)
     topological = extract_topological_metrics(filepath)
     
     waveform_tables = []
     topological_tables = []
+    hemifield_tables = []
 
 
     # Waveform Shape Metrics
@@ -794,6 +921,18 @@ def _build_single_file_html(filepath, *, image_dir, source_path=None):
             )
         )
 
+    hemifield = waveform.get("hemifield", {}) if waveform else {}
+    for region, region_modes in sorted(hemifield.items()):
+        mode = "bandlimited" if "bandlimited" in region_modes else "raw"
+        if mode not in region_modes:
+            continue
+        hemifield_tables.append(
+            (
+                region,
+                build_metrics_table_for_file(region_modes[mode]),
+            )
+        )
+
     # Topological Metrics
     if topological and "bandlimited" in topological:
         for zone, zone_metrics in sorted(topological["bandlimited"].items()):
@@ -801,7 +940,7 @@ def _build_single_file_html(filepath, *, image_dir, source_path=None):
 
             topological_tables.append((zone, df))
 
-    if not waveform_tables and not topological_tables:
+    if not waveform_tables and not hemifield_tables and not topological_tables:
         raise ValueError(
             "No compatible pipeline metrics were found for the dashboard."
         )
@@ -809,17 +948,19 @@ def _build_single_file_html(filepath, *, image_dir, source_path=None):
     base_name = filepath.stem
 
     artery_branch_label_map_path = _branch_label_map_to_base64(
-        filepath,
+        source_h5_path,
         vessel_type="artery",
         image_dir=image_dir,
         base_name=base_name,
+        fallback_path=filepath,
     )
 
     vein_branch_label_map_path = _branch_label_map_to_base64(
-        filepath,
+        source_h5_path,
         vessel_type="vein",
         image_dir=image_dir,
         base_name=base_name,
+        fallback_path=filepath,
     )
 
     M_0_rel_path = None
@@ -851,67 +992,60 @@ def _build_single_file_html(filepath, *, image_dir, source_path=None):
                 cmap="viridis",
             )
 
-        vein_mask_dataset = find_eyeflow_dataset(
-            f,
-            "Vein/Segmentation/Mask/value",
-        )
-        if mask_rel_path_vein is None and vein_mask_dataset is not None:
+        vein_mask = find_eyeflow_dataset(f, "/Segmentation/Vein/Mask/value")
+        if mask_rel_path_vein is None and isinstance(vein_mask, h5py.Dataset):
             mask_rel_path_vein = _array_image_to_base64(
-                np.array(vein_mask_dataset),
+                np.array(vein_mask),
                 image_dir,
                 f"{base_name}_vein_mask.png",
                 cmap="gray",
             )
 
-        artery_mask_dataset = find_eyeflow_dataset(
-            f,
-            "Artery/Segmentation/Mask/value",
-        )
-        if mask_rel_path_artery is None and artery_mask_dataset is not None:
+        artery_mask = find_eyeflow_dataset(f, "/Segmentation/Artery/Mask/value")
+        if mask_rel_path_artery is None and isinstance(artery_mask, h5py.Dataset):
             mask_rel_path_artery = _array_image_to_base64(
-                np.array(artery_mask_dataset),
+                np.array(artery_mask),
                 image_dir,
                 f"{base_name}_artery_mask.png",
                 cmap="gray",
             )
 
-        f_AVG_mean_dataset = find_eyeflow_dataset(f, "Maps/f_AVG_mean/value")
-        if f_AVG_mean_rel_path is None and f_AVG_mean_dataset is not None:
+        frms_map = find_eyeflow_dataset(
+            f,
+            "/Processing/FrequencyMaps/fRMS_avg/value",
+        )
+        if f_AVG_mean_rel_path is None and isinstance(frms_map, h5py.Dataset):
             f_AVG_mean_rel_path = _array_image_to_base64(
-                np.array(f_AVG_mean_dataset),
+                np.array(frms_map),
                 image_dir,
                 f"{base_name}_f_AVG_mean.png",
                 cmap="viridis",
             )
 
-        if (
-            artery_velocity_signal_path is None
-            and (
-                artery_velocity_dataset := find_eyeflow_dataset(
-                    f,
-                    "Artery/Velocity/VelocitySignal/value",
-                )
-            ) is not None
+        artery_velocity = find_eyeflow_dataset(
+            f,
+            "/Processing/Velocity/Artery/Raw/value",
+        )
+        if artery_velocity_signal_path is None and isinstance(
+            artery_velocity, h5py.Dataset
         ):
             artery_velocity_signal_path = _signal_image_to_base64(
-                np.array(artery_velocity_dataset),
+                np.array(artery_velocity),
                 image_dir,
                 f"{base_name}_artery_velocity_signal.png",
                 color="#EC5241",
                 title="Artery Velocity Signal",
             )
 
-        if (
-            vein_velocity_signal_path is None
-            and (
-                vein_velocity_dataset := find_eyeflow_dataset(
-                    f,
-                    "Vein/Velocity/VelocitySignal/value",
-                )
-            ) is not None
+        vein_velocity = find_eyeflow_dataset(
+            f,
+            "/Processing/Velocity/Vein/Raw/value",
+        )
+        if vein_velocity_signal_path is None and isinstance(
+            vein_velocity, h5py.Dataset
         ):
             vein_velocity_signal_path = _signal_image_to_base64(
-                np.array(vein_velocity_dataset),
+                np.array(vein_velocity),
                 image_dir,
                 f"{base_name}_vein_velocity_signal.png",
                 color="#414CEC",
@@ -921,6 +1055,7 @@ def _build_single_file_html(filepath, *, image_dir, source_path=None):
     return dataframe_to_html_table(
         waveform_tables=waveform_tables,
         topological_tables=topological_tables,
+        hemifield_tables=hemifield_tables,
         title=f"Metrics for {filepath.name}",
         M_0_path=M_0_rel_path,
         mask_vein_path=mask_rel_path_vein,
