@@ -7,7 +7,11 @@ from typing import Any
 
 import h5py
 import numpy as np
-from scipy.stats import mannwhitneyu
+from scipy.stats import (
+    ks_2samp,
+    mannwhitneyu,
+    ttest_ind,
+)
 
 from input_output.hdf5_io import read_dataset
 from input_output.hdf5_schema import find_pipeline_group
@@ -25,6 +29,7 @@ CONTROL_NAME_HINTS = (
     "sain",
     "temoin",
     "témoin",
+    "after",
 )
 
 
@@ -46,6 +51,9 @@ class SplitStats:
     auc_less: float
     separability_auc: float
     p_value_mannwhitney: float
+    p_value_student: float
+    p_value_welch: float
+    p_value_ks: float
     selected_for_score: bool
     n_control: int
     n_pathology: int
@@ -143,6 +151,9 @@ def calibrate_metrics_from_processed_files(
         auc_less = 1.0 - auc_greater
         separability_auc = max(auc_greater, auc_less)
         p_value_mannwhitney = _mannwhitney_p_value(x0, x1)
+        p_value_student = _student_p_value(x0, x1)
+        p_value_welch = _welch_p_value(x0, x1)
+        p_value_ks = _ks_p_value(x0, x1)
 
         # WAS uses sigma0 by vessel type. The threshold/direction are optimized
         # on one reference vessel/representation, but sigma0 is estimated from
@@ -182,6 +193,9 @@ def calibrate_metrics_from_processed_files(
                 auc_less=float(auc_less),
                 separability_auc=float(separability_auc),
                 p_value_mannwhitney=float(p_value_mannwhitney),
+                p_value_student=float(p_value_student),
+                p_value_welch=float(p_value_welch),
+                p_value_ks=float(p_value_ks),
                 selected_for_score=False,
                 n_control=int(x0.size),
                 n_pathology=int(x1.size),
@@ -213,6 +227,52 @@ def _mannwhitney_p_value(
             method="auto",
         )
         return float(result.pvalue)
+    except ValueError:
+        return float("nan")
+
+def _student_p_value(
+    control_values: np.ndarray,
+    pathology_values: np.ndarray,
+) -> float:
+    try:
+        return float(
+            ttest_ind(
+                control_values,
+                pathology_values,
+                equal_var=True,
+            ).pvalue
+        )
+    except ValueError:
+        return float("nan")
+
+
+def _welch_p_value(
+    control_values: np.ndarray,
+    pathology_values: np.ndarray,
+) -> float:
+    try:
+        return float(
+            ttest_ind(
+                control_values,
+                pathology_values,
+                equal_var=False,
+            ).pvalue
+        )
+    except ValueError:
+        return float("nan")
+
+
+def _ks_p_value(
+    control_values: np.ndarray,
+    pathology_values: np.ndarray,
+) -> float:
+    try:
+        return float(
+            ks_2samp(
+                control_values,
+                pathology_values,
+            ).pvalue
+        )
     except ValueError:
         return float("nan")
 

@@ -16,10 +16,21 @@ from .core.base import (
 
 @registerPostprocess(
     name="Group comparison (HTML) - Waveform Shape Metrics",
-    description=(
-        "Build the cohort HTML dashboard and PNG metric exports from arterial "
-        "waveform shape metrics."
-    ),
+    description="""
+    This module automatically generates a group-level statistical report based on the results produced by the *Waveform Shape Metrics* pipeline.
+
+    For each waveform metric, the module computes the descriptive statistics for each group (individual values, group mean, and standard deviation), which are then used to generate the comparison plots.
+
+    Using these statistics, the module automatically generates comparison plots for all metrics across the available groups.
+
+    In addition, an interactive HTML dashboard named **Waveform Shape Metrics Group Comparison** is generated. The dashboard gathers all generated visualizations into a single interface, making it easy to browse, compare, and inspect waveform metrics across groups.
+
+    All comparison plots are exported in PNG format, and the HTML dashboard is saved alongside them in the output directory.
+    --------------------------------------------
+    WARNING 
+
+    To highlight the control group in **gray**, ensure that its name is correctly defined in `find_control_group_name()` in `..core.grouped_batch`.
+    """,
     required_deps=["matplotlib>=3.8", "pandas>=2.1", "plotly>=5.18"],
     required_pipelines=["waveform_shape_metrics"],
     input_methods=["file_batch", "cohort_batch", "zip_batch"],

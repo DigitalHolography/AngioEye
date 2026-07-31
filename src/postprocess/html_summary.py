@@ -86,11 +86,41 @@ def _zip_html_relative_parent(output_dir, processed_file, source_relative_path):
 
 @registerPostprocess(
     name="HTML summary",
-    description=(
-        "Create an HTML report for each processed HDF5 file, including a summary table of waveform metrics and their corresponding visualizations."
-    ),
+
+    description="""
+    This module automatically generates an HTML report for each analyzed HDF5 file.
+
+    The report is based on the results produced by the *Waveform Shape Metrics*
+    pipeline and provides a comprehensive summary of the computed waveform metrics.
+
+    For each metric, the report displays:
+
+    - the median value across all cardiac cycles;
+    - the corresponding standard deviation;
+    - the values computed separately for arterial and venous waveforms.
+
+    In addition, the report includes the main visualizations associated with the
+    analyzed file:
+
+    - the M0 image;
+    - the arterial mask;
+    - the arterial velocity waveform;
+    - the fAVG mean image;
+    - the venous mask;
+    - the venous velocity waveform.
+
+    All images are embedded directly into the HTML report and can be viewed in
+    full-screen mode to facilitate visual inspection.
+
+    Generated reports are saved in the **HTML summary** output directory.
+    """,
     required_deps=["matplotlib>=3.8", "pandas>=2.1", "plotly>=5.18"],
-    required_pipelines=["waveform_shape_metrics"],
+    required_pipeline_options=[
+            [
+                "waveform_shape_metrics",  # OR
+                "topological_metrics",
+            ],
+        ],
     required_option=["persist_eyeflow_data"],
     input_methods=["single_file", "file_batch", "cohort_batch", "zip_batch"],
 )
