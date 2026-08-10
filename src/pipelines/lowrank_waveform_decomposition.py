@@ -1,24 +1,52 @@
+from pathlib import Path
+
+import h5py
 import numpy as np
 
-from .core.base import ProcessPipeline, ProcessResult, registerPipeline
+from input_output.hdf5_io import create_h5_file, write_metrics_trees_to_h5
+from input_output.hdf5_schema import ANGIOEYE_PROCESSING_ROOT
+
+from .lowrank_svd_math import LowRankSVDMath
+from .core.base import (
+    ProcessPipeline,
+    ProcessResult,
+    process_result_to_metrics_tree,
+    registerPipeline,
+)
 
 
 @registerPipeline(name="lowrank_waveform_decomposition")
-class LowRankWaveformDecomposition(ProcessPipeline):
+class LowRankWaveformDecomposition(LowRankSVDMath, ProcessPipeline):
     """
-    Low-rank SVD decomposition for beat-aligned arterial segment
-    waveforms.
+    Low-rank SVD decomposition for beat-aligned arterial (and optionally
+    venous) segment waveforms.
 
-    For each acquisition and each configured waveform source, the pipeline removes
-    the local temporal mean, performs one joint SVD over all valid beat-location
-    waveforms, and reports the four primary endpoints A1, rho1, A2, and rho2.
+    For each acquisition, each enabled vessel, and each configured
+    waveform source, the pipeline removes the local temporal mean,
+    performs one joint SVD over all valid beat-location waveforms, and
+    reports the four primary endpoints A1, rho1, A2, and rho2 -- plus,
+    independently, a per-beat SVD robustness variant of the same
+    endpoints (see "SVD METHOD -- beat-by-beat with endpoints" below).
+    Beat period is shared across vessels (a single per-acquisition value
+    used for both artery and vein), matching the convention in
+    waveform_harmonic_organization.py.
+
+    Vein processing is opt-in via ``process_veins`` (default False): set
+    ``helper.process_veins = True`` (or subclass / construct with that
+    attribute) before calling ``run`` / ``compute_acquisition_endpoints`` /
+    ``write_acquisition_h5`` to also process venous segments.
     """
 
     description = (
-        "Joint low-rank waveform decomposition from beat-aligned arterial segment "
-        "waveforms, reporting A1, rho1, A2, rho2, and TPR for raw and bandlimited "
+        "Joint low-rank waveform decomposition from beat-aligned arterial "
+        "(and optionally venous) segment waveforms, reporting A1, rho1, A2, "
+        "rho2, and TPR per acquisition and per beat, for raw and bandlimited "
         "signals."
     )
+
+    # When False (default), only artery segment sources are resolved and
+    # processed. Set True to also include vein/raw and vein/bandlimited.
+    process_veins = False
 
     T_input = "/Artery/VelocityPerBeat/beatPeriodSeconds/value"
     v_band_segment_input = (
@@ -28,403 +56,87 @@ class LowRankWaveformDecomposition(ProcessPipeline):
     v_raw_segment_input = (
         "/Artery/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegment/value"
     )
+    v_raw_segment_input_vein = (
+        "/Vein/VelocityPerBeat/Segments/VelocitySignalPerBeatPerSegment/value"
+    )
+    v_band_segment_input_vein = (
+        "/Vein/VelocityPerBeat/Segments/"
+        "VelocitySignalPerBeatPerSegmentBandLimited/value"
+    )
 
-    eps = 1e-12
-    min_valid_samples_fraction = 0.95
-    min_valid_columns = 3
-    max_modes_panel = 2
-    exported_modes = 2
+    T_input_eyeflow = "EyeFlow/Processing/VelocityPerBeat/BeatPeriodSeconds/value"
+    v_raw_segment_input_eyeflow = (
+        "EyeFlow/Processing/VelocityPerBeat/Artery/Segments/Raw/value"
+    )
+    v_band_segment_input_eyeflow = (
+        "EyeFlow/Processing/VelocityPerBeat/Artery/Segments/BandLimited/value"
+    )
+    v_raw_segment_input_vein_eyeflow = (
+        "EyeFlow/Processing/VelocityPerBeat/Vein/Segments/Raw/value"
+    )
+    v_band_segment_input_vein_eyeflow = (
+        "EyeFlow/Processing/VelocityPerBeat/Vein/Segments/BandLimited/value"
+    )
 
-    @staticmethod
-    def _safe_nanmean(x: np.ndarray) -> float:
-        x = np.asarray(x, dtype=float)
-        if x.size == 0 or not np.any(np.isfinite(x)):
-            return np.nan
-        return float(np.nanmean(x))
+    # =====================================================================
+    # Schema resolution
+    #
+    # The pure-numpy SVD/endpoint math (safe-stat helpers, aggregation
+    # reducers, singular-spectrum diagnostics, input shaping, the joint and
+    # per-beat SVD, and the endpoint calculations built on them) lives in
+    # LowRankSVDMath (lowrank_svd_math.py), mixed into this class below so
+    # every `self.xxx(...)` call site here is unchanged -- only schema
+    # resolution and metrics-tree export, which need h5py, stay here.
+    # =====================================================================
 
-    @staticmethod
-    def _safe_nanmedian(x: np.ndarray) -> float:
-        x = np.asarray(x, dtype=float)
-        if x.size == 0 or not np.any(np.isfinite(x)):
-            return np.nan
-        return float(np.nanmedian(x))
+    def _enabled_vessels(self) -> tuple[str, ...]:
+        """Vessel compartments this instance will process (always includes
+        artery; vein only when ``process_veins`` is True)."""
+        return ("artery", "vein") if self.process_veins else ("artery",)
 
-    @staticmethod
-    def _safe_nanstd(x: np.ndarray) -> float:
-        x = np.asarray(x, dtype=float)
-        if x.size == 0 or not np.any(np.isfinite(x)):
-            return np.nan
-        return float(np.nanstd(x))
+    def _filter_vessel_candidates(self, candidates: dict[str, str]) -> dict[str, str]:
+        """Drop vein/* candidates when ``process_veins`` is False."""
+        if self.process_veins:
+            return candidates
+        return {k: v for k, v in candidates.items() if not k.startswith("vein/")}
 
-    @staticmethod
-    def _safe_nanmad(x: np.ndarray) -> float:
-        x = np.asarray(x, dtype=float)
-        if x.size == 0 or not np.any(np.isfinite(x)):
-            return np.nan
-        med = np.nanmedian(x)
-        return float(np.nanmedian(np.abs(x - med)))
+    def _resolve_vessel_sources(self, h5file) -> tuple[dict[str, str], str] | None:
+        """Resolves the (vessel, representation) -> dataset_path candidate
+        map for whichever schema family this file uses (current
+        EyeFlow/... export schema first, falling back to the older
+        Artery/Vein VelocityPerBeat schema), plus the shared beat-period
+        path -- beat period is not vessel-specific. Vein candidates are
+        omitted unless ``process_veins`` is True. Remaining candidate paths
+        are returned whether or not they're actually present in h5file
+        (e.g. artery/bandlimited might be missing); callers check
+        membership themselves the same way run() always has, so a
+        per-combo QC/missing flag can still be reported. Returns None if
+        neither schema's beat-period path is present at all."""
+        if self.T_input_eyeflow in h5file:
+            candidates = {
+                "artery/raw": self.v_raw_segment_input_eyeflow,
+                "artery/bandlimited": self.v_band_segment_input_eyeflow,
+                "vein/raw": self.v_raw_segment_input_vein_eyeflow,
+                "vein/bandlimited": self.v_band_segment_input_vein_eyeflow,
+            }
+            return self._filter_vessel_candidates(candidates), self.T_input_eyeflow
+        if self.T_input in h5file:
+            candidates = {
+                "artery/raw": self.v_raw_segment_input,
+                "artery/bandlimited": self.v_band_segment_input,
+                "vein/raw": self.v_raw_segment_input_vein,
+                "vein/bandlimited": self.v_band_segment_input_vein,
+            }
+            return self._filter_vessel_candidates(candidates), self.T_input
+        return None
 
-    def _safe_nancv(self, x: np.ndarray) -> float:
-        x = np.asarray(x, dtype=float)
-        mu = self._safe_nanmean(x)
-        sd = self._safe_nanstd(x)
-        if (not np.isfinite(mu)) or (not np.isfinite(sd)) or abs(mu) <= self.eps:
-            return np.nan
-        return float(sd / (abs(mu) + self.eps))
-
-    def _ensure_segment_shape(
-        self, v_block: np.ndarray, T: np.ndarray | None = None
-    ) -> np.ndarray:
-        v_block = np.asarray(v_block, dtype=float)
-        if v_block.ndim != 4:
-            raise ValueError(
-                "Expected segment waveform block with shape "
-                f"(n_t, n_beats, n_branches, n_radii), got {v_block.shape}"
-            )
-        if T is None:
-            return v_block
-
-        n_beats = int(self._normalize_T(T).shape[1])
-        if v_block.shape[1] == n_beats:
-            return v_block
-        if v_block.shape[0] == n_beats and v_block.shape[1] != n_beats:
-            return np.transpose(v_block, (1, 0, 2, 3))
-        raise ValueError(
-            "Expected segment waveform block with one axis matching the beat-period "
-            f"count ({n_beats}) in shape (n_t,n_beats,n_branches,n_radii) or "
-            f"(n_beats,n_t,n_branches,n_radii), got {v_block.shape}"
-        )
-
-    def _normalize_T(self, T: np.ndarray) -> np.ndarray:
-        T = np.asarray(T, dtype=float)
-        if T.ndim == 1:
-            return T.reshape(1, -1)
-        if T.ndim == 2 and T.shape[0] == 1:
-            return T
-        if T.ndim == 2 and T.shape[1] == 1:
-            return T.T
-        raise ValueError(
-            "Beat period input must be shape (n_beats,), (1, n_beats), or "
-            f"(n_beats, 1); got {T.shape}"
-        )
+    # =====================================================================
+    # Metrics export
+    # =====================================================================
 
     @staticmethod
     def _mode_label(m: int) -> str:
         return f"mode{m}"
-
-    def _mode_component_rms(
-        self, u: np.ndarray, scores: np.ndarray, valid_mask: np.ndarray
-    ) -> np.ndarray:
-        rms_u = float(np.sqrt(np.mean(np.asarray(u, dtype=float) ** 2)))
-        comp = np.full(valid_mask.shape, np.nan, dtype=float)
-        comp[valid_mask] = np.abs(np.asarray(scores, dtype=float)) * rms_u
-        return comp
-
-    def _effective_rank(self, energy_fraction: np.ndarray) -> float:
-        p = np.asarray(energy_fraction, dtype=float)
-        p = p[np.isfinite(p) & (p > 0)]
-        if p.size == 0:
-            return np.nan
-        return float(np.exp(-np.sum(p * np.log(p + self.eps))))
-
-    def _participation_ratio(self, energy_fraction: np.ndarray) -> float:
-        p = np.asarray(energy_fraction, dtype=float)
-        p = p[np.isfinite(p) & (p > 0)]
-        if p.size == 0:
-            return np.nan
-        denom = float(np.sum(p**2))
-        if denom <= 0:
-            return np.nan
-        return float(1.0 / denom)
-
-    def _median_kr_per_beat(
-        self, arr_bkr: np.ndarray, valid_mask: np.ndarray
-    ) -> np.ndarray:
-        n_beats = int(arr_bkr.shape[0])
-        out = np.full((n_beats,), np.nan, dtype=float)
-        for b in range(n_beats):
-            vals = np.asarray(arr_bkr[b], dtype=float)
-            mask = np.asarray(valid_mask[b], dtype=bool)
-            if not np.any(mask):
-                continue
-            x = vals[mask]
-            if x.size == 0 or not np.any(np.isfinite(x)):
-                continue
-            out[b] = float(np.nanmedian(x))
-        return out
-
-    def _spatial_mad_per_beat(
-        self, arr_bkr: np.ndarray, valid_mask: np.ndarray
-    ) -> np.ndarray:
-        n_beats = int(arr_bkr.shape[0])
-        out = np.full((n_beats,), np.nan, dtype=float)
-        for b in range(n_beats):
-            vals = np.asarray(arr_bkr[b], dtype=float)
-            mask = np.asarray(valid_mask[b], dtype=bool)
-            if not np.any(mask):
-                continue
-            x = vals[mask]
-            if x.size == 0 or not np.any(np.isfinite(x)):
-                continue
-            med = np.nanmedian(x)
-            out[b] = float(np.nanmedian(np.abs(x - med)))
-        return out
-
-    def _median_kr_then_median_b(
-        self, arr_bkr: np.ndarray, valid_mask: np.ndarray
-    ) -> float:
-        return self._safe_nanmedian(self._median_kr_per_beat(arr_bkr, valid_mask))
-
-    @staticmethod
-    def _reconstruct_mode_sum(U_r: np.ndarray, scores_r: np.ndarray) -> np.ndarray:
-        if U_r.size == 0 or scores_r.size == 0:
-            return np.zeros((U_r.shape[0], scores_r.shape[1]), dtype=float)
-        return U_r @ scores_r
-
-    def _residual_t_bkr(
-        self,
-        x_full: np.ndarray,
-        valid_column_mask: np.ndarray,
-        residual_valid: np.ndarray,
-    ) -> np.ndarray:
-        residual = np.full_like(x_full, np.nan, dtype=float)
-        residual[:, valid_column_mask] = residual_valid
-        return residual
-
-    def _read_beat_period(self, h5file) -> np.ndarray:
-        if self.T_input not in h5file:
-            raise ValueError(f"Missing required beat-period input: {self.T_input}")
-        return self._normalize_T(np.asarray(h5file[self.T_input]))
-
-    def _compute_representation(self, v_block: np.ndarray, T: np.ndarray) -> dict:
-        T = self._normalize_T(T)
-        v_block = self._ensure_segment_shape(v_block, T)
-
-        n_t, n_beats, n_branches, n_radii = v_block.shape
-        if T.shape[1] != n_beats:
-            raise ValueError(
-                "Beat-period length mismatch: "
-                f"T has {T.shape[1]} beats, waveform block has {n_beats} beats."
-            )
-
-        finite_fraction = np.mean(np.isfinite(v_block), axis=0)
-        valid_column_mask = finite_fraction >= float(self.min_valid_samples_fraction)
-        beat_period_valid = np.isfinite(T[0]) & (T[0] > 0)
-        if np.any(~beat_period_valid):
-            valid_column_mask &= beat_period_valid[:, None, None]
-
-        n_total_columns = int(n_beats * n_branches * n_radii)
-        n_valid_columns = int(np.sum(valid_column_mask))
-
-        out = {
-            "shape": {
-                "n_t": n_t,
-                "n_beats": n_beats,
-                "n_branches": n_branches,
-                "n_radii": n_radii,
-                "n_total_columns": n_total_columns,
-                "n_valid_columns": n_valid_columns,
-            },
-            "valid_column_mask": valid_column_mask,
-            "finite_fraction_per_column": finite_fraction,
-            "beat_period_valid": beat_period_valid,
-        }
-
-        mu = np.nanmean(v_block, axis=0)
-        out["mu"] = mu
-
-        v_filled = np.where(np.isfinite(v_block), v_block, mu[None, :, :, :])
-        x_full = v_filled - mu[None, :, :, :]
-        x_full = np.where(np.isfinite(x_full), x_full, 0.0)
-        out["x_full"] = x_full
-
-        rms_x = np.full((n_beats, n_branches, n_radii), np.nan, dtype=float)
-        rms_x[valid_column_mask] = np.sqrt(
-            np.mean(x_full[:, valid_column_mask] ** 2, axis=0)
-        )
-        out["rms_x"] = rms_x
-        out["total_rms_bkr"] = rms_x
-
-        valid_counts_per_beat = np.sum(valid_column_mask, axis=(1, 2))
-        valid_fraction_per_beat = valid_counts_per_beat / float(
-            max(1, n_branches * n_radii)
-        )
-        out["valid_counts_per_beat"] = valid_counts_per_beat
-        out["valid_fraction_per_beat"] = valid_fraction_per_beat
-
-        tpr_b = self._median_kr_per_beat(rms_x, valid_column_mask)
-        tpr = self._safe_nanmedian(tpr_b)
-        beatwise = {
-            "mu_b": self._median_kr_per_beat(mu, valid_column_mask),
-            "TPR_b": tpr_b,
-        }
-        acq = {
-            "mu_acq": self._safe_nanmedian(beatwise["mu_b"]),
-            "beat_period_mean": self._safe_nanmean(T[0][beat_period_valid]),
-            "beat_period_median": self._safe_nanmedian(T[0][beat_period_valid]),
-            "beat_period_std": self._safe_nanstd(T[0][beat_period_valid]),
-            "sigma_mu_beat": self._safe_nanstd(beatwise["mu_b"]),
-            "mad_mu_beat": self._safe_nanmad(beatwise["mu_b"]),
-            "TPR": tpr,
-            "sigma_TPR_beat": self._safe_nanstd(tpr_b),
-            "mad_TPR_beat": self._safe_nanmad(tpr_b),
-        }
-
-        if n_valid_columns < int(self.min_valid_columns):
-            out["beatwise"] = beatwise
-            out["acq"] = acq
-            out["svd_available"] = False
-            out["svd_reason"] = "too_few_valid_columns"
-            return out
-
-        X = x_full[:, valid_column_mask]
-        if X.size == 0:
-            out["beatwise"] = beatwise
-            out["acq"] = acq
-            out["svd_available"] = False
-            out["svd_reason"] = "empty_valid_matrix"
-            return out
-
-        U, s, Vt = np.linalg.svd(X, full_matrices=False)
-        energy = s**2
-        energy_fraction = energy / (np.sum(energy) + self.eps)
-
-        out["svd_available"] = True
-        out["svd_reason"] = "ok"
-        out["X"] = X
-        out["U"] = U
-        out["s"] = s
-        out["Vt"] = Vt
-        out["energy"] = energy
-        out["energy_fraction"] = energy_fraction
-
-        n_modes = int(min(self.max_modes_panel, len(s)))
-        out["n_modes_panel"] = n_modes
-
-        score_list = []
-        sign_flips = np.zeros((n_modes,), dtype=int)
-        u_panel = np.full((n_t, self.max_modes_panel), np.nan, dtype=float)
-        score_panel_flat = np.full(
-            (self.max_modes_panel, n_valid_columns), np.nan, dtype=float
-        )
-
-        for m in range(n_modes):
-            scores = s[m] * Vt[m, :]
-            med_score = self._safe_nanmedian(scores)
-            if np.isfinite(med_score) and med_score < 0:
-                U[:, m] *= -1.0
-                Vt[m, :] *= -1.0
-                scores *= -1.0
-                sign_flips[m] = 1
-
-            u_panel[:, m] = U[:, m]
-            score_panel_flat[m, :] = scores
-            score_list.append(scores)
-
-        out["U_panel"] = u_panel
-        out["score_panel_flat"] = score_panel_flat
-        out["sign_flips"] = sign_flips
-
-        score_panel_bkr = np.full(
-            (self.max_modes_panel, n_beats, n_branches, n_radii), np.nan, dtype=float
-        )
-        for m in range(n_modes):
-            score_panel_bkr[m, valid_column_mask] = score_list[m]
-        out["score_panel_bkr"] = score_panel_bkr
-
-        rms_mode_panel = np.full_like(score_panel_bkr, np.nan, dtype=float)
-        residual_rms_panel = np.full_like(score_panel_bkr, np.nan, dtype=float)
-        residual_t_bkr_panel = np.full(
-            (self.exported_modes, n_t, n_beats, n_branches, n_radii),
-            np.nan,
-            dtype=float,
-        )
-        rho_panel = np.full((self.max_modes_panel,), np.nan, dtype=float)
-
-        for m in range(1, n_modes + 1):
-            u_m = U[:, m - 1]
-            scores_m = score_list[m - 1]
-            rms_mode_panel[m - 1] = self._mode_component_rms(
-                u=u_m,
-                scores=scores_m,
-                valid_mask=valid_column_mask,
-            )
-
-            X_recon_m = self._reconstruct_mode_sum(U[:, :m], np.vstack(score_list[:m]))
-            X_res_m = X - X_recon_m
-            if m <= self.exported_modes:
-                residual_t_bkr_panel[m - 1] = self._residual_t_bkr(
-                    x_full=x_full,
-                    valid_column_mask=valid_column_mask,
-                    residual_valid=X_res_m,
-                )
-
-            residual_rms_bkr = np.full(
-                (n_beats, n_branches, n_radii), np.nan, dtype=float
-            )
-            residual_rms_bkr[valid_column_mask] = np.sqrt(
-                np.mean(X_res_m**2, axis=0)
-            )
-            residual_rms_panel[m - 1] = residual_rms_bkr
-
-            r_b = self._median_kr_per_beat(residual_rms_bkr, valid_column_mask)
-            a_b = self._median_kr_per_beat(rms_mode_panel[m - 1], valid_column_mask)
-            rho_b = np.where(
-                np.isfinite(r_b) & np.isfinite(tpr_b) & (tpr_b > self.eps),
-                r_b / (tpr_b + self.eps),
-                np.nan,
-            )
-            R_m = self._safe_nanmedian(r_b)
-
-            beatwise[f"A{m}_b"] = a_b
-            beatwise[f"R{m}_b"] = r_b
-            beatwise[f"rho{m}_b"] = rho_b
-            beatwise[f"median_abs_a{m}_b"] = self._median_kr_per_beat(
-                np.abs(score_panel_bkr[m - 1]), valid_column_mask
-            )
-
-            acq[f"A{m}"] = self._safe_nanmedian(a_b)
-            acq[f"R{m}"] = R_m
-            acq[f"rho{m}"] = (
-                float(R_m / (tpr + self.eps))
-                if np.isfinite(R_m) and np.isfinite(tpr) and tpr > self.eps
-                else np.nan
-            )
-            rho_panel[m - 1] = acq[f"rho{m}"]
-            acq[f"sigma_A{m}_beat"] = self._safe_nanstd(a_b)
-            acq[f"mad_A{m}_beat"] = self._safe_nanmad(a_b)
-            acq[f"cv_A{m}_beat"] = self._safe_nancv(a_b)
-            acq[f"sigma_R{m}_beat"] = self._safe_nanstd(r_b)
-            acq[f"mad_R{m}_beat"] = self._safe_nanmad(r_b)
-            acq[f"cv_R{m}_beat"] = self._safe_nancv(r_b)
-            acq[f"sigma_rho{m}_beat"] = self._safe_nanstd(rho_b)
-            acq[f"mad_rho{m}_beat"] = self._safe_nanmad(rho_b)
-            acq[f"cv_rho{m}_beat"] = self._safe_nancv(rho_b)
-            acq[f"median_abs_a{m}"] = self._safe_nanmedian(
-                beatwise[f"median_abs_a{m}_b"]
-            )
-            acq[f"spatial_mad_A{m}_median_over_beats"] = self._safe_nanmedian(
-                self._spatial_mad_per_beat(rms_mode_panel[m - 1], valid_column_mask)
-            )
-            acq[f"spatial_mad_R{m}_median_over_beats"] = self._safe_nanmedian(
-                self._spatial_mad_per_beat(residual_rms_bkr, valid_column_mask)
-            )
-
-        acq["eta1"] = float(energy_fraction[0]) if len(energy_fraction) >= 1 else np.nan
-        acq["eta2"] = float(energy_fraction[1]) if len(energy_fraction) >= 2 else np.nan
-        acq["eta12"] = (
-            float(np.sum(energy_fraction[:2])) if len(energy_fraction) >= 1 else np.nan
-        )
-        acq["effective_rank"] = self._effective_rank(energy_fraction)
-        acq["participation_ratio"] = self._participation_ratio(energy_fraction)
-
-        out["rms_mode_panel"] = rms_mode_panel
-        out["residual_rms_panel"] = residual_rms_panel
-        out["residual_t_bkr_panel"] = residual_t_bkr_panel
-        out["rho_panel"] = rho_panel
-        out["beatwise"] = beatwise
-        out["acq"] = acq
-        return out
 
     def _append_nan_mode_metrics(
         self,
@@ -493,17 +205,9 @@ class LowRankWaveformDecomposition(ProcessPipeline):
             f"{prefix}/variability/spatial_mad_R{mode_number}_median_over_beats"
         ] = np.asarray(np.nan, dtype=float)
 
-    def _append_representation_metrics(
-        self,
-        metrics: dict,
-        source_name: str,
-        dataset_path: str,
-        rep: dict,
+    def _append_config_metrics(
+        self, metrics: dict, prefix: str, source_name: str, dataset_path: str
     ) -> None:
-        prefix = source_name
-        sh = rep["shape"]
-        acq = rep["acq"]
-
         metrics[f"{prefix}/config/signal_source"] = source_name
         metrics[f"{prefix}/config/input_dataset_path"] = dataset_path
         metrics[f"{prefix}/config/svd_method"] = "joint (t,bkr) SVD"
@@ -520,6 +224,8 @@ class LowRankWaveformDecomposition(ProcessPipeline):
             self.min_valid_columns, dtype=int
         )
 
+    def _append_input_metrics(self, metrics: dict, prefix: str, rep: dict) -> None:
+        sh = rep["shape"]
         metrics[f"{prefix}/inputs/n_t"] = np.asarray(sh["n_t"], dtype=int)
         metrics[f"{prefix}/inputs/n_beats"] = np.asarray(sh["n_beats"], dtype=int)
         metrics[f"{prefix}/inputs/n_branches"] = np.asarray(
@@ -551,6 +257,12 @@ class LowRankWaveformDecomposition(ProcessPipeline):
             "beat_period_valid"
         ].astype(np.uint8)
 
+    def _append_baseline_metrics(
+        self, metrics: dict, prefix: str, rep: dict, acq: dict
+    ) -> None:
+        """Non-modal endpoints (mu, beat period, TPR, MPR, mpr_prime) --
+        these characterize the raw signal and don't depend on whether the
+        SVD below is available."""
         metrics[f"{prefix}/baseline/mu_bkr"] = rep["mu"]
         metrics[f"{prefix}/baseline/mu_b"] = rep["beatwise"]["mu_b"]
         metrics[f"{prefix}/baseline/mu_acq"] = np.asarray(
@@ -583,20 +295,45 @@ class LowRankWaveformDecomposition(ProcessPipeline):
             acq["mad_TPR_beat"], dtype=float
         )
 
-        if not rep.get("svd_available", False):
-            metrics[f"{prefix}/qc/svd_available"] = np.asarray(0, dtype=np.uint8)
-            metrics[f"{prefix}/qc/svd_reason"] = str(rep.get("svd_reason", "unknown"))
-            metrics[f"{prefix}/qc/n_modes"] = np.asarray(0, dtype=int)
-            metrics[f"{prefix}/qc/sign_flips_mode1to2"] = np.zeros(
-                (self.exported_modes,), dtype=int
-            )
-            for m in range(1, self.exported_modes + 1):
-                metrics[f"{prefix}/qc/denominator_floor_rho{m}"] = np.asarray(
-                    1, dtype=np.uint8
-                )
-                self._append_nan_mode_metrics(metrics, prefix, m, rep)
-            return
+        metrics[f"{prefix}/rms/mean_pulsatile_ratio_bkr"] = rep[
+            "mean_pulsatile_ratio_bkr"
+        ]
+        metrics[f"{prefix}/beatwise/mpr_b"] = rep["beatwise"]["mpr_b"]
+        metrics[f"{prefix}/endpoints/mpr"] = np.asarray(acq["mpr"], dtype=float)
+        metrics[f"{prefix}/variability/sigma_mpr_beat"] = np.asarray(
+            acq["sigma_mpr_beat"], dtype=float
+        )
+        metrics[f"{prefix}/variability/mad_mpr_beat"] = np.asarray(
+            acq["mad_mpr_beat"], dtype=float
+        )
+        metrics[f"{prefix}/variability/cv_mpr_beat"] = np.asarray(
+            acq["cv_mpr_beat"], dtype=float
+        )
+        metrics[f"{prefix}/baseline/abs_mu_acq"] = np.asarray(
+            acq["abs_mu_acq"], dtype=float
+        )
+        metrics[f"{prefix}/endpoints/mpr_prime"] = np.asarray(
+            acq["mpr_prime"], dtype=float
+        )
 
+    def _append_qc_unavailable_metrics(
+        self, metrics: dict, prefix: str, rep: dict
+    ) -> None:
+        metrics[f"{prefix}/qc/svd_available"] = np.asarray(0, dtype=np.uint8)
+        metrics[f"{prefix}/qc/svd_reason"] = str(rep.get("svd_reason", "unknown"))
+        metrics[f"{prefix}/qc/n_modes"] = np.asarray(0, dtype=int)
+        metrics[f"{prefix}/qc/sign_flips_mode1to2"] = np.zeros(
+            (self.exported_modes,), dtype=int
+        )
+        for m in range(1, self.exported_modes + 1):
+            metrics[f"{prefix}/qc/denominator_floor_rho{m}"] = np.asarray(
+                1, dtype=np.uint8
+            )
+            self._append_nan_mode_metrics(metrics, prefix, m, rep)
+
+    def _append_qc_available_metrics(
+        self, metrics: dict, prefix: str, rep: dict, acq: dict
+    ) -> None:
         metrics[f"{prefix}/qc/svd_available"] = np.asarray(1, dtype=np.uint8)
         metrics[f"{prefix}/qc/svd_reason"] = str(rep.get("svd_reason", "ok"))
         metrics[f"{prefix}/qc/n_modes"] = np.asarray(rep["n_modes_panel"], dtype=int)
@@ -609,6 +346,13 @@ class LowRankWaveformDecomposition(ProcessPipeline):
                 int(not np.isfinite(acq.get(f"rho{m}", np.nan))), dtype=np.uint8
             )
 
+    def _append_decomposition_metrics(
+        self, metrics: dict, prefix: str, rep: dict, acq: dict
+    ) -> None:
+        """Singular-spectrum diagnostics plus the per-mode panels (u,
+        scores, amplitude/residual RMS, beatwise/endpoint/variability
+        values) for every exported mode. Only called once QC has confirmed
+        the SVD is available."""
         metrics[f"{prefix}/decomposition/singular_values"] = rep["s"]
         metrics[f"{prefix}/decomposition/singular_energy"] = rep["energy"]
         metrics[f"{prefix}/decomposition/singular_energy_fraction"] = rep[
@@ -619,6 +363,12 @@ class LowRankWaveformDecomposition(ProcessPipeline):
         )
         metrics[f"{prefix}/decomposition/participation_ratio"] = np.asarray(
             acq["participation_ratio"], dtype=float
+        )
+        metrics[f"{prefix}/decomposition/alpha"] = np.asarray(
+            acq["alpha"], dtype=float
+        )
+        metrics[f"{prefix}/decomposition/G1"] = np.asarray(
+            acq["G1"], dtype=float
         )
         metrics[f"{prefix}/decomposition/eta1"] = np.asarray(acq["eta1"], dtype=float)
         metrics[f"{prefix}/decomposition/eta2"] = np.asarray(acq["eta2"], dtype=float)
@@ -701,16 +451,84 @@ class LowRankWaveformDecomposition(ProcessPipeline):
                 f"{prefix}/variability/spatial_mad_R{m}_median_over_beats"
             ] = np.asarray(acq[f"spatial_mad_R{m}_median_over_beats"], dtype=float)
 
-    def run(self, h5file) -> ProcessResult:
-        metrics = {}
-        T = self._read_beat_period(h5file)
+    def _append_representation_metrics(
+        self,
+        metrics: dict,
+        source_name: str,
+        dataset_path: str,
+        rep: dict,
+    ) -> None:
+        """Orchestrates the config/inputs/baseline/QC/decomposition
+        sub-methods above into the full metrics tree for one (vessel,
+        representation) source: config -> inputs -> baseline -> QC (+
+        decomposition, only if the SVD was available)."""
+        prefix = source_name
+        acq = rep["acq"]
 
-        source_map = {
-            "raw": self.v_raw_segment_input,
-            "bandlimited": self.v_band_segment_input,
+        self._append_config_metrics(metrics, prefix, source_name, dataset_path)
+        self._append_input_metrics(metrics, prefix, rep)
+        self._append_baseline_metrics(metrics, prefix, rep, acq)
+
+        if not rep.get("svd_available", False):
+            self._append_qc_unavailable_metrics(metrics, prefix, rep)
+            return
+
+        self._append_qc_available_metrics(metrics, prefix, rep, acq)
+        self._append_decomposition_metrics(metrics, prefix, rep, acq)
+
+    def _append_per_beat_metrics(
+        self,
+        metrics: dict,
+        source_name: str,
+        per_beat_endpoints: dict,
+    ) -> None:
+        """Writes per_beat_svd_panels + _compute_per_beat_endpoints' per-beat
+        endpoint sequences (A1_b_pb, A2_b_pb, R1_b_pb, R2_b_pb, rho1_b_pb,
+        rho2_b_pb, TPR_b_pb, MPR_b_pb, effective_rank_b_pb,
+        participation_ratio_b_pb, alpha_b_pb -- each a (n_beats,) array)
+        into the metrics tree under
+        {source_name}/per_beat/{key}, alongside the acquisition-level
+        metrics _append_representation_metrics writes for the same
+        source_name."""
+        prefix = source_name
+        for key, arr in per_beat_endpoints.items():
+            metrics[f"{prefix}/per_beat/{key}"] = arr
+
+    # =====================================================================
+    # Entry points
+    #
+    # run() is the framework entry point (engine hands us an open h5file);
+    # compute_acquisition_endpoints and write_acquisition_h5 are the
+    # standalone, path-opening callers for use outside the pipeline_engine.
+    # _build_attrs and _compute_source_metrics are shared by run() and
+    # write_acquisition_h5(), which otherwise differ only in how they open
+    # the file and what they do with the finished metrics dict.
+    # =====================================================================
+
+    def _build_attrs(self, representations: list[str], input_beat_period_path: str) -> dict:
+        return {
+            "pipeline_family": "low_rank_waveform_decomposition",
+            "svd_method": "joint (t,bkr) SVD + per-beat (t,kr) SVD robustness variant",
+            "aggregation": "median over (k,r), then median over b",
+            "mode_panel_max": int(self.exported_modes),
+            "vessels": list(self._enabled_vessels()),
+            "process_veins": bool(self.process_veins),
+            "representations": representations,
+            "primary_endpoints": ["A1", "rho1", "A2", "rho2"],
+            "context_endpoint": "TPR",
+            "input_beat_period_path": input_beat_period_path,
         }
 
-        for source_name, dataset_path in source_map.items():
+    def _compute_source_metrics(
+        self, h5file, candidates: dict[str, str], T: np.ndarray
+    ) -> tuple[dict, list[str]]:
+        """For every (vessel, representation) candidate present in h5file,
+        computes the joint-SVD and per-beat-SVD metrics and appends them to
+        one metrics dict. Returns (metrics, resolved), where resolved is the
+        source names that were actually present and processed."""
+        metrics: dict = {}
+        resolved: list[str] = []
+        for source_name, dataset_path in candidates.items():
             if dataset_path not in h5file:
                 metrics[f"{source_name}/qc/input_available"] = np.asarray(
                     0, dtype=np.uint8
@@ -722,6 +540,9 @@ class LowRankWaveformDecomposition(ProcessPipeline):
                 1, dtype=np.uint8
             )
             v_block = np.asarray(h5file[dataset_path], dtype=float)
+
+            # _mean_subtract already suppresses the "Mean of empty slice"
+            # warning internally, so no outer catch_warnings is needed here.
             rep = self._compute_representation(v_block=v_block, T=T)
             self._append_representation_metrics(
                 metrics=metrics,
@@ -730,16 +551,162 @@ class LowRankWaveformDecomposition(ProcessPipeline):
                 rep=rep,
             )
 
-        attrs = {
-            "pipeline_family": "low_rank_waveform_decomposition",
-            "svd_method": "joint (t,bkr) SVD",
-            "aggregation": "median over (k,r), then median over b",
-            "mode_panel_max": int(self.exported_modes),
-            "representations": ["raw", "bandlimited"],
-            "primary_endpoints": ["A1", "rho1", "A2", "rho2"],
-            "context_endpoint": "TPR",
-            "input_beat_period_path": self.T_input,
-            "input_raw_segment_path": self.v_raw_segment_input,
-            "input_bandlimited_segment_path": self.v_band_segment_input,
-        }
+            panels = self.per_beat_svd_panels(v_block, T)
+            per_beat_endpoints = self._compute_per_beat_endpoints(panels)
+            self._append_per_beat_metrics(
+                metrics=metrics,
+                source_name=source_name,
+                per_beat_endpoints=per_beat_endpoints,
+            )
+
+            resolved.append(source_name)
+
+        return metrics, resolved
+
+    def run(self, h5file) -> ProcessResult:
+        """Framework entry point: the engine hands us an already-open
+        h5file (never a path -- see compute_acquisition_endpoints/
+        write_acquisition_h5 for the standalone, path-opening callers).
+        Resolves the vessel/representation schema (current EyeFlow/...
+        first, legacy Artery/Vein/... fallback) and, for every combination
+        the file has, computes both the joint-SVD and per-beat-SVD
+        endpoints, returning them as the pipeline's metrics tree."""
+        legacy_candidates = self._filter_vessel_candidates(
+            {
+                "artery/raw": self.v_raw_segment_input,
+                "artery/bandlimited": self.v_band_segment_input,
+                "vein/raw": self.v_raw_segment_input_vein,
+                "vein/bandlimited": self.v_band_segment_input_vein,
+            }
+        )
+        schema = self._resolve_vessel_sources(h5file)
+        if schema is None:
+            metrics = {}
+            for source_name, dataset_path in legacy_candidates.items():
+                metrics[f"{source_name}/qc/input_available"] = np.asarray(
+                    0, dtype=np.uint8
+                )
+                metrics[f"{source_name}/qc/missing_dataset_path"] = dataset_path
+            attrs = self._build_attrs([], self.T_input)
+            return ProcessResult(metrics=metrics, attrs=attrs)
+
+        candidates, t_path = schema
+        T = self._normalize_T(np.asarray(h5file[t_path], dtype=float))
+        metrics, resolved = self._compute_source_metrics(h5file, candidates, T)
+        attrs = self._build_attrs(resolved, t_path)
         return ProcessResult(metrics=metrics, attrs=attrs)
+
+    def compute_acquisition_endpoints(self, h5_path) -> dict | None:
+        """Standalone entry point for callers outside the AngioEye
+        pipeline_engine framework (e.g. an external reproduction script):
+        given a path to one acquisition's raw .h5 file, resolves whichever
+        known schema it uses and, for each enabled vessel (artery always;
+        vein only when ``process_veins`` is True), runs both the joint and
+        per-beat SVDs on that vessel's raw segment.
+
+        Returns None if the file has no known beat-period path or no
+        enabled vessel's raw segment at all. Otherwise returns a dict keyed
+        by enabled vessel name (``{"artery": {...} | None}``, and also
+        ``"vein"`` when ``process_veins``), where a vessel is None when its
+        raw segment is absent or its SVD was unavailable (too few valid
+        columns). Each vessel dict carries the endpoints plus the raw "mu"
+        and "energy_fraction" arrays some callers need directly."""
+        with h5py.File(h5_path, "r") as h5file:
+            schema = self._resolve_vessel_sources(h5file)
+            if schema is None:
+                return None
+            candidates, t_path = schema
+            T = self._normalize_T(np.asarray(h5file[t_path], dtype=float))
+
+            vessel_blocks: dict[str, np.ndarray | None] = {}
+            for vessel in self._enabled_vessels():
+                raw_path = candidates.get(f"{vessel}/raw")
+                if raw_path is not None and raw_path in h5file:
+                    vessel_blocks[vessel] = np.asarray(h5file[raw_path], dtype=float)
+                else:
+                    vessel_blocks[vessel] = None
+
+        if all(v_block is None for v_block in vessel_blocks.values()):
+            return None
+
+        result: dict[str, dict | None] = {}
+        for vessel, v_block in vessel_blocks.items():
+            if v_block is None:
+                result[vessel] = None
+                continue
+
+            v_block = self._ensure_segment_shape(v_block, T)
+
+            # _mean_subtract already suppresses the "Mean of empty slice"
+            # warning internally, so no outer catch_warnings is needed here.
+            rep = self._compute_representation(v_block=v_block, T=T)
+            if not rep.get("svd_available", False):
+                result[vessel] = None
+                continue
+
+            per_beat_panels = self.per_beat_svd_panels(v_block, T)
+            per_beat_svd = self._compute_per_beat_endpoints(per_beat_panels)
+            valid_fraction_per_beat = np.asarray(
+                rep.get("valid_fraction_per_beat", []), dtype=float
+            )
+            beat_period_arr = np.asarray(T[0], dtype=float)
+
+            result[vessel] = {
+                "acq": rep["acq"],
+                "beatwise": rep["beatwise"],
+                "per_beat_svd": per_beat_svd,
+                "mu": rep["mu"],
+                "energy_fraction": np.asarray(rep.get("energy_fraction", []), dtype=float),
+                "beat_period_mean": (
+                    float(np.nanmean(beat_period_arr))
+                    if beat_period_arr.size
+                    else float("nan")
+                ),
+                "beat_period_sd": (
+                    float(np.nanstd(beat_period_arr, ddof=1))
+                    if beat_period_arr.size > 1
+                    else float("nan")
+                ),
+                "beat_period_b": beat_period_arr,
+                "valid_fraction_per_beat": valid_fraction_per_beat,
+                "n_valid_columns": int(rep["shape"]["n_valid_columns"]),
+                "n_total_columns": int(rep["shape"]["n_total_columns"]),
+            }
+
+        return result
+
+    def write_acquisition_h5(self, h5_path, out_path: Path | str) -> bool:
+        """Standalone counterpart to run() for callers outside the
+        pipeline_engine framework: writes the same metrics run() would
+        produce -- acquisition-level joint-SVD plus per-beat SVD, for every
+        enabled (vessel, representation) the file has (vein only when
+        ``process_veins`` is True) -- to a new .h5 at out_path.
+
+        Uses the same MetricsTree/ProcessResult conversion and
+        ANGIOEYE_PROCESSING_ROOT group as the normal batch workflow, so the
+        output is found where a downstream reader expects. Only the computed
+        metrics are written, not the (often large) source waveform arrays.
+
+        Returns False (and writes nothing) if the file has no known schema.
+        """
+        with h5py.File(h5_path, "r") as h5file:
+            schema = self._resolve_vessel_sources(h5file)
+            if schema is None:
+                return False
+            candidates, t_path = schema
+            T = self._normalize_T(np.asarray(h5file[t_path], dtype=float))
+            metrics, resolved = self._compute_source_metrics(h5file, candidates, T)
+
+        if not resolved:
+            return False
+
+        attrs = self._build_attrs(resolved, t_path)
+
+        create_h5_file(out_path, source_file=str(h5_path), trim_source=True)
+        metric_tree = process_result_to_metrics_tree(
+            self.name, ProcessResult(metrics=metrics, attrs=attrs)
+        )
+        write_metrics_trees_to_h5(
+            out_path, ANGIOEYE_PROCESSING_ROOT, [metric_tree], overwrite=False
+        )
+        return True
