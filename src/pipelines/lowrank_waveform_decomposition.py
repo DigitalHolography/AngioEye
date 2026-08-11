@@ -38,6 +38,7 @@ from collections.abc import Iterable
 
 from scipy.stats import kruskal, mannwhitneyu
 import matplotlib.pyplot as plt
+from matplotlib.ticker import NullFormatter
 
 
 T_INPUT = "Processing/VelocityPerBeat/BeatPeriodSeconds/value"
@@ -1335,14 +1336,15 @@ class LowRankWaveformAcquisitionFigures:
         vessel_bundle: dict[str, dict | None],
         out_path: Path,
     ) -> Path:
-        """Fig. 4: arterial mode-wise SVD energy fractions."""
+        """Fig. 4: arterial mode-wise SVD variance fractions (log line)."""
         out_path = Path(out_path)
         vessels = [
             v for v in FIGURE_VESSELS if vessel_bundle.get(v) is not None
         ] or list(FIGURE_VESSELS)
         fig, axes = plt.subplots(
-            len(vessels), 1, figsize=(5.0, 2.8 * len(vessels)), squeeze=False
+            len(vessels), 1, figsize=(4.2, 3.2 * len(vessels)), squeeze=False
         )
+        n_keep = LowRankWaveformCohortFigures.SPECTRUM_N_MODES
         for row_idx, vessel in enumerate(vessels):
             ax = axes[row_idx, 0]
             data = vessel_bundle.get(vessel)
@@ -1351,16 +1353,27 @@ class LowRankWaveformAcquisitionFigures:
                 if data is not None
                 else np.asarray([], dtype=float)
             )
-            n_modes = int(min(12, energy.size))
+            n_modes = int(min(n_keep, energy.size))
             if n_modes > 0:
                 modes = np.arange(1, n_modes + 1)
-                ax.bar(modes, energy[:n_modes], color="black")
+                ax.plot(
+                    modes,
+                    energy[:n_modes],
+                    color="black",
+                    linestyle="-",
+                    marker="o",
+                    linewidth=2.0,
+                    markersize=4,
+                )
                 ax.set_xticks(modes)
-            ax.set_ylabel(f"{vessel.capitalize()}\nenergy fraction", fontsize=10)
-            ax.set_xlabel("Mode", fontsize=10)
+                ax.set_xticklabels([])
+                ax.set_yscale("log")
+                ax.yaxis.set_minor_formatter(NullFormatter())
+            ax.set_ylabel(vessel.capitalize(), fontsize=12)
+            ax.set_xlabel("Mode", fontsize=11)
             if row_idx == 0:
-                ax.set_title("SVD energy fraction", fontsize=12)
-            cls._style_axes(ax)
+                ax.set_title("Variance fraction", fontsize=12)
+            cls._style_axes(ax, tick_size=10, label_size=11)
         fig.tight_layout()
         out_path.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(out_path, dpi=150, bbox_inches="tight")
@@ -1476,7 +1489,13 @@ class LowRankWaveformCohortFigures:
 
     PANEL_SIZE = 2.5
     FLICKER_SHADE = "#add8e6"
+    SPECTRUM_N_MODES = 12
+    SPECTRUM_BASELINE = ("black", "-", "o", "Baseline")
+    SPECTRUM_FLICKER = ("#555555", "--", "s", "Flicker")
     _RNG = np.random.default_rng(0)
+    _DATASET_LABEL_RE = re.compile(
+        r"\b(GOA|OSS[_\s-]?L|OSS[_\s-]?R)\b", re.IGNORECASE
+    )
 
     FIG5_PANELS = (
         ("beat_period", "Beat period"),
@@ -1519,8 +1538,9 @@ class LowRankWaveformCohortFigures:
         group_order: list[str],
         *,
         patient_id: str | None = None,
+        dataset_label: str | None = None,
     ) -> list[Path]:
-        """Write Figs. 5, 6, and 7 into ``out_dir``."""
+        """Write Figs. 5, 6, 7 and the artery variance-fraction spectrum."""
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         written = [
@@ -1540,8 +1560,113 @@ class LowRankWaveformCohortFigures:
                 / prefixed_filename("fig7_residual_spectrum_endpoints.png", patient_id),
                 group_order=group_order,
             ),
+            cls.plot_variance_fraction(
+                points_by_vessel,
+                out_dir
+                / prefixed_filename("fig_variance_fraction.png", patient_id),
+                dataset_label=dataset_label,
+            ),
         ]
         return written
+
+    @classmethod
+    def infer_dataset_label(
+        cls, points_by_vessel: dict[str, pd.DataFrame]
+    ) -> str | None:
+        """Best-effort cohort label (GOA / OSS L / OSS R) from acquisition names."""
+        for df in points_by_vessel.values():
+            if df.empty or "file" not in df.columns:
+                continue
+            for name in df["file"].astype(str):
+                match = cls._DATASET_LABEL_RE.search(name)
+                if match is None:
+                    continue
+                token = match.group(1).upper().replace(" ", "_").replace("-", "_")
+                if token.startswith("OSS"):
+                    return "OSS L" if token.endswith("L") else "OSS R"
+                return token
+        return None
+
+    @classmethod
+    def plot_variance_fraction(
+        cls,
+        points_by_vessel: dict[str, pd.DataFrame],
+        out_path: Path,
+        *,
+        dataset_label: str | None = None,
+    ) -> Path:
+        """Pooled-baseline vs flicker SVD variance-fraction spectrum (artery only).
+
+        Matches the article GOA panel: log-scaled median±IQR curves with black
+        circles (Baseline = B1+B2) and gray dashed squares (Flicker). No vein
+        row and no cumulative column.
+        """
+        out_path = Path(out_path)
+        df = points_by_vessel.get("artery", pd.DataFrame())
+        mode_cols = [
+            f"mode{i}"
+            for i in range(1, cls.SPECTRUM_N_MODES + 1)
+            if f"mode{i}" in df.columns
+        ]
+        modes = np.arange(1, len(mode_cols) + 1)
+
+        fig, ax = plt.subplots(figsize=(4.2, 3.2))
+        series = (
+            (
+                df["epoch"].isin(["B1", "B2"]) if "epoch" in df.columns else None,
+                *cls.SPECTRUM_BASELINE,
+            ),
+            (
+                (df["epoch"] == "Flicker") if "epoch" in df.columns else None,
+                *cls.SPECTRUM_FLICKER,
+            ),
+        )
+        if mode_cols and not df.empty:
+            for mask, color, style, marker, label in series:
+                if mask is None:
+                    continue
+                vals = df.loc[mask, mode_cols].to_numpy(dtype=float)
+                if vals.size == 0:
+                    continue
+                med = np.nanmedian(vals, axis=0)
+                q25 = np.nanpercentile(vals, 25, axis=0)
+                q75 = np.nanpercentile(vals, 75, axis=0)
+                ax.plot(
+                    modes,
+                    med,
+                    color=color,
+                    linestyle=style,
+                    marker=marker,
+                    linewidth=2.0,
+                    markersize=4,
+                    label=label,
+                )
+                ax.fill_between(
+                    modes, q25, q75, color=color, alpha=0.12, linewidth=0
+                )
+
+        ax.set_yscale("log")
+        if len(modes):
+            ax.set_xticks(modes)
+            ax.set_xticklabels([])
+        ax.yaxis.set_minor_formatter(NullFormatter())
+        ax.set_xlabel("Mode", fontsize=11)
+        ax.set_ylabel("Artery", fontsize=12)
+        ax.set_title("Variance fraction", fontsize=12)
+        ax.legend(frameon=False, fontsize=10, loc="upper right")
+        cls._style_axes(ax, tick_size=10)
+
+        label = dataset_label or cls.infer_dataset_label(points_by_vessel)
+        if label:
+            fig.suptitle(label, fontsize=13)
+            fig.tight_layout(rect=(0, 0, 1, 0.95))
+        else:
+            fig.tight_layout()
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(out_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        return out_path
 
     @classmethod
     def _draw_epoch_panel(
@@ -1983,7 +2108,8 @@ class LowRankWaveformConfounds:
         def scalar(key: str) -> float:
             return float(acq.get(key, np.nan))
 
-        return {
+        energy = np.asarray(vessel_data.get("energy_fraction", []), dtype=float)
+        row = {
             "vessel": vessel,
             "acquisition": sequence,
             "file": h5_path.name,
@@ -2018,6 +2144,11 @@ class LowRankWaveformConfounds:
             "n_valid_columns": vessel_data["n_valid_columns"],
             "n_total_columns": vessel_data["n_total_columns"],
         }
+        for m in range(1, LowRankWaveformCohortFigures.SPECTRUM_N_MODES + 1):
+            row[f"mode{m}"] = (
+                float(energy[m - 1]) if energy.size >= m else float("nan")
+            )
+        return row
 
     def collect_acquisitions(
         self,
