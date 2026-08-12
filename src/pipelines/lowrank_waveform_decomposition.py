@@ -650,6 +650,9 @@ class LowRankWaveformDecomposition(ProcessPipeline):
                 "per_beat_svd": bundle["per_beat_svd"],
                 "mu": bundle["mu"],
                 "energy_fraction": bundle["energy_fraction"],
+                "singular_values": np.asarray(
+                    bundle.get("representation", {}).get("s", []), dtype=float
+                ),
                 "beat_period_mean": bundle["beat_period_mean"],
                 "beat_period_sd": bundle["beat_period_sd"],
                 "beat_period_b": bundle["beat_period_b"],
@@ -691,7 +694,7 @@ class LowRankWaveformStatistics:
 
     TABLE_METRICS = ["rho2", "A2", "rho1", "A1", "TPR", "mpr", "mpr_prime", "alpha", "G1"]
 
-    # Article Table I: eleven predefined endpoints (Holm family) plus exploratory G1.
+    # Article Table I: ten predefined endpoints (Holm family). No alpha / G1.
     # ``metric`` is the points-table column; ``label`` is the published symbol.
     TABLE1_METRICS = (
         ("A1", "A1"),
@@ -704,9 +707,8 @@ class LowRankWaveformStatistics:
         ("mpr", "MPR"),
         ("effective_rank", "Reff"),
         ("participation_ratio", "PR"),
-        ("alpha", "alpha"),
     )
-    TABLE1_EXPLORATORY_METRICS = (("G1", "G1"),)
+    TABLE1_EXPLORATORY_METRICS: tuple[tuple[str, str], ...] = ()
 
     @staticmethod
     def clean(x) -> np.ndarray:
@@ -881,9 +883,10 @@ class LowRankWaveformStatistics:
     ) -> pd.DataFrame:
         """Article Table I: pooled Baseline (B1+B2) vs Flicker for one vessel.
 
-        Rows follow the eleven predefined endpoints (Holm-adjusted as a family)
-        then exploratory ``G1`` (raw p only; ``p_holm`` left NaN). Columns mirror
-        the published table and are written as CSV by the cohort runner.
+        Rows follow the predefined endpoints (Holm-adjusted as a family).
+        Both the unadjusted ``raw_p`` and Holm-adjusted ``p_holm`` are reported
+        (plus formatted ``raw_p_fmt`` / ``p_holm_fmt``). Written as CSV by the
+        cohort runner.
         """
         family = list(cls.TABLE1_METRICS)
         exploratory = list(cls.TABLE1_EXPLORATORY_METRICS)
@@ -993,14 +996,14 @@ class LowRankWaveformStatistics:
             "cliffs_delta",
             "raw_p",
             "p_holm",
+            "raw_p_fmt",
+            "p_holm_fmt",
             "baseline_median",
             "baseline_iqr",
             "n_baseline",
             "flicker_median",
             "flicker_iqr",
             "n_flicker",
-            "raw_p_fmt",
-            "p_holm_fmt",
         ]
         return pd.DataFrame(rows)[column_order]
 
@@ -1041,7 +1044,8 @@ class LowRankWaveformStatistics:
 class LowRankWaveformAcquisitionFigures:
     """Per-acquisition arterial figures under each file's relative folder
     (e.g. ``output/.../baseline1/``): article Figs. 2--4 plus beat-wise
-    endpoint evolution within the acquisition."""
+    endpoint evolution within the acquisition. Fig. 2 is the cardiac
+    velocity waveform only (3:1), with spatial ``(k,r)`` std whiskers."""
 
     FRMS_MAP_CANDIDATES = (
         "EyeFlow/Processing/FrequencyMaps/fRMS_avg/value",
@@ -1057,6 +1061,21 @@ class LowRankWaveformAcquisitionFigures:
             "Processing/Velocity/global/Vein/Raw/value",
         ),
     }
+    SEGMENT_VELOCITY_CANDIDATES = {
+        "artery": (
+            "EyeFlow/Processing/Velocity/segments/Artery/Raw/value",
+            "Processing/Velocity/segments/Artery/Raw/value",
+        ),
+        "vein": (
+            "EyeFlow/Processing/Velocity/segments/Vein/Raw/value",
+            "Processing/Velocity/segments/Vein/Raw/value",
+        ),
+    }
+    # Fig. 2 waveform panel: width:height = 3:1
+    FIG2_ASPECT = 3.0
+    FIG2_HEIGHT = 2.8
+    # Whiskers every ~100 ms when dt is available; else every 15 samples.
+    FIG2_WHISKER_INTERVAL_S = 0.1
     PANEL_SIZE = 2.5
 
     @staticmethod
@@ -1121,49 +1140,109 @@ class LowRankWaveformAcquisitionFigures:
         )
         return written
 
+    @staticmethod
+    def _velocity_dt_seconds(h5: h5py.File) -> float:
+        """Sample interval of the Doppler velocity time series (seconds)."""
+        dt = float(h5.attrs.get("dt_seconds", np.nan)) if h5.attrs else float("nan")
+        if np.isfinite(dt) and dt > 0:
+            return dt
+        batch = float(h5.attrs.get("batch_stride", np.nan)) if h5.attrs else float("nan")
+        fs = float(h5.attrs.get("sampling_freq", np.nan)) if h5.attrs else float("nan")
+        if np.isfinite(batch) and np.isfinite(fs) and fs > 0 and batch > 0:
+            return batch / fs
+        return float("nan")
+
+    @classmethod
+    def _segment_spatial_mean_std(
+        cls, block: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Collapse a ``(T, k, r[, ...])`` velocity block to spatial mean ± std."""
+        arr = np.asarray(block, dtype=float)
+        if arr.ndim < 2:
+            flat = arr.reshape(-1)
+            return flat, np.zeros_like(flat)
+        # Keep time on axis 0; flatten all spatial axes together.
+        spatial = arr.reshape(arr.shape[0], -1)
+        with np.errstate(all="ignore"):
+            mean = np.nanmean(spatial, axis=1)
+            std = np.nanstd(spatial, axis=1, ddof=1)
+        std = np.where(np.isfinite(std), std, 0.0)
+        return mean, std
+
     @classmethod
     def plot_frequency_velocity(cls, h5_path: Path | str, out_path: Path) -> Path:
-        """Fig. 2: fRMS map + global raw arterial velocity."""
+        """Fig. 2: arterial cardiac velocity waveform only (3:1), time in ms.
+
+        Plots the spatial mean over vessel locations ``(k, r)`` with whiskers
+        showing the spatial standard deviation. Falls back to the global
+        velocity trace when segment data are unavailable.
+        """
         h5_path = Path(h5_path)
         out_path = Path(out_path)
+        vessels = list(FIGURE_VESSELS)
+        n_rows = max(len(vessels), 1)
+        fig_w = cls.FIG2_HEIGHT * cls.FIG2_ASPECT
+        fig, axes = plt.subplots(
+            n_rows,
+            1,
+            figsize=(fig_w, cls.FIG2_HEIGHT * n_rows),
+            squeeze=False,
+        )
+
         with h5py.File(h5_path, "r") as h5:
-            frms_path = find_first_existing_path(h5, list(cls.FRMS_MAP_CANDIDATES))
-            frms = (
-                np.asarray(h5[frms_path], dtype=float)
-                if frms_path is not None
-                else None
-            )
-            velocities: dict[str, np.ndarray | None] = {}
-            for vessel in FIGURE_VESSELS:
-                candidates = cls.GLOBAL_VELOCITY_CANDIDATES.get(vessel, ())
-                path = find_first_existing_path(h5, list(candidates))
-                velocities[vessel] = (
-                    np.asarray(h5[path], dtype=float).reshape(-1)
-                    if path is not None
-                    else None
+            dt_s = cls._velocity_dt_seconds(h5)
+            for row_idx, vessel in enumerate(vessels):
+                ax = axes[row_idx, 0]
+                seg_path = find_first_existing_path(
+                    h5, list(cls.SEGMENT_VELOCITY_CANDIDATES.get(vessel, ()))
+                )
+                glob_path = find_first_existing_path(
+                    h5, list(cls.GLOBAL_VELOCITY_CANDIDATES.get(vessel, ()))
                 )
 
-        vessels = list(FIGURE_VESSELS)
+                mean = std = None
+                if seg_path is not None:
+                    mean, std = cls._segment_spatial_mean_std(
+                        np.asarray(h5[seg_path], dtype=float)
+                    )
+                elif glob_path is not None:
+                    mean = np.asarray(h5[glob_path], dtype=float).reshape(-1)
+                    std = np.zeros_like(mean)
 
-        fig, axes = plt.subplots(
-            len(vessels), 2, figsize=(8.0, 3.4 * len(vessels)), squeeze=False
-        )
-        for row_idx, vessel in enumerate(vessels):
-            ax_map = axes[row_idx, 0]
-            if frms is not None:
-                ax_map.imshow(frms, cmap="gray", aspect="equal")
-            ax_map.set_xticks([])
-            ax_map.set_yticks([])
-            ax_map.set_ylabel(vessel.capitalize(), fontsize=11)
+                if mean is not None and mean.size:
+                    n = int(mean.size)
+                    if np.isfinite(dt_s) and dt_s > 0:
+                        t_ms = np.arange(n, dtype=float) * dt_s * 1e3
+                        xlabel = "Time (ms)"
+                        stride = max(1, int(round(cls.FIG2_WHISKER_INTERVAL_S / dt_s)))
+                    else:
+                        t_ms = np.arange(n, dtype=float)
+                        xlabel = "Sample index"
+                        stride = 15
 
-            ax_wave = axes[row_idx, 1]
-            wave = velocities.get(vessel)
-            if wave is not None and wave.size:
-                ax_wave.plot(np.arange(wave.size), wave, color="black", linewidth=1.0)
-            ax_wave.axhline(0, color="#555555", linewidth=0.6, linestyle=":")
-            ax_wave.set_xlabel("Time (ms)", fontsize=10)
-            ax_wave.set_ylabel("Velocity (mm/s)", fontsize=10)
-            cls._style_axes(ax_wave)
+                    ax.plot(t_ms, mean, color="black", linewidth=1.1, zorder=3)
+                    if std is not None and np.any(std > 0):
+                        idx = np.arange(0, n, stride, dtype=int)
+                        ax.errorbar(
+                            t_ms[idx],
+                            mean[idx],
+                            yerr=std[idx],
+                            fmt="none",
+                            ecolor="black",
+                            elinewidth=0.8,
+                            capsize=2.5,
+                            capthick=0.8,
+                            zorder=2,
+                        )
+                    ax.set_xlim(float(t_ms[0]), float(t_ms[-1]))
+                    ax.set_xlabel(xlabel, fontsize=10)
+                else:
+                    ax.set_xlabel("Time (ms)", fontsize=10)
+
+                ax.axhline(0, color="#555555", linewidth=0.6, linestyle=":")
+                ax.set_ylabel("Velocity (mm/s)", fontsize=10)
+                ax.set_box_aspect(1.0 / cls.FIG2_ASPECT)
+                cls._style_axes(ax, tick_size=9, label_size=10)
 
         fig.tight_layout()
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1289,9 +1368,10 @@ class LowRankWaveformAcquisitionFigures:
         fig, axes = plt.subplots(
             n_rows,
             n_cols,
-            figsize=(cls.PANEL_SIZE * n_cols + 1.0, cls.PANEL_SIZE * n_rows),
+            figsize=(cls.PANEL_SIZE * n_cols, cls.PANEL_SIZE * n_rows + 0.35),
             sharex=True,
             sharey=False,
+            gridspec_kw={"wspace": 0.28, "hspace": 0.24},
         )
         axes = np.atleast_2d(axes)
         for row_idx, (row_label, summary) in enumerate(rows):
@@ -1318,15 +1398,15 @@ class LowRankWaveformAcquisitionFigures:
                 y_lo, y_hi = ylim_345 if key in zero_cols else ylim_12
                 ax.set_ylim(y_lo, y_hi)
                 if row_idx == 0:
-                    ax.set_title(title, fontsize=11)
+                    ax.set_title(title, fontsize=11, pad=6)
                 if col_idx == 0:
                     ax.set_ylabel(f"{row_label} (mm/s)", fontsize=10)
                 cls._style_axes(ax, tick_size=9, label_size=10)
                 ax.set_box_aspect(1)
         fig.supxlabel("Fraction of cardiac cycle", fontsize=11)
-        fig.tight_layout(w_pad=1.0, h_pad=1.0)
+        fig.tight_layout(w_pad=0.55, h_pad=0.55)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(out_path, dpi=150, bbox_inches="tight")
+        fig.savefig(out_path, dpi=150, bbox_inches="tight", pad_inches=0.05)
         plt.close(fig)
         return out_path
 
@@ -1336,43 +1416,54 @@ class LowRankWaveformAcquisitionFigures:
         vessel_bundle: dict[str, dict | None],
         out_path: Path,
     ) -> Path:
-        """Fig. 4: arterial mode-wise SVD variance fractions (log line)."""
+        """Fig. 4: arterial singular values $\\lambda_m$ vs mode index $m$."""
         out_path = Path(out_path)
         vessels = [
             v for v in FIGURE_VESSELS if vessel_bundle.get(v) is not None
         ] or list(FIGURE_VESSELS)
-        fig, axes = plt.subplots(
-            len(vessels), 1, figsize=(4.2, 3.2 * len(vessels)), squeeze=False
-        )
         n_keep = LowRankWaveformCohortFigures.SPECTRUM_N_MODES
+        fig_h = 3.0
+        fig, axes = plt.subplots(
+            len(vessels),
+            1,
+            figsize=(2.0 * fig_h, fig_h * len(vessels)),
+            squeeze=False,
+        )
         for row_idx, vessel in enumerate(vessels):
             ax = axes[row_idx, 0]
             data = vessel_bundle.get(vessel)
-            energy = (
-                np.asarray(data.get("energy_fraction", []), dtype=float)
-                if data is not None
-                else np.asarray([], dtype=float)
-            )
-            n_modes = int(min(n_keep, energy.size))
+            spectrum = np.asarray([], dtype=float)
+            if data is not None:
+                spectrum = np.asarray(
+                    data.get("singular_values", []), dtype=float
+                )
+                if spectrum.size == 0:
+                    spectrum = np.asarray(
+                        data.get("energy_fraction", []), dtype=float
+                    )
+            n_modes = int(min(n_keep, spectrum.size))
+            modes = np.arange(1, n_keep + 1)
             if n_modes > 0:
-                modes = np.arange(1, n_modes + 1)
                 ax.plot(
-                    modes,
-                    energy[:n_modes],
+                    np.arange(1, n_modes + 1),
+                    spectrum[:n_modes],
                     color="black",
                     linestyle="-",
                     marker="o",
-                    linewidth=2.0,
-                    markersize=4,
+                    markersize=5,
+                    markerfacecolor="white",
+                    markeredgecolor="black",
+                    markeredgewidth=1.2,
+                    linewidth=1.5,
                 )
-                ax.set_xticks(modes)
-                ax.set_xticklabels([])
-                ax.set_yscale("log")
-                ax.yaxis.set_minor_formatter(NullFormatter())
-            ax.set_ylabel(vessel.capitalize(), fontsize=12)
-            ax.set_xlabel("Mode", fontsize=11)
-            if row_idx == 0:
-                ax.set_title("Variance fraction", fontsize=12)
+            ax.set_xticks(modes)
+            ax.set_xticklabels([str(m) for m in modes])
+            ax.set_xlim(0.5, n_keep + 0.5)
+            ax.set_yscale("log")
+            ax.yaxis.set_minor_formatter(NullFormatter())
+            ax.set_ylabel(r"$\lambda_m$", fontsize=12)
+            ax.set_xlabel(r"$m$", fontsize=11)
+            ax.set_box_aspect(0.5)
             cls._style_axes(ax, tick_size=10, label_size=11)
         fig.tight_layout()
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1515,8 +1606,6 @@ class LowRankWaveformCohortFigures:
         ("rho2", r"$\rho_2$"),
         ("effective_rank", r"$R_{\mathrm{eff}}$"),
         ("participation_ratio", "PR"),
-        ("alpha", r"$\alpha$"),
-        ("G1", r"$G_1$"),
     )
 
     @staticmethod
@@ -1595,22 +1684,24 @@ class LowRankWaveformCohortFigures:
         *,
         dataset_label: str | None = None,
     ) -> Path:
-        """Pooled-baseline vs flicker SVD variance-fraction spectrum (artery only).
+        """Pooled-baseline vs flicker singular-value spectrum $\\lambda_m$ (artery).
 
-        Matches the article GOA panel: log-scaled median±IQR curves with black
-        circles (Baseline = B1+B2) and gray dashed squares (Flicker). No vein
-        row and no cumulative column.
+        Log-scaled median±IQR curves with hollow markers (Baseline = B1+B2;
+        Flicker dashed). Title/legend omitted for caption placement. Aspect 2:1.
         """
+        del dataset_label  # caption-owned; retained for call-site compatibility
         out_path = Path(out_path)
         df = points_by_vessel.get("artery", pd.DataFrame())
+        n_keep = cls.SPECTRUM_N_MODES
         mode_cols = [
             f"mode{i}"
-            for i in range(1, cls.SPECTRUM_N_MODES + 1)
+            for i in range(1, n_keep + 1)
             if f"mode{i}" in df.columns
         ]
-        modes = np.arange(1, len(mode_cols) + 1)
+        modes = np.arange(1, n_keep + 1)
 
-        fig, ax = plt.subplots(figsize=(4.2, 3.2))
+        fig_h = 3.0
+        fig, ax = plt.subplots(figsize=(2.0 * fig_h, fig_h))
         series = (
             (
                 df["epoch"].isin(["B1", "B2"]) if "epoch" in df.columns else None,
@@ -1622,7 +1713,8 @@ class LowRankWaveformCohortFigures:
             ),
         )
         if mode_cols and not df.empty:
-            for mask, color, style, marker, label in series:
+            plot_modes = np.arange(1, len(mode_cols) + 1)
+            for mask, color, style, marker, _label in series:
                 if mask is None:
                     continue
                 vals = df.loc[mask, mode_cols].to_numpy(dtype=float)
@@ -1632,36 +1724,31 @@ class LowRankWaveformCohortFigures:
                 q25 = np.nanpercentile(vals, 25, axis=0)
                 q75 = np.nanpercentile(vals, 75, axis=0)
                 ax.plot(
-                    modes,
+                    plot_modes,
                     med,
                     color=color,
                     linestyle=style,
                     marker=marker,
-                    linewidth=2.0,
-                    markersize=4,
-                    label=label,
+                    linewidth=1.5,
+                    markersize=5,
+                    markerfacecolor="white",
+                    markeredgecolor=color,
+                    markeredgewidth=1.2,
                 )
                 ax.fill_between(
-                    modes, q25, q75, color=color, alpha=0.12, linewidth=0
+                    plot_modes, q25, q75, color=color, alpha=0.12, linewidth=0
                 )
 
         ax.set_yscale("log")
-        if len(modes):
-            ax.set_xticks(modes)
-            ax.set_xticklabels([])
+        ax.set_xticks(modes)
+        ax.set_xticklabels([str(m) for m in modes])
+        ax.set_xlim(0.5, n_keep + 0.5)
         ax.yaxis.set_minor_formatter(NullFormatter())
-        ax.set_xlabel("Mode", fontsize=11)
-        ax.set_ylabel("Artery", fontsize=12)
-        ax.set_title("Variance fraction", fontsize=12)
-        ax.legend(frameon=False, fontsize=10, loc="upper right")
+        ax.set_xlabel(r"$m$", fontsize=11)
+        ax.set_ylabel(r"$\lambda_m$", fontsize=12)
+        ax.set_box_aspect(0.5)
         cls._style_axes(ax, tick_size=10)
-
-        label = dataset_label or cls.infer_dataset_label(points_by_vessel)
-        if label:
-            fig.suptitle(label, fontsize=13)
-            fig.tight_layout(rect=(0, 0, 1, 0.95))
-        else:
-            fig.tight_layout()
+        fig.tight_layout()
 
         out_path.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(out_path, dpi=150, bbox_inches="tight")
@@ -1800,7 +1887,7 @@ class LowRankWaveformCohortFigures:
         out_path: Path,
         group_order: list[str] | None = None,
     ) -> Path:
-        """Fig. 7: rho1, rho2, Reff, PR, alpha, G1."""
+        """Fig. 7: rho1, rho2, Reff, PR."""
         if group_order is None:
             labels = pd.concat(points_by_vessel.values(), ignore_index=True)["epoch"]
             group_order = ordered_groups(
@@ -2109,6 +2196,7 @@ class LowRankWaveformConfounds:
             return float(acq.get(key, np.nan))
 
         energy = np.asarray(vessel_data.get("energy_fraction", []), dtype=float)
+        singular = np.asarray(vessel_data.get("singular_values", []), dtype=float)
         row = {
             "vessel": vessel,
             "acquisition": sequence,
@@ -2144,9 +2232,11 @@ class LowRankWaveformConfounds:
             "n_valid_columns": vessel_data["n_valid_columns"],
             "n_total_columns": vessel_data["n_total_columns"],
         }
+        # Spectrum columns store singular values λ_m (not λ_m^2 / energy fractions).
+        spectrum = singular if singular.size else energy
         for m in range(1, LowRankWaveformCohortFigures.SPECTRUM_N_MODES + 1):
             row[f"mode{m}"] = (
-                float(energy[m - 1]) if energy.size >= m else float("nan")
+                float(spectrum[m - 1]) if spectrum.size >= m else float("nan")
             )
         return row
 
