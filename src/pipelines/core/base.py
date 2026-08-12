@@ -1,6 +1,7 @@
 ﻿import csv
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import h5py
@@ -116,6 +117,21 @@ class ProcessPipeline:
 
     def run(self, h5file: h5py.File) -> ProcessResult:
         raise NotImplementedError
+
+    def write_companions(
+        self,
+        result: ProcessResult,
+        *,
+        source_h5_path: Path | str,
+        output_h5_path: Path | str,
+    ) -> list[Path]:
+        """Optional side-car outputs (PNG/HTML) next to the shared result H5.
+
+        Default is a no-op. Called by the pipeline engine after the combined
+        ``*_AE.h5`` / ``*_pipelines_result.h5`` has been written.
+        """
+        del result, source_h5_path, output_h5_path
+        return []
 
     def export(self, result: ProcessResult, output_path: str) -> str:
         """Default CSV export for metrics."""

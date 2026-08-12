@@ -3,7 +3,13 @@
 SVD math and metric packing live in EyeFlow (``calculator.py`` /
 ``outputs.py``). This module loads that packer (avoiding ``pipelines.*``
 name collisions), then owns AngioEye's H5 I/O, group classification,
-statistics, figures, confound sweeps, and cohort ``run()``.
+statistics, figures, and confound sweeps.
+
+Per-acquisition metrics pack into the shared AngioEye result H5
+(``{stem}_AE.h5`` under ``{stem}/{stem}_AE/h5/``) via :meth:`LowRankWaveformDecomposition.run`.
+Figs 2--4 write as AE PNG companions under ``{stem}_AE/png/``.
+Cohort products (Figs 5--7, Table I, confound CSVs) are owned by
+BatchPostprocess and read those result H5 files.
 """
 
 from __future__ import annotations
@@ -22,9 +28,18 @@ from input_output.hdf5_io import (
     find_first_existing_path,
     write_metrics_trees_to_h5,
 )
-from input_output.hdf5_schema import ANGIOEYE_PROCESSING_ROOT
+from input_output.hdf5_schema import (
+    ANGIOEYE_PROCESSING_ROOT,
+    find_pipeline_group,
+)
 from input_output.inputs import find_hdf5_inputs, relative_hdf5_parent
-from input_output.output_paths import h5_output_parent
+from input_output.output_paths import (
+    H5_OUTPUT_DIRNAME,
+    PNG_OUTPUT_DIRNAME,
+    companion_output_dir,
+    dataset_stem_from_path,
+    h5_output_parent,
+)
 
 from .core.base import (
     ProcessPipeline,
@@ -49,6 +64,9 @@ V_BAND_SEGMENT_INPUT_VEIN = "Processing/VelocityPerBeat/Vein/Segments/BandLimite
 VESSEL_TYPES = ("artery", "vein")
 # Figures are arterial-only; vein endpoints may still be computed for tables.
 FIGURE_VESSELS = ("artery",)
+PIPELINE_NAME = "lowrank_waveform_decomposition"
+# Cohort tables / figs prefer the joint-SVD raw arterial (venous) pack.
+COHORT_SIGNAL = "raw"
 
 # =====================================================================
 # EyeFlow bootstrap (package-name collision with AngioEye ``pipelines``)
@@ -214,10 +232,10 @@ def _load_eyeflow_lowrank() -> dict:
 # =====================================================================
 # Group / epoch identity
 # =====================================================================
-# Known flicker-provocation aliases still normalize to the canonical triad
-# (baseline1/flicker/baseline2) with short labels B1/Flicker/B2. Any other
-# top-level subfolder name (e.g. ctrl, path) is kept as its own group key so
-# cohort figures work for arbitrary splits, not only the flicker protocol.
+# Cohort figure x-order is alphanumeric on the top-level folder name. To get
+# article order B1 → Flicker → B2, name folders e.g. ``1_baseline1``,
+# ``2_flicker``, ``3_baseline2``. Flicker-protocol tables still recognize the
+# triad via aliases (with an optional leading index prefix).
 EPOCHS = (("baseline1", "B1"), ("flicker", "Flicker"), ("baseline2", "B2"))
 EPOCH_ORDER = tuple(key for key, _short in EPOCHS)
 EPOCH_SHORT = dict(EPOCHS)
@@ -234,57 +252,126 @@ EPOCH_ALIASES = {
     "b2": "baseline2",
     "baseline2": "baseline2",
 }
+_LEADING_INDEX_RE = re.compile(r"^\d+[\s_\-]*")
+
+
+def _alnum_token_key(text: str) -> tuple:
+    """Natural alphanumeric sort key (``2_`` before ``10_``)."""
+    tokens: list[tuple[int, int | str]] = []
+    for part in re.split(r"(\d+)", text):
+        if part == "":
+            continue
+        if part.isdigit():
+            tokens.append((0, int(part)))
+        else:
+            tokens.append((1, part.lower()))
+    return tuple(tokens)
+
+
+def epoch_key_from_folder(name: str) -> str | None:
+    """Map a folder/group name to baseline1/flicker/baseline2 when recognizable.
+
+    Accepts bare aliases (``baseline1``, ``bl1``, ``flicker``), short labels
+    (``B1``, ``Flicker``), and indexed names (``1_baseline1``, ``2_flicker``).
+    """
+    lower = name.strip().lower()
+    candidates = (lower, _LEADING_INDEX_RE.sub("", lower))
+    for cand in candidates:
+        if not cand:
+            continue
+        if cand in EPOCH_ALIASES:
+            return EPOCH_ALIASES[cand]
+        for short, key in EPOCH_SHORT_TO_KEY.items():
+            if cand == short.lower():
+                return key
+    return None
 
 
 def canonicalize_group_name(name: str) -> str:
-    """Map a folder name to its canonical group key. Known flicker aliases
-    become baseline1/flicker/baseline2; every other name is kept as-is
-    (lowercased only when it matched an alias)."""
-    return EPOCH_ALIASES.get(name.lower(), name)
+    """Keep the folder name as the group key (alphanumeric figure order).
+
+    Flicker semantics use :func:`epoch_key_from_folder` / display labels
+    separately; do not collapse ``1_baseline1`` into ``baseline1`` here.
+    """
+    return name
 
 
 def group_display_label(group: str) -> str:
-    """Short axis/table label for a group key (B1/Flicker/B2 for the
-    flicker triad; otherwise the folder name itself)."""
-    return EPOCH_SHORT.get(group, group)
+    """Axis/table label: B1/Flicker/B2 when the folder encodes a flicker epoch,
+    otherwise the folder name itself."""
+    key = epoch_key_from_folder(group)
+    if key is not None:
+        return EPOCH_SHORT[key]
+    return group
 
 
-def _group_sort_key(group: str | None) -> tuple[int, int, str]:
-    """Sort key: known flicker triad in canonical order, then other named
-    groups alphabetically, then ungrouped (None) last."""
+def _group_sort_key(group: str | None) -> tuple:
+    """Alphanumeric folder order; ungrouped (None) last."""
     if group is None:
-        return (2, 0, "")
-    if group in EPOCH_ORDER:
-        return (0, EPOCH_ORDER.index(group), group)
-    return (1, 0, group.lower())
+        return (1, ())
+    return (0, _alnum_token_key(group))
 
 
 def _epoch_rank(epoch_short: str) -> int:
     """Deprecated sort helper kept for call sites; prefer
-    ``_row_group_sort_key``. Known short labels use the flicker triad
-    order; arbitrary labels sort after those alphabetically via a
-    secondary string key when paired with ``_row_group_sort_key``."""
+    ``_row_group_sort_key``."""
     if epoch_short in EPOCH_SHORT_ORDER:
         return EPOCH_SHORT_ORDER.index(epoch_short)
     return len(EPOCH_SHORT_ORDER)
 
 
-def _row_group_sort_key(epoch_label: str) -> tuple[int, int, str]:
+def _row_group_sort_key(epoch_label: str) -> tuple:
     """Sort key for points/beats rows keyed by display label."""
-    group = EPOCH_SHORT_TO_KEY.get(epoch_label, epoch_label)
-    return _group_sort_key(group)
+    if epoch_label in EPOCH_SHORT_ORDER:
+        return (0, EPOCH_SHORT_ORDER.index(epoch_label))
+    return (1, _alnum_token_key(epoch_label))
 
 
 def ordered_groups(groups: Iterable[str | None]) -> list[str]:
-    """Unique named groups (None dropped), sorted via ``_group_sort_key``."""
+    """Unique named groups (None dropped), alphanumeric folder order.
+
+    Bare flicker triad folders (``baseline1`` / ``flicker`` / ``baseline2`` or
+    aliases without a leading index) keep article order B1→Flicker→B2. Indexed
+    names such as ``1_baseline1``, ``2_flicker``, ``3_baseline2`` follow
+    alphanumeric order of the folder strings.
+    """
     named = {g for g in groups if g is not None}
-    return sorted(named, key=_group_sort_key)
+    ordered = sorted(named, key=_group_sort_key)
+    if set(ordered) == set(EPOCH_ORDER):
+        return list(EPOCH_ORDER)
+    keys = [epoch_key_from_folder(g) for g in ordered]
+    if set(keys) == set(EPOCH_ORDER) and all(
+        epoch_key_from_folder(g) is not None
+        and not _LEADING_INDEX_RE.match(g.strip())
+        for g in ordered
+    ):
+        by_key = {epoch_key_from_folder(g): g for g in ordered}
+        return [by_key[epoch] for epoch in EPOCH_ORDER]
+    return ordered
 
 
 def is_flicker_triad(groups: Iterable[str | None]) -> bool:
-    """True when the classic baseline1/flicker/baseline2 split is present
-    (required for Sec. V.A/V.B confound tables that assume that protocol)."""
-    return set(EPOCH_ORDER).issubset({g for g in groups if g is not None})
+    """True when folders encode baseline1 + flicker + baseline2 (any naming
+    that :func:`epoch_key_from_folder` recognizes), required for Sec. V
+    confound / Table I."""
+    keys = {
+        epoch_key_from_folder(g)
+        for g in groups
+        if g is not None and epoch_key_from_folder(g) is not None
+    }
+    return set(EPOCH_ORDER).issubset(keys)
+
+
+def acqs_by_canonical_epochs(
+    acqs_by_group: dict[str, list[dict]],
+) -> dict[str, list[dict]]:
+    """Remap folder-keyed acquisition lists onto baseline1/flicker/baseline2."""
+    out: dict[str, list[dict]] = {epoch: [] for epoch in EPOCH_ORDER}
+    for group, acqs in acqs_by_group.items():
+        key = epoch_key_from_folder(group)
+        if key in out:
+            out[key].extend(acqs)
+    return out
 
 
 # =====================================================================
@@ -337,11 +424,8 @@ def _resolve_vessel_sources(h5file, veins_flag: bool) -> tuple[dict[str, str], s
 
 # =====================================================================
 # Acquisition/group classification -- the first path component under the
-# cohort root is the group (baseline1, flicker, ctrl, path, ...). Flat
-# acquisitions (h5 directly under the root) get group=None: they still
-# receive acquisition-level outputs, but do not participate in cohort
-# figures. Known flicker folder aliases are canonicalized via
-# EPOCH_ALIASES; every other folder name is kept as its own group.
+# cohort root is the group folder name (kept as-is for alphanumeric figure
+# order). Flat acquisitions (h5 directly under the root) get group=None.
 # =====================================================================
 
 
@@ -415,6 +499,257 @@ def resolve_cohort_root(path: Path | str) -> Path:
     return path
 
 
+def result_h5_has_lowrank(h5_path: Path | str) -> bool:
+    """True when ``h5_path`` already contains the low-rank pipeline group."""
+    try:
+        with h5py.File(h5_path, "r") as h5file:
+            return find_pipeline_group(h5file, PIPELINE_NAME) is not None
+    except OSError:
+        return False
+
+
+def find_lowrank_result_h5s(root: Path | str) -> list[Path]:
+    """Discover AngioEye result H5s that already pack low-rank metrics.
+
+    Prefers ``*_AE.h5`` (canonical full-chain product). Also accepts legacy
+    ``*_pipelines_result.h5`` files that contain the low-rank group.
+    """
+    root = Path(root)
+    candidates = find_hdf5_inputs(root)
+    results: list[Path] = []
+    for path in candidates:
+        stem = path.stem
+        # Skip obvious EyeFlow-only inputs when scanning a mixed tree.
+        if stem.endswith("_EF") and not stem.endswith("_AE"):
+            continue
+        if not result_h5_has_lowrank(path):
+            continue
+        results.append(path)
+
+    def _rank(path: Path) -> tuple[int, str]:
+        stem = path.stem
+        if stem.endswith("_AE"):
+            return (0, str(path).lower())
+        if "pipelines_result" in stem:
+            return (1, str(path).lower())
+        return (2, str(path).lower())
+
+    results.sort(key=_rank)
+    return results
+
+
+def companion_png_dir_for_result(output_h5_path: Path | str) -> Path:
+    """PNG companion folder for a shared AngioEye result H5.
+
+    Canonical: ``{stem}_AE/png/``. Falls back to ``png/`` beside the H5 tree
+    or the H5's parent for non-AE layouts.
+    """
+    output_h5_path = Path(output_h5_path)
+    try:
+        return companion_output_dir(
+            output_h5_path, app_suffix="AE", query_type=PNG_OUTPUT_DIRNAME
+        )
+    except ValueError:
+        parent = output_h5_path.parent
+        if parent.name.lower() == H5_OUTPUT_DIRNAME:
+            return parent.parent / PNG_OUTPUT_DIRNAME
+        return parent
+
+
+def acquisition_fig_stem(
+    output_h5_path: Path | str, source_h5_path: Path | str | None = None
+) -> str:
+    """Stem used for Figs 2--4 filenames (acquisition name, not ``_pipelines_result``)."""
+    output_h5_path = Path(output_h5_path)
+    try:
+        return dataset_stem_from_path(output_h5_path)
+    except ValueError:
+        pass
+    stem = output_h5_path.stem
+    for suffix in ("_AE", "_EF", "_HD", "_DV", "_pipelines_result"):
+        if stem.endswith(suffix):
+            return stem[: -len(suffix)] or stem
+    if source_h5_path is not None:
+        src = Path(source_h5_path).stem
+        for suffix in ("_AE", "_EF", "_HD", "_DV"):
+            if src.endswith(suffix):
+                return src[: -len(suffix)] or src
+        return src
+    return stem
+
+
+def _group_dataset_map(group: h5py.Group) -> dict[str, np.ndarray]:
+    out: dict[str, np.ndarray] = {}
+    for key, obj in group.items():
+        if isinstance(obj, h5py.Dataset):
+            out[key] = np.asarray(obj)
+    return out
+
+
+def _scalar_from_group(group: h5py.Group, name: str, default: float = float("nan")) -> float:
+    try:
+        obj = group[name]
+    except KeyError:
+        return float(default)
+    arr = np.asarray(obj).reshape(-1)
+    if arr.size == 0:
+        return float(default)
+    return float(arr[0])
+
+
+def load_vessel_data_from_result_h5(
+    h5_path: Path | str,
+    vessel: str,
+    *,
+    signal: str = COHORT_SIGNAL,
+) -> dict | None:
+    """Rebuild the in-memory vessel bundle used by cohort tables from a result H5."""
+    h5_path = Path(h5_path)
+    with h5py.File(h5_path, "r") as h5file:
+        root = find_pipeline_group(h5file, PIPELINE_NAME)
+        if root is None:
+            return None
+        source = root.get(f"{vessel}/{signal}")
+        if not isinstance(source, h5py.Group):
+            return None
+        if int(_scalar_from_group(source, "qc/input_available", 0)) != 1:
+            return None
+        if int(_scalar_from_group(source, "qc/svd_available", 0)) != 1:
+            return None
+
+        endpoints = source["endpoints"] if "endpoints" in source else None
+        variability = source["variability"] if "variability" in source else None
+        decomposition = source["decomposition"] if "decomposition" in source else None
+        baseline = source["baseline"] if "baseline" in source else None
+        beatwise_g = source["beatwise"] if "beatwise" in source else None
+        per_beat_g = source["per_beat"] if "per_beat" in source else None
+        inputs = source["inputs"] if "inputs" in source else None
+        beat_period = source["beat_period"] if "beat_period" in source else None
+
+        acq: dict[str, float] = {}
+        if isinstance(endpoints, h5py.Group):
+            for key, arr in _group_dataset_map(endpoints).items():
+                flat = np.asarray(arr, dtype=float).reshape(-1)
+                acq[key] = float(flat[0]) if flat.size else float("nan")
+        if isinstance(variability, h5py.Group):
+            for key, arr in _group_dataset_map(variability).items():
+                flat = np.asarray(arr, dtype=float).reshape(-1)
+                acq[key] = float(flat[0]) if flat.size else float("nan")
+        if isinstance(decomposition, h5py.Group):
+            for key in (
+                "alpha",
+                "G1",
+                "effective_rank",
+                "participation_ratio",
+                "eta1",
+                "eta2",
+                "eta12",
+                "spectrum_mode_count_M",
+            ):
+                if key in decomposition:
+                    acq[key] = _scalar_from_group(decomposition, key)
+        if isinstance(baseline, h5py.Group):
+            for key in ("mu_acq", "abs_mu_acq", "sigma_mu_beat", "mad_mu_beat"):
+                if key in baseline:
+                    acq[key] = _scalar_from_group(baseline, key)
+
+        beatwise = (
+            _group_dataset_map(beatwise_g) if isinstance(beatwise_g, h5py.Group) else {}
+        )
+        # EyeFlow packs per-beat means under baseline/, but cohort code expects
+        # them on the beatwise dict (same as compute_acquisition_endpoints).
+        if isinstance(baseline, h5py.Group):
+            if "mu_b" in baseline and "mu_b" not in beatwise:
+                beatwise["mu_b"] = np.asarray(baseline["mu_b"], dtype=float)
+            if "abs_mu_b" in baseline and "abs_mu_b" not in beatwise:
+                beatwise["abs_mu_b"] = np.asarray(baseline["abs_mu_b"], dtype=float)
+
+        per_beat_svd = (
+            _group_dataset_map(per_beat_g) if isinstance(per_beat_g, h5py.Group) else {}
+        )
+
+        singular_values = np.asarray([], dtype=float)
+        energy_fraction = np.asarray([], dtype=float)
+        if isinstance(decomposition, h5py.Group):
+            if "singular_values" in decomposition:
+                singular_values = np.asarray(
+                    decomposition["singular_values"], dtype=float
+                )
+            if "singular_energy_fraction" in decomposition:
+                energy_fraction = np.asarray(
+                    decomposition["singular_energy_fraction"], dtype=float
+                )
+
+        if isinstance(inputs, h5py.Group) and "valid_fraction_columns_per_beat" in inputs:
+            vfb = np.asarray(inputs["valid_fraction_columns_per_beat"], dtype=float)
+        else:
+            vfb = np.asarray([], dtype=float)
+
+        if isinstance(beat_period, h5py.Group):
+            beat_period_mean = _scalar_from_group(beat_period, "mean")
+            beat_period_sd = _scalar_from_group(beat_period, "std")
+        else:
+            beat_period_mean = float("nan")
+            beat_period_sd = float("nan")
+
+        if "mu_b" in beatwise:
+            period_b = np.full(
+                np.asarray(beatwise["mu_b"]).shape[0], beat_period_mean
+            )
+        elif "TPR_b" in beatwise:
+            period_b = np.full(
+                np.asarray(beatwise["TPR_b"]).shape[0], beat_period_mean
+            )
+        else:
+            period_b = np.asarray([], dtype=float)
+
+        n_valid = (
+            int(_scalar_from_group(inputs, "n_valid_columns", 0))
+            if isinstance(inputs, h5py.Group)
+            else 0
+        )
+        n_total = (
+            int(_scalar_from_group(inputs, "n_total_columns", 0))
+            if isinstance(inputs, h5py.Group)
+            else 0
+        )
+
+    return {
+        "acq": acq,
+        "beatwise": beatwise,
+        "per_beat_svd": per_beat_svd,
+        "mu": acq.get("mu_acq", float("nan")),
+        "energy_fraction": energy_fraction,
+        "singular_values": singular_values,
+        "beat_period_mean": beat_period_mean,
+        "beat_period_sd": beat_period_sd,
+        "beat_period_b": period_b,
+        "valid_fraction_per_beat": vfb,
+        "n_valid_columns": n_valid,
+        "n_total_columns": n_total,
+    }
+
+
+def load_acquisition_from_result_h5(
+    h5_path: Path | str,
+    *,
+    veins_flag: bool = False,
+    signal: str = COHORT_SIGNAL,
+) -> dict[str, dict | None] | None:
+    """Load artery/(optional) vein bundles from a packed AngioEye result H5."""
+    h5_path = Path(h5_path)
+    if not result_h5_has_lowrank(h5_path):
+        return None
+    result: dict[str, dict | None] = {}
+    any_ok = False
+    for vessel in _enabled_vessels(veins_flag):
+        data = load_vessel_data_from_result_h5(h5_path, vessel, signal=signal)
+        result[vessel] = data
+        if data is not None:
+            any_ok = True
+    return result if any_ok else None
+
+
 # =====================================================================
 # Thin AngioEye adapter around EyeFlow outputs.py packing
 # =====================================================================
@@ -467,18 +802,20 @@ class LowRankWaveformDecomposition(ProcessPipeline):
 
     SVD math and metric packing live in EyeFlow
     (``calculator.py`` / ``outputs.py``). This AngioEye class is a thin H5
-    adapter plus cohort entry points: it feeds per-beat waveforms into
-    EyeFlow's packer and writes the result under AngioEye's processing root.
+    adapter: it feeds per-beat waveforms into EyeFlow's packer and returns a
+    ``ProcessResult`` that the engine merges into the shared AngioEye result
+    H5 (``{stem}_AE.h5``). Figs 2--4 are written as AE PNG companions via
+    :meth:`write_companions`. Cohort aggregation lives in BatchPostprocess.
 
     Vein processing is opt-in via ``veins_flag`` (default False).
-    For full cohort regeneration use the module-level :func:`run`.
     """
 
     description = (
         "Joint low-rank waveform decomposition from beat-aligned arterial "
         "(and optionally venous) segment waveforms, reporting A1, rho1, A2, "
         "rho2, and TPR per acquisition and per beat, for raw and bandlimited "
-        "signals."
+        "signals. Packs into the shared AngioEye `{stem}_AE.h5` and writes "
+        "Figs 2--4 under `{stem}_AE/png/`."
     )
 
     veins_flag = False
@@ -610,6 +947,31 @@ class LowRankWaveformDecomposition(ProcessPipeline):
         attrs = self._build_attrs(resolved, t_path)
         return ProcessResult(metrics=metrics, attrs=attrs)
 
+    def write_companions(
+        self,
+        result: ProcessResult,
+        *,
+        source_h5_path: Path | str,
+        output_h5_path: Path | str,
+    ) -> list[Path]:
+        """Write Figs 2--4 (and beat-endpoint evolution) under ``{stem}_AE/png/``."""
+        del result
+        source_h5_path = Path(source_h5_path)
+        output_h5_path = Path(output_h5_path)
+        bundle = self.compute_acquisition_endpoints(source_h5_path)
+        if bundle is None:
+            return []
+        png_dir = companion_png_dir_for_result(output_h5_path)
+        stem = acquisition_fig_stem(output_h5_path, source_h5_path)
+        return LowRankWaveformAcquisitionFigures.plot_all(
+            source_h5_path,
+            self,
+            bundle,
+            png_dir,
+            file_stem=stem,
+            signal="raw",
+        )
+
     def compute_acquisition_endpoints(self, h5_path) -> dict | None:
         """In-memory endpoints for confounds/figures (EyeFlow calculator)."""
         with h5py.File(h5_path, "r") as h5file:
@@ -664,7 +1026,12 @@ class LowRankWaveformDecomposition(ProcessPipeline):
         return result
 
     def write_acquisition_h5(self, h5_path, out_path: Path | str) -> bool:
-        """Standalone counterpart to run(): write packed metrics to out_path."""
+        """Test/helper: write packed metrics alone to ``out_path``.
+
+        Production runs merge into the shared AngioEye ``{stem}_AE.h5`` via
+        :meth:`run` and the pipeline engine; do not use this as the primary
+        acquisition product.
+        """
         with h5py.File(h5_path, "r") as h5file:
             schema = _resolve_vessel_sources(h5file, self.veins_flag)
             if schema is None:
@@ -1042,10 +1409,11 @@ class LowRankWaveformStatistics:
         return rf"$\delta$={delta:+.2f}"
 
 class LowRankWaveformAcquisitionFigures:
-    """Per-acquisition arterial figures under each file's relative folder
-    (e.g. ``output/.../baseline1/``): article Figs. 2--4 plus beat-wise
-    endpoint evolution within the acquisition. Fig. 2 is the cardiac
-    velocity waveform only (3:1), with spatial ``(k,r)`` std whiskers."""
+    """Per-acquisition arterial figures (article Figs. 2--4 plus beat-wise
+    endpoint evolution). Written by the pipeline as AE PNG companions under
+    ``{stem}_AE/png/`` via :meth:`LowRankWaveformDecomposition.write_companions`.
+    Fig. 2 is the cardiac velocity waveform only (3:1), with spatial ``(k,r)``
+    std whiskers."""
 
     FRMS_MAP_CANDIDATES = (
         "EyeFlow/Processing/FrequencyMaps/fRMS_avg/value",
@@ -1089,6 +1457,11 @@ class LowRankWaveformAcquisitionFigures:
     def output_dir_for(
         output_dir: Path | str, h5_path: Path | str, input_root: Path | str
     ) -> Path:
+        """Legacy helper: ``output_dir/h5/<relative>/``.
+
+        Prefer :func:`companion_png_dir_for_result` for the canonical
+        ``{stem}_AE/png/`` layout.
+        """
         relative_parent = relative_hdf5_parent(h5_path, input_root)
         return h5_output_parent(output_dir, relative_parent)
 
@@ -1111,12 +1484,16 @@ class LowRankWaveformAcquisitionFigures:
         *,
         patient_id: str | None = None,
         signal: str = "raw",
+        file_stem: str | None = None,
     ) -> list[Path]:
-        """Write Figs. 2--4 and the beat-endpoint evolution figure into ``out_dir``."""
+        """Write Figs. 2--4 and the beat-endpoint evolution figure into ``out_dir``.
+
+        ``out_dir`` should be the AE companion PNG folder (``{stem}_AE/png/``).
+        """
         h5_path = Path(h5_path)
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
-        stem = h5_path.stem
+        stem = file_stem or h5_path.stem
         written: list[Path] = []
         written.append(
             cls.plot_frequency_velocity(
@@ -1857,10 +2234,19 @@ class LowRankWaveformCohortFigures:
     ) -> None:
         labels = [group_display_label(g) for g in group_order]
         positions = {label: idx for idx, label in enumerate(labels)}
-        if is_flicker_triad(group_order) and len(group_order) >= 3:
-            ax.axvspan(0.5, 1.5, color=cls.FLICKER_SHADE, zorder=0)
-            ax.axvline(0.5, color="black", linestyle=":", linewidth=1.5, zorder=1)
-            ax.axvline(1.5, color="black", linestyle=":", linewidth=1.5, zorder=1)
+        if is_flicker_triad(group_order):
+            for idx, group in enumerate(group_order):
+                if epoch_key_from_folder(group) == "flicker":
+                    ax.axvspan(
+                        idx - 0.5, idx + 0.5, color=cls.FLICKER_SHADE, zorder=0
+                    )
+                    ax.axvline(
+                        idx - 0.5, color="black", linestyle=":", linewidth=1.5, zorder=1
+                    )
+                    ax.axvline(
+                        idx + 0.5, color="black", linestyle=":", linewidth=1.5, zorder=1
+                    )
+                    break
 
         for label in labels:
             vals = (
@@ -2050,10 +2436,11 @@ class LowRankWaveformCohortFigures:
 
 class LowRankWaveformConfounds:
     """Sec. V.B confound-control grid (analysis-choice sweep + verdicts) for
-    the classic flicker triad, plus the per-cohort collection pipeline
-    (collect_acquisitions, run_confound_statistics). Acquisition figures
-    always run; cohort figures (Figs. 5--7) run for any 2+ folder split; confound
-    tables require baseline1/flicker/baseline2."""
+    the classic flicker triad, plus cohort collection from packed result H5s
+    (collect_acquisitions, run_confound_statistics). Cohort figures (Figs. 5--7)
+    run for any 2+ folder split; confound tables require
+    baseline1/flicker/baseline2. Per-acquisition H5/Figs 2--4 are produced by
+    the pipeline into ``{stem}_AE/``, not here."""
 
     # Metrics with both a joint-SVD and a per-beat-SVD representation --
     # the ones build_grid sweeps over the svd_method axis for. TPR/mpr/
@@ -2292,13 +2679,23 @@ class LowRankWaveformConfounds:
         are filled with NaN."""
         beatwise = vessel_data["beatwise"]
         per_beat_svd = vessel_data["per_beat_svd"]
-        n_beats = len(beatwise["TPR_b"])
+        if "TPR_b" in beatwise:
+            n_beats = len(np.asarray(beatwise["TPR_b"]))
+        elif "A1_b" in beatwise:
+            n_beats = len(np.asarray(beatwise["A1_b"]))
+        else:
+            n_beats = 0
         vfb = vessel_data["valid_fraction_per_beat"]
         period_b = vessel_data["beat_period_b"]
 
         def at(arr, b):
             arr = np.asarray(arr, dtype=float)
             return float(arr[b]) if b < arr.size and np.isfinite(arr[b]) else float("nan")
+
+        def beat_get(mapping: dict, key: str, b: int) -> float:
+            if key not in mapping:
+                return float("nan")
+            return at(mapping[key], b)
 
         rows = []
         singular_b = np.asarray(
@@ -2316,27 +2713,30 @@ class LowRankWaveformConfounds:
                 "beat_index": b,
                 "beat_period": at(period_b, b),
                 "valid_fraction": at(vfb, b),
-                "mu": at(beatwise["mu_b"], b),
-                "TPR": at(beatwise["TPR_b"], b),
-                "mpr": at(beatwise["mpr_b"], b),
-                "A1": at(beatwise["A1_b"], b),
-                "R1": at(beatwise["R1_b"], b),
-                "rho1": at(beatwise["rho1_b"], b),
-                "A2": at(beatwise["A2_b"], b),
-                "R2": at(beatwise["R2_b"], b),
-                "rho2": at(beatwise["rho2_b"], b),
-                "A1_pb": at(per_beat_svd["A1_b_pb"], b),
-                "R1_pb": at(per_beat_svd["R1_b_pb"], b),
-                "A2_pb": at(per_beat_svd["A2_b_pb"], b),
-                "R2_pb": at(per_beat_svd["R2_b_pb"], b),
+                "mu": beat_get(beatwise, "mu_b", b),
+                "TPR": beat_get(beatwise, "TPR_b", b),
+                "mpr": beat_get(beatwise, "mpr_b", b),
+                "A1": beat_get(beatwise, "A1_b", b),
+                "R1": beat_get(beatwise, "R1_b", b),
+                "rho1": beat_get(beatwise, "rho1_b", b),
+                "A2": beat_get(beatwise, "A2_b", b),
+                "R2": beat_get(beatwise, "R2_b", b),
+                "rho2": beat_get(beatwise, "rho2_b", b),
+                "A1_pb": beat_get(per_beat_svd, "A1_b_pb", b),
+                "R1_pb": beat_get(per_beat_svd, "R1_b_pb", b),
+                "A2_pb": beat_get(per_beat_svd, "A2_b_pb", b),
+                "R2_pb": beat_get(per_beat_svd, "R2_b_pb", b),
             }
             # Per-beat SVD singular values λ_m (beat-to-beat spectrum).
-            for m in range(1, n_spectrum + 1):
-                if singular_b.ndim == 2 and b < singular_b.shape[0] and m <= singular_b.shape[1]:
-                    val = float(singular_b[b, m - 1])
-                    row[f"mode{m}"] = val if np.isfinite(val) else float("nan")
-                else:
-                    row[f"mode{m}"] = float("nan")
+            # Only emit mode columns when the packed H5 has a real spectrum so
+            # cohort plots do not prefer an all-NaN beat table over acq modes.
+            if singular_b.ndim == 2 and singular_b.size and np.any(np.isfinite(singular_b)):
+                for m in range(1, n_spectrum + 1):
+                    if b < singular_b.shape[0] and m <= singular_b.shape[1]:
+                        val = float(singular_b[b, m - 1])
+                        row[f"mode{m}"] = val if np.isfinite(val) else float("nan")
+                    else:
+                        row[f"mode{m}"] = float("nan")
             rows.append(row)
         return rows
 
@@ -2410,14 +2810,17 @@ class LowRankWaveformConfounds:
         patient_id: str | None = None,
         group_order: list[str] | None = None,
     ) -> dict[str, tuple[dict[str, list[dict]], list[dict], list[dict]]]:
-        """Runs the low-rank engine over classified ``(group, h5_path)``
-        records (see classify_cohort). Every acquisition gets endpoints +
-        acquisition figures (article Figs. 2--4) when ``output_dir`` is set --
-        including flat (ungrouped) files. Named groups populate
-        ``acqs_by_group`` for optional cohort figures/stats (Figs. 5--7).
+        """Collect endpoints from packed AngioEye result H5s.
+
+        ``records`` are ``(group, result_h5_path)`` where each H5 already
+        contains ``/AngioEye/Processing/lowrank_waveform_decomposition``
+        (typically ``{stem}_AE.h5``). Does not write per-acquisition H5 or
+        Figs 2--4 — those are pipeline/AE companions. ``output_dir`` /
+        ``patient_id`` are retained for call-site compatibility and ignored.
         Returns
         ``{"artery": (acqs_by_group, points_rows, beat_rows), "vein": (...)}``.
         """
+        del output_dir, patient_id, input_root
         if group_order is None:
             group_order = ordered_groups(group for group, _ in records)
         # Always allocate known flicker keys too so build_grid can still
@@ -2436,30 +2839,11 @@ class LowRankWaveformConfounds:
         }
 
         for group, h5_path in records:
-            data = self._lr.compute_acquisition_endpoints(h5_path)
+            data = load_acquisition_from_result_h5(
+                h5_path, veins_flag=bool(self._lr.veins_flag)
+            )
             if data is None:
                 continue
-            acquisition_out_dir = None
-            if output_dir is not None:
-                # Persist this acquisition's joint-SVD + per-beat endpoints
-                # and article Figs. 2--4 plus beat-endpoint evolution under the
-                # acquisition's own relative folder (e.g. baseline1/, ctrl/,
-                # or "." for flat).
-                acquisition_out_dir = LowRankWaveformAcquisitionFigures.output_dir_for(
-                    output_dir, h5_path, input_root
-                )
-                out_name = prefixed_filename(
-                    f"{h5_path.stem}_pipelines_result.h5", patient_id
-                )
-                self._lr.write_acquisition_h5(h5_path, acquisition_out_dir / out_name)
-                LowRankWaveformAcquisitionFigures.plot_all(
-                    h5_path,
-                    self._lr,
-                    data,
-                    acquisition_out_dir,
-                    patient_id=patient_id,
-                    signal="raw",
-                )
 
             for vessel in VESSEL_TYPES:
                 vessel_data = data.get(vessel)
@@ -2509,10 +2893,10 @@ class LowRankWaveformConfounds:
         input_root: Path,
         output_dir: Path,
     ) -> tuple[str, list[Path]]:
-        """Full cohort regeneration:
+        """Cohort-only regeneration from packed AngioEye result H5s:
 
-        * every acquisition always gets endpoints ``.h5`` + article Figs. 2--4
-          under its own relative folder;
+        * reads ``{stem}_AE.h5`` (or legacy result H5s) that already contain
+          low-rank metrics — does not recompute SVD or write per-acq products;
         * when the dataset has a multi-folder split (any 2+ named groups --
           bl1/f/bl2, ctrl/path, ...), article Figs. 5--7 are written in the base
           directory;
@@ -2551,8 +2935,6 @@ class LowRankWaveformConfounds:
         per_vessel = self.collect_acquisitions(
             records,
             input_root,
-            output_dir=output_dir,
-            patient_id=patient_id,
             group_order=group_order,
         )
 
@@ -2591,7 +2973,9 @@ class LowRankWaveformConfounds:
                     "tables",
                     f"{vessel}_table1_pooled_baseline_vs_flicker.csv",
                 )
-                grid_rows, verdict_rows = self.build_grid(vessel, acqs_by_group)
+                grid_rows, verdict_rows = self.build_grid(
+                    vessel, acqs_by_canonical_epochs(acqs_by_group)
+                )
                 _write_csv(
                     pd.DataFrame(grid_rows),
                     "confound_control",
@@ -2622,7 +3006,7 @@ class LowRankWaveformConfounds:
         split_note = (
             f"cohort split={group_order}"
             if has_cohort_split
-            else "no cohort split (acquisition figures only)"
+            else "no cohort split (points/beats only)"
         )
         combined_points = pd.concat(all_points, ignore_index=True)
         summary = (
@@ -2651,25 +3035,24 @@ def run(
     output_dir: Path | str,
     *,
     veins: bool = True,
+    result_h5_paths: Iterable[Path] | None = None,
 ) -> tuple[str, list[Path]]:
-    """Full start-to-end regeneration for one cohort dataset.
+    """Cohort-only regeneration from packed AngioEye result H5s.
 
-    Accepts either an extracted cohort folder or a ZIP (e.g.
-    ``260803_Flicker_EF.zip`` whose root contains group subfolders such as
-    ``baseline1/flicker/baseline2`` or ``ctrl/path``), then:
+    Accepts either an extracted cohort folder or a ZIP whose tree contains
+    ``{stem}_AE.h5`` files (or legacy result H5s with the low-rank group),
+    classified by top-level split folders (e.g. ``baseline1/flicker/baseline2``).
 
-    1. classifies acquisitions by top-level split folder (any names),
-    2. computes joint + per-beat SVD endpoints (artery always; vein when
-       ``veins`` is True),
-    3. always writes per-acquisition ``.h5`` + article Figs. 2--4 and the
-       beat-endpoint evolution figure under each acquisition's folder via
-       :class:`LowRankWaveformAcquisitionFigures`,
-    4. when 2+ named groups are present, writes article Figs. 5--7 in
-       ``output_dir`` via :class:`LowRankWaveformCohortFigures`,
-    5. when the classic flicker triad is present, also writes Sec. V
-       endpoint/confound CSVs and article Table I
-       (``*_table1_pooled_baseline_vs_flicker.csv``) under
-       ``output_dir/lowrank_confound_statistics/``.
+    Writes only cohort products under ``output_dir``:
+
+    * when 2+ named groups are present, article Figs. 5--7
+    * when the classic flicker triad is present, Sec. V endpoint/confound
+      CSVs and article Table I under ``output_dir/lowrank_confound_statistics/``
+    * aggregated points/beats CSVs
+
+    Per-acquisition ``{stem}_AE.h5`` and Figs 2--4 must already exist from the
+    pipeline run. Pass ``result_h5_paths`` to use an explicit file list
+    (e.g. ``PostprocessContext.processed_files``).
 
     Returns ``(summary, generated_paths)``.
     """
@@ -2680,15 +3063,62 @@ def run(
     confounds = LowRankWaveformConfounds()
     confounds._lr.veins_flag = bool(veins)
 
+    if result_h5_paths is not None:
+        h5_paths = [
+            Path(p)
+            for p in result_h5_paths
+            if result_h5_has_lowrank(p)
+        ]
+        if not h5_paths:
+            raise ValueError(
+                "No packed AngioEye result H5 files with low-rank metrics were "
+                "provided for cohort postprocess. Enable "
+                "lowrank_waveform_decomposition in the pipeline run first."
+            )
+        if input_path.is_dir():
+            cohort_root = resolve_cohort_root(input_path)
+        else:
+            try:
+                cohort_root = Path(
+                    os.path.commonpath([str(Path(p).resolve()) for p in h5_paths])
+                )
+            except ValueError:
+                cohort_root = Path(h5_paths[0]).resolve().parent
+            if cohort_root.is_file():
+                cohort_root = cohort_root.parent
+            # Walk up a few levels so group folders (baseline1/...) are visible.
+            probe = cohort_root
+            for _ in range(5):
+                records, _order = classify_cohort(h5_paths, probe)
+                if any(group is not None for group, _ in records):
+                    cohort_root = probe
+                    break
+                if probe.parent == probe:
+                    break
+                probe = probe.parent
+        return confounds.run(h5_paths, cohort_root, output_dir)
+
     if input_path.is_file() and input_path.suffix.lower() == ".zip":
         with extracted_zip_tree(input_path) as extracted_root:
             cohort_root = resolve_cohort_root(extracted_root)
-            h5_paths = find_hdf5_inputs(cohort_root)
+            h5_paths = find_lowrank_result_h5s(cohort_root)
+            if not h5_paths:
+                raise ValueError(
+                    f"No packed AngioEye low-rank result H5 files found under "
+                    f"{cohort_root}. Run the lowrank_waveform_decomposition "
+                    "pipeline first so `{stem}_AE.h5` contains the metrics."
+                )
             return confounds.run(h5_paths, cohort_root, output_dir)
 
     if input_path.is_dir():
         cohort_root = resolve_cohort_root(input_path)
-        h5_paths = find_hdf5_inputs(cohort_root)
+        h5_paths = find_lowrank_result_h5s(cohort_root)
+        if not h5_paths:
+            raise ValueError(
+                f"No packed AngioEye low-rank result H5 files found under "
+                f"{cohort_root}. Run the lowrank_waveform_decomposition "
+                "pipeline first so `{stem}_AE.h5` contains the metrics."
+            )
         return confounds.run(h5_paths, cohort_root, output_dir)
 
     raise ValueError(

@@ -2,7 +2,7 @@ import numpy as np
 from scipy.sparse.csgraph import connected_components
 
 from .core.base import ProcessPipeline, ProcessResult, registerPipeline, with_attrs
-from .lowrank_pulsatility_metrics import LowRankPulsatilityMetrics
+from .lowrank_waveform_decomposition import LowRankWaveformDecomposition
 
 
 @registerPipeline(name="waveform_shape_metrics_denoised_alternatives")
@@ -1312,10 +1312,10 @@ class ArterialSegExample(ProcessPipeline):
         whole ensemble -- pulses "borrow" shape from each other instead of being
         smoothed in isolation.
 
-        Reuses LowRankPulsatilityMetrics._compute_representation (the SVD
-        construction already used to compute the A1/rho1 diagnostics in
-        lowrank_pulsatility_metrics.py) rather than reimplementing it. That
-        pipeline already forms the rank-K reconstruction internally as a step
+        Reuses LowRankWaveformDecomposition._compute_representation (backed by
+        EyeFlow's low-rank calculator via the AngioEye adapter) rather than
+        reimplementing it. That pipeline already forms the rank-K
+        reconstruction internally as a step
         toward computing residual-fraction (rho_m) statistics; this candidate
         just maps that reconstruction back into a full (time, beat, branch,
         radius) block and exposes it as an actual denoised signal instead of
@@ -1362,10 +1362,10 @@ class ArterialSegExample(ProcessPipeline):
             if T is None:
                 T = np.ones((1, n_beats), dtype=float)
 
-            helper = LowRankPulsatilityMetrics()
+            helper = LowRankWaveformDecomposition()
             helper.min_valid_samples_fraction = self.min_valid_samples_fraction
             helper.min_valid_columns = self.min_valid_columns
-            helper.max_modes_panel = self.max_modes
+            helper.exported_modes = self.max_modes
             rep = helper._compute_representation(v_block=v_block, T=T)
 
             out = np.full_like(v_block, np.nan, dtype=float)

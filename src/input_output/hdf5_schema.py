@@ -18,8 +18,19 @@ EYEFLOW_NAMESPACED_METRICS_ROOT = f"{EYEFLOW_ROOT}{EYEFLOW_METRICS_ROOT}"
 EYEFLOW_LEGACY_METRICS_ROOT = "/Metrics"
 
 
+def is_macos_sidecar_path(path: str | Path) -> bool:
+    """True for AppleDouble / Finder metadata paths that are not real files."""
+    path_obj = Path(path)
+    if path_obj.name.startswith("._"):
+        return True
+    return any(part == "__MACOSX" for part in path_obj.parts)
+
+
 def is_hdf5_path(path: str | Path) -> bool:
-    return Path(path).suffix.lower() in HDF5_SUFFIXES
+    path_obj = Path(path)
+    if is_macos_sidecar_path(path_obj):
+        return False
+    return path_obj.suffix.lower() in HDF5_SUFFIXES
 
 
 def _child_path_candidates(base_candidates: list[str], *parts: str) -> list[str]:

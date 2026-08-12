@@ -98,13 +98,16 @@ def run_pipeline_file(
 
     try:
         compute_started_at = time.monotonic()
-        pipeline_results, signal_datasets = _run_pipeline_descriptors(
+        pipeline_runs = _run_pipeline_descriptors(
             h5_path=h5_path,
             pipelines=pipelines,
             log=log,
             advance_progress=advance_progress,
             record_timing=record_timing,
         )
+        pipeline_results = [
+            (name, result) for name, result, _pipeline in pipeline_runs
+        ]
         _record_timing(
             record_timing,
             "per-file pipeline compute",
@@ -126,8 +129,36 @@ def run_pipeline_file(
             "per-file output write",
             time.monotonic() - write_started_at,
         )
-        for _, result in pipeline_results:
+        companions_started_at = time.monotonic()
+        for name, result, pipeline in pipeline_runs:
             result.output_h5_path = str(output_path)
+            write_companions = getattr(pipeline, "write_companions", None)
+            if not callable(write_companions):
+                continue
+            try:
+                written = write_companions(
+                    result,
+                    source_h5_path=h5_path,
+                    output_h5_path=output_path,
+                )
+            except Exception as exc:  # noqa: BLE001
+                _log(
+                    log,
+                    f"[WARN] {h5_path.name}: companion write failed for "
+                    f"{name}: {type(exc).__name__}: {exc}",
+                )
+                continue
+            if written:
+                _log(
+                    log,
+                    f"[OK] {h5_path.name}: {name} wrote "
+                    f"{len(written)} companion file(s)",
+                )
+        _record_timing(
+            record_timing,
+            "per-file companion writes",
+            time.monotonic() - companions_started_at,
+        )
         _log(log, f"[OK] {h5_path.name}: combined results -> {output_path}")
         return output_path
     finally:
@@ -286,8 +317,8 @@ def _run_pipeline_descriptors(
     log: LogCallback | None,
     advance_progress: ProgressCallback | None,
     record_timing: TimingCallback | None,
-) -> tuple[list[tuple[str, ProcessResult]], dict[str, object]]:
-    pipeline_results: list[tuple[str, ProcessResult]] = []
+) -> list[tuple[str, ProcessResult, object]]:
+    pipeline_results: list[tuple[str, ProcessResult, object]] = []
     h5_open_started_at = time.monotonic()
     h5file = h5py.File(h5_path, "r")
     _record_timing(
@@ -326,7 +357,7 @@ def _run_pipeline_descriptors(
                 f"per-pipeline compute [{pipeline_name}]",
                 time.monotonic() - pipeline_started_at,
             )
-            pipeline_results.append((pipeline.name, result))
+            pipeline_results.append((pipeline.name, result, pipeline))
             result_pack_started_at = time.monotonic()
             _log(log, f"[OK] {h5_path.name} -> {pipeline.name}")
             _advance(advance_progress)
