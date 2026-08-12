@@ -38,7 +38,7 @@ from collections.abc import Iterable
 
 from scipy.stats import kruskal, mannwhitneyu
 import matplotlib.pyplot as plt
-from matplotlib.ticker import NullFormatter
+from matplotlib.ticker import FuncFormatter, LogLocator, NullFormatter
 
 
 T_INPUT = "Processing/VelocityPerBeat/BeatPeriodSeconds/value"
@@ -1516,10 +1516,12 @@ class LowRankWaveformAcquisitionFigures:
             ax.set_xlim(0.5, n_keep + 0.5)
             ax.set_yscale("log")
             ax.yaxis.set_minor_formatter(NullFormatter())
-            ax.set_ylabel(r"$\lambda_m$", fontsize=12)
-            ax.set_xlabel(r"$m$", fontsize=11)
+            ax.set_ylabel(r"$\lambda_m$", fontsize=cls.FIG2_LABEL_SIZE)
+            ax.set_xlabel(r"$m$", fontsize=cls.FIG2_LABEL_SIZE)
             ax.set_box_aspect(0.5)
-            cls._style_axes(ax, tick_size=10, label_size=11)
+            cls._style_axes(
+                ax, tick_size=cls.FIG2_TICK_SIZE, label_size=cls.FIG2_LABEL_SIZE
+            )
         fig.tight_layout()
         out_path.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(out_path, dpi=150, bbox_inches="tight")
@@ -1683,6 +1685,7 @@ class LowRankWaveformCohortFigures:
         *,
         patient_id: str | None = None,
         dataset_label: str | None = None,
+        beats_by_vessel: dict[str, pd.DataFrame] | None = None,
     ) -> list[Path]:
         """Write Figs. 5, 6, 7 and the artery variance-fraction spectrum."""
         out_dir = Path(out_dir)
@@ -1709,6 +1712,7 @@ class LowRankWaveformCohortFigures:
                 out_dir
                 / prefixed_filename("fig_variance_fraction.png", patient_id),
                 dataset_label=dataset_label,
+                beats_by_vessel=beats_by_vessel,
             ),
         ]
         return written
@@ -1738,21 +1742,40 @@ class LowRankWaveformCohortFigures:
         out_path: Path,
         *,
         dataset_label: str | None = None,
+        beats_by_vessel: dict[str, pd.DataFrame] | None = None,
     ) -> Path:
         """Pooled-baseline vs flicker singular-value spectrum $\\lambda_m$ (artery).
 
-        Log-scaled median±IQR curves with hollow markers (Baseline = B1+B2;
-        Flicker dashed). Title/legend omitted for caption placement. Aspect 2:1.
+        Prefers per-beat SVD spectra: log-scaled median±IQR across beats
+        (Baseline = all beats from B1+B2; Flicker dashed). Falls back to
+        acquisition-level ``mode*`` columns when beat spectra are absent.
+        Title/legend omitted for caption placement. Aspect 2:1.
         """
         del dataset_label  # caption-owned; retained for call-site compatibility
         out_path = Path(out_path)
-        df = points_by_vessel.get("artery", pd.DataFrame())
+        points = points_by_vessel.get("artery", pd.DataFrame())
+        beats = (
+            (beats_by_vessel or {}).get("artery", pd.DataFrame())
+            if beats_by_vessel is not None
+            else pd.DataFrame()
+        )
         n_keep = cls.SPECTRUM_N_MODES
-        mode_cols = [
+        beat_mode_cols = [
             f"mode{i}"
             for i in range(1, n_keep + 1)
-            if f"mode{i}" in df.columns
+            if f"mode{i}" in beats.columns
         ]
+        # Use beat-level λ_m when present so the grey band is beat-to-beat IQR.
+        if not beats.empty and beat_mode_cols:
+            df = beats
+            mode_cols = beat_mode_cols
+        else:
+            df = points
+            mode_cols = [
+                f"mode{i}"
+                for i in range(1, n_keep + 1)
+                if f"mode{i}" in df.columns
+            ]
         modes = np.arange(1, n_keep + 1)
 
         fig_h = 3.0
@@ -1798,11 +1821,23 @@ class LowRankWaveformCohortFigures:
         ax.set_xticks(modes)
         ax.set_xticklabels([str(m) for m in modes])
         ax.set_xlim(0.5, n_keep + 0.5)
+        # Narrow λ_m range (<1 decade) needs non-decade major ticks or the
+        # side scale stays blank.
+        ax.yaxis.set_major_locator(
+            LogLocator(base=10.0, subs=(1.0, 2.0, 3.0, 5.0), numticks=8)
+        )
+        ax.yaxis.set_major_formatter(
+            FuncFormatter(lambda y, _pos: f"{y:g}" if y > 0 else "0")
+        )
         ax.yaxis.set_minor_formatter(NullFormatter())
-        ax.set_xlabel(r"$m$", fontsize=11)
-        ax.set_ylabel(r"$\lambda_m$", fontsize=12)
+        ax.set_xlabel(r"$m$", fontsize=LowRankWaveformAcquisitionFigures.FIG2_LABEL_SIZE)
+        ax.set_ylabel(
+            r"$\lambda_m$", fontsize=LowRankWaveformAcquisitionFigures.FIG2_LABEL_SIZE
+        )
         ax.set_box_aspect(0.5)
-        cls._style_axes(ax, tick_size=10)
+        cls._style_axes(
+            ax, tick_size=LowRankWaveformAcquisitionFigures.FIG2_TICK_SIZE
+        )
         fig.tight_layout()
 
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2206,31 +2241,43 @@ class LowRankWaveformConfounds:
             return float(arr[b]) if b < arr.size and np.isfinite(arr[b]) else float("nan")
 
         rows = []
+        singular_b = np.asarray(
+            per_beat_svd.get("singular_values_b", []), dtype=float
+        )
+        if singular_b.ndim == 1:
+            singular_b = singular_b.reshape(-1, 1) if singular_b.size else np.zeros((0, 0))
+        n_spectrum = LowRankWaveformCohortFigures.SPECTRUM_N_MODES
         for b in range(n_beats):
-            rows.append(
-                {
-                    "vessel": vessel,
-                    "acquisition": sequence,
-                    "file": h5_path.name,
-                    "epoch": epoch_short,
-                    "beat_index": b,
-                    "beat_period": at(period_b, b),
-                    "valid_fraction": at(vfb, b),
-                    "mu": at(beatwise["mu_b"], b),
-                    "TPR": at(beatwise["TPR_b"], b),
-                    "mpr": at(beatwise["mpr_b"], b),
-                    "A1": at(beatwise["A1_b"], b),
-                    "R1": at(beatwise["R1_b"], b),
-                    "rho1": at(beatwise["rho1_b"], b),
-                    "A2": at(beatwise["A2_b"], b),
-                    "R2": at(beatwise["R2_b"], b),
-                    "rho2": at(beatwise["rho2_b"], b),
-                    "A1_pb": at(per_beat_svd["A1_b_pb"], b),
-                    "R1_pb": at(per_beat_svd["R1_b_pb"], b),
-                    "A2_pb": at(per_beat_svd["A2_b_pb"], b),
-                    "R2_pb": at(per_beat_svd["R2_b_pb"], b),
-                }
-            )
+            row = {
+                "vessel": vessel,
+                "acquisition": sequence,
+                "file": h5_path.name,
+                "epoch": epoch_short,
+                "beat_index": b,
+                "beat_period": at(period_b, b),
+                "valid_fraction": at(vfb, b),
+                "mu": at(beatwise["mu_b"], b),
+                "TPR": at(beatwise["TPR_b"], b),
+                "mpr": at(beatwise["mpr_b"], b),
+                "A1": at(beatwise["A1_b"], b),
+                "R1": at(beatwise["R1_b"], b),
+                "rho1": at(beatwise["rho1_b"], b),
+                "A2": at(beatwise["A2_b"], b),
+                "R2": at(beatwise["R2_b"], b),
+                "rho2": at(beatwise["rho2_b"], b),
+                "A1_pb": at(per_beat_svd["A1_b_pb"], b),
+                "R1_pb": at(per_beat_svd["R1_b_pb"], b),
+                "A2_pb": at(per_beat_svd["A2_b_pb"], b),
+                "R2_pb": at(per_beat_svd["R2_b_pb"], b),
+            }
+            # Per-beat SVD singular values λ_m (beat-to-beat spectrum).
+            for m in range(1, n_spectrum + 1):
+                if singular_b.ndim == 2 and b < singular_b.shape[0] and m <= singular_b.shape[1]:
+                    val = float(singular_b[b, m - 1])
+                    row[f"mode{m}"] = val if np.isfinite(val) else float("nan")
+                else:
+                    row[f"mode{m}"] = float("nan")
+            rows.append(row)
         return rows
 
     @staticmethod
@@ -2452,6 +2499,7 @@ class LowRankWaveformConfounds:
         vessel_summaries: list[str] = []
         all_points: list[pd.DataFrame] = []
         points_by_vessel: dict[str, pd.DataFrame] = {}
+        beats_by_vessel: dict[str, pd.DataFrame] = {}
         for vessel, (acqs_by_group, points_rows, beat_rows) in per_vessel.items():
             n_acq = len(points_rows)
             if n_acq == 0:
@@ -2463,10 +2511,12 @@ class LowRankWaveformConfounds:
             vessel_summaries.append(f"{vessel}={n_acq} ({group_counts})")
 
             points_df = pd.DataFrame(points_rows)
+            beats_df = pd.DataFrame(beat_rows)
             points_by_vessel[vessel] = points_df
+            beats_by_vessel[vessel] = beats_df
             all_points.append(points_df)
             _write_csv(points_df, "points", f"{vessel}_points.csv")
-            _write_csv(pd.DataFrame(beat_rows), "beats", f"{vessel}_beats.csv")
+            _write_csv(beats_df, "beats", f"{vessel}_beats.csv")
 
             if flicker_protocol:
                 _write_csv(
@@ -2500,6 +2550,7 @@ class LowRankWaveformConfounds:
                     figures_dir,
                     group_order,
                     patient_id=patient_id,
+                    beats_by_vessel=beats_by_vessel,
                 )
             )
 
