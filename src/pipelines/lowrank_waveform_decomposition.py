@@ -1652,17 +1652,17 @@ class LowRankWaveformCohortFigures:
         ("mpr", r"Mean-to-pulsatile ratio MPR"),
     )
     FIG6_PANELS = (
-        ("A1", r"$A_1$"),
-        ("A2", r"$A_2$"),
-        ("TPR", r"$R_0$"),
-        ("R1", r"$R_1$"),
-        ("R2", r"$R_2$"),
+        ("A1", r"Mode-1 amplitude $A_1$"),
+        ("A2", r"Mode-2 amplitude $A_2$"),
+        ("TPR", r"Total Pulsatile RMS $R_0$"),
+        ("R1", r"Residual RMS ($-A_1$) $R_1$"),
+        ("R2", r"Residual RMS ($-A_{1:2}$) $R_2$"),
     )
     FIG7_PANELS = (
-        ("rho1", r"$\rho_1$"),
-        ("rho2", r"$\rho_2$"),
-        ("effective_rank", r"$R_{\mathrm{eff}}$"),
-        ("participation_ratio", "PR"),
+        ("rho1", r"Residual ratio $\rho_1$"),
+        ("rho2", r"Residual ratio $\rho_2$"),
+        ("effective_rank", r"Effective rank $R_{\mathrm{eff}}$"),
+        ("participation_ratio", r"Participation ratio PR"),
     )
 
     @staticmethod
@@ -1878,18 +1878,24 @@ class LowRankWaveformCohortFigures:
                 [x0],
                 [med],
                 yerr=[sd],
-                fmt="o",
-                markersize=7,
-                markerfacecolor="white",
-                markeredgecolor="black",
-                markeredgewidth=1.4,
+                fmt="none",
                 ecolor="black",
                 elinewidth=1.5,
                 capsize=4,
-                zorder=6,
+                zorder=4,
             )
+            # Solid acquisition dots under the hollow median marker.
             ax.scatter(
                 x0 + jitter, vals, s=20, color="black", edgecolors="none", zorder=5
+            )
+            ax.scatter(
+                [x0],
+                [med],
+                s=49,
+                facecolors="white",
+                edgecolors="black",
+                linewidths=1.4,
+                zorder=6,
             )
 
         ax.set_xticks(list(positions.values()))
@@ -2011,7 +2017,12 @@ class LowRankWaveformCohortFigures:
                 EPOCH_SHORT_TO_KEY.get(label, label) for label in labels.unique()
             )
         return cls._plot_paired_endpoint_grid(
-            points_by_vessel, cls.FIG6_PANELS, out_path, group_order
+            points_by_vessel,
+            cls.FIG6_PANELS,
+            out_path,
+            group_order,
+            ylabel="Value",
+            annotate=True,
         )
 
     @classmethod
@@ -2028,7 +2039,12 @@ class LowRankWaveformCohortFigures:
                 EPOCH_SHORT_TO_KEY.get(label, label) for label in labels.unique()
             )
         return cls._plot_paired_endpoint_grid(
-            points_by_vessel, cls.FIG7_PANELS, out_path, group_order
+            points_by_vessel,
+            cls.FIG7_PANELS,
+            out_path,
+            group_order,
+            ylabel="Value",
+            annotate=True,
         )
 
 
