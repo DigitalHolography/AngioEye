@@ -1076,6 +1076,11 @@ class LowRankWaveformAcquisitionFigures:
     FIG2_HEIGHT = 2.8
     # Whiskers every ~100 ms when dt is available; else every 15 samples.
     FIG2_WHISKER_INTERVAL_S = 0.1
+    # H5 velocity is already in the project unit (mm/s); do not rescale for display.
+    FIG2_VELOCITY_TO_MM_S = 1.0
+    FIG2_X_PAD_FRAC = 0.02  # left/right pad as a fraction of the time span
+    FIG2_TICK_SIZE = 12
+    FIG2_LABEL_SIZE = 14
     PANEL_SIZE = 2.5
 
     @staticmethod
@@ -1171,12 +1176,15 @@ class LowRankWaveformAcquisitionFigures:
 
     @classmethod
     def plot_frequency_velocity(cls, h5_path: Path | str, out_path: Path) -> Path:
-        """Fig. 2: arterial cardiac velocity waveform only (3:1), time in ms.
+        """Fig. 2: arterial cardiac velocity waveform only (3:1), time in s.
 
         Plots the spatial mean over vessel locations ``(k, r)`` with whiskers
         showing the spatial standard deviation. Falls back to the global
-        velocity trace when segment data are unavailable.
+        velocity trace when segment data are unavailable. Velocity is shown in
+        mm/s (see ``FIG2_VELOCITY_TO_MM_S``); time in seconds.
         """
+        from matplotlib.ticker import FuncFormatter, MultipleLocator
+
         h5_path = Path(h5_path)
         out_path = Path(out_path)
         vessels = list(FIGURE_VESSELS)
@@ -1188,6 +1196,11 @@ class LowRankWaveformAcquisitionFigures:
             figsize=(fig_w, cls.FIG2_HEIGHT * n_rows),
             squeeze=False,
         )
+
+        def _two_sig(x, _pos) -> str:
+            if not np.isfinite(x) or x == 0:
+                return "0"
+            return f"{x:.2g}"
 
         with h5py.File(h5_path, "r") as h5:
             dt_s = cls._velocity_dt_seconds(h5)
@@ -1210,21 +1223,27 @@ class LowRankWaveformAcquisitionFigures:
                     std = np.zeros_like(mean)
 
                 if mean is not None and mean.size:
+                    # Scale stored velocity to mm/s for axis labels/ticks.
+                    scale = float(cls.FIG2_VELOCITY_TO_MM_S)
+                    mean = mean * scale
+                    if std is not None:
+                        std = std * scale
+
                     n = int(mean.size)
                     if np.isfinite(dt_s) and dt_s > 0:
-                        t_ms = np.arange(n, dtype=float) * dt_s * 1e3
-                        xlabel = "Time (ms)"
+                        t_s = np.arange(n, dtype=float) * dt_s
+                        xlabel = "Time (s)"
                         stride = max(1, int(round(cls.FIG2_WHISKER_INTERVAL_S / dt_s)))
                     else:
-                        t_ms = np.arange(n, dtype=float)
+                        t_s = np.arange(n, dtype=float)
                         xlabel = "Sample index"
                         stride = 15
 
-                    ax.plot(t_ms, mean, color="black", linewidth=1.1, zorder=3)
+                    ax.plot(t_s, mean, color="black", linewidth=1.1, zorder=3)
                     if std is not None and np.any(std > 0):
                         idx = np.arange(0, n, stride, dtype=int)
                         ax.errorbar(
-                            t_ms[idx],
+                            t_s[idx],
                             mean[idx],
                             yerr=std[idx],
                             fmt="none",
@@ -1234,15 +1253,23 @@ class LowRankWaveformAcquisitionFigures:
                             capthick=0.8,
                             zorder=2,
                         )
-                    ax.set_xlim(float(t_ms[0]), float(t_ms[-1]))
-                    ax.set_xlabel(xlabel, fontsize=10)
+                    # Left/right padding (fraction of span), same idea as fig. 3 margins.
+                    t0, t1 = float(t_s[0]), float(t_s[-1])
+                    pad = cls.FIG2_X_PAD_FRAC * (t1 - t0 if t1 > t0 else 1.0)
+                    ax.set_xlim(t0 - pad, t1 + pad)
+                    if np.isfinite(dt_s) and dt_s > 0:
+                        ax.xaxis.set_major_locator(MultipleLocator(0.5))
+                    ax.set_xlabel(xlabel, fontsize=cls.FIG2_LABEL_SIZE)
                 else:
-                    ax.set_xlabel("Time (ms)", fontsize=10)
+                    ax.set_xlabel("Time (s)", fontsize=cls.FIG2_LABEL_SIZE)
 
                 ax.axhline(0, color="#555555", linewidth=0.6, linestyle=":")
-                ax.set_ylabel("Velocity (mm/s)", fontsize=10)
+                ax.set_ylabel("Velocity (mm/s)", fontsize=cls.FIG2_LABEL_SIZE)
+                ax.yaxis.set_major_formatter(FuncFormatter(_two_sig))
                 ax.set_box_aspect(1.0 / cls.FIG2_ASPECT)
-                cls._style_axes(ax, tick_size=9, label_size=10)
+                cls._style_axes(
+                    ax, tick_size=cls.FIG2_TICK_SIZE, label_size=cls.FIG2_LABEL_SIZE
+                )
 
         fig.tight_layout()
         out_path.parent.mkdir(parents=True, exist_ok=True)
