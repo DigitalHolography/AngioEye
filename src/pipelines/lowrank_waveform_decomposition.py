@@ -1079,6 +1079,8 @@ class LowRankWaveformAcquisitionFigures:
     # H5 velocity is already in the project unit (mm/s); do not rescale for display.
     FIG2_VELOCITY_TO_MM_S = 1.0
     FIG2_X_PAD_FRAC = 0.02  # left/right pad as a fraction of the time span
+    # Fig. 3 uses a slightly larger pad so the inset stays obvious on square panels.
+    FIG3_X_PAD_FRAC = 0.05
     FIG2_TICK_SIZE = 12
     FIG2_LABEL_SIZE = 14
     PANEL_SIZE = 2.5
@@ -1375,15 +1377,16 @@ class LowRankWaveformAcquisitionFigures:
         """Fig. 3: arterial v, mu, w, a1u1, a2u2."""
         h5_path = Path(h5_path)
         out_path = Path(out_path)
-        rows: list[tuple[str, dict[str, np.ndarray] | None]] = []
+        rows: list[dict[str, np.ndarray] | None] = []
         for vessel in FIGURE_VESSELS:
-            summary = cls._waveform_summary_for_vessel(
-                h5_path, engine, vessel, signal=signal
+            rows.append(
+                cls._waveform_summary_for_vessel(
+                    h5_path, engine, vessel, signal=signal
+                )
             )
-            rows.append((vessel.capitalize(), summary))
 
         panel_defs = [
-            ("v", "Beat-aligned\nvelocity"),
+            ("v", r"Beat-aligned velocity $v$"),
             ("mu", r"Baseline level" "\n" r"$\mu$"),
             ("x", r"Baseline-removed" "\n" r"$v-\mu$"),
             ("a1u1", r"Mode-1 recon." "\n" r"$a_1u_1$"),
@@ -1395,43 +1398,68 @@ class LowRankWaveformAcquisitionFigures:
         fig, axes = plt.subplots(
             n_rows,
             n_cols,
-            figsize=(cls.PANEL_SIZE * n_cols, cls.PANEL_SIZE * n_rows + 0.35),
+            figsize=(cls.PANEL_SIZE * n_cols, cls.PANEL_SIZE * n_rows),
             sharex=True,
             sharey=False,
-            gridspec_kw={"wspace": 0.28, "hspace": 0.24},
+            layout="constrained",
         )
         axes = np.atleast_2d(axes)
-        for row_idx, (row_label, summary) in enumerate(rows):
+        # Space between axis label and tick labels (the scale).
+        label_pad = 8.0
+        for row_idx, summary in enumerate(rows):
             if summary is None:
                 for col_idx in range(n_cols):
                     axes[row_idx, col_idx].set_visible(False)
                 continue
             t = summary["t"]
-            ylim_12 = cls._row_ylim_first_two(summary)
-            ylim_345 = cls._row_ylim_last_three(summary)
+            t0, t1 = float(t[0]), float(t[-1])
+            x_pad = cls.FIG3_X_PAD_FRAC * (t1 - t0 if t1 > t0 else 1.0)
+            # Match Fig. 2 / H5 unit (mm/s); scale factor is 1.0 today.
+            scale = float(cls.FIG2_VELOCITY_TO_MM_S)
+            ylim_12 = tuple(scale * y for y in cls._row_ylim_first_two(summary))
+            ylim_345 = tuple(scale * y for y in cls._row_ylim_last_three(summary))
             for col_idx, (key, title) in enumerate(panel_defs):
                 ax = axes[row_idx, col_idx]
                 if key == "mu":
-                    mu_vals = summary[key].reshape(-1)
+                    mu_vals = summary[key].reshape(-1) * scale
                     med = float(np.nanmedian(mu_vals))
                     sd = float(np.nanstd(mu_vals, ddof=1)) if mu_vals.size > 1 else 0.0
-                    ax.axhline(med, color="black", linewidth=1.8)
-                    ax.axhspan(med - sd, med + sd, color="black", alpha=0.12, linewidth=0)
+                    # Draw over ``t`` (not full-width axhline) so left/right
+                    # padding matches the waveform panels.
+                    ax.plot(t, np.full_like(t, med), color="black", linewidth=1.8)
+                    ax.fill_between(
+                        t, med - sd, med + sd, color="black", alpha=0.12, linewidth=0
+                    )
                 else:
-                    med, q25, q75 = cls._median_iqr_curve(summary[key])
+                    med, q25, q75 = cls._median_iqr_curve(summary[key] * scale)
                     ax.plot(t, med, color="black", linewidth=1.8)
                     ax.fill_between(t, q25, q75, color="black", alpha=0.12, linewidth=0)
-                ax.axhline(0, color="black", linewidth=1.0, linestyle=":")
+                # Zero guide over data only — full-width axhline hides x-padding.
+                ax.plot(
+                    t,
+                    np.zeros_like(t),
+                    color="black",
+                    linewidth=1.0,
+                    linestyle=":",
+                )
                 y_lo, y_hi = ylim_345 if key in zero_cols else ylim_12
                 ax.set_ylim(y_lo, y_hi)
+                # Same left/right data pad as Fig. 2 on every panel.
+                ax.set_xlim(t0 - x_pad, t1 + x_pad)
                 if row_idx == 0:
                     ax.set_title(title, fontsize=11, pad=6)
                 if col_idx == 0:
-                    ax.set_ylabel(f"{row_label} (mm/s)", fontsize=10)
+                    # Same quantity/unit as Fig. 2 and H5 ``unit`` attrs.
+                    ax.set_ylabel("Velocity (mm/s)", fontsize=10, labelpad=label_pad)
+                if row_idx == n_rows - 1 and col_idx == n_cols // 2:
+                    ax.set_xlabel(
+                        "Fraction of cardiac cycle",
+                        fontsize=10,
+                        labelpad=label_pad,
+                    )
                 cls._style_axes(ax, tick_size=9, label_size=10)
                 ax.set_box_aspect(1)
-        fig.supxlabel("Fraction of cardiac cycle", fontsize=11)
-        fig.tight_layout(w_pad=0.55, h_pad=0.55)
+        fig.get_layout_engine().set(w_pad=0.02, h_pad=0.02, wspace=0.08, hspace=0.05)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(out_path, dpi=150, bbox_inches="tight", pad_inches=0.05)
         plt.close(fig)
