@@ -1646,10 +1646,10 @@ class LowRankWaveformCohortFigures:
     )
 
     FIG5_PANELS = (
-        ("beat_period", "Beat period"),
+        ("beat_period", r"Beat period $T$"),
         ("mu", r"Baseline level $\mu$"),
-        ("TPR", r"$R_0$"),
-        ("mpr", "MPR"),
+        ("TPR", r"Total Pulsatile RMS $R_0$"),
+        ("mpr", r"Mean-to-pulsatile ratio MPR"),
     )
     FIG6_PANELS = (
         ("A1", r"$A_1$"),
@@ -1852,6 +1852,8 @@ class LowRankWaveformCohortFigures:
         df: pd.DataFrame,
         metric: str,
         group_order: list[str],
+        *,
+        annotate: bool = False,
     ) -> None:
         labels = [group_display_label(g) for g in group_order]
         positions = {label: idx for idx, label in enumerate(labels)}
@@ -1884,7 +1886,7 @@ class LowRankWaveformCohortFigures:
                 ecolor="black",
                 elinewidth=1.5,
                 capsize=4,
-                zorder=4,
+                zorder=6,
             )
             ax.scatter(
                 x0 + jitter, vals, s=20, color="black", edgecolors="none", zorder=5
@@ -1895,6 +1897,34 @@ class LowRankWaveformCohortFigures:
         ax.set_xlim(-0.5, max(len(labels) - 0.5, 0.5))
         cls._style_axes(ax)
 
+        if annotate and metric in df.columns and is_flicker_triad(group_order):
+            all_vals = df[metric].to_numpy(dtype=float)
+            if np.isfinite(all_vals).any():
+                p, delta = LowRankWaveformStatistics.pooled_test(df, metric)
+                y_min = float(np.nanmin(all_vals))
+                y_max = float(np.nanmax(all_vals))
+                pad = 0.08 * (y_max - y_min if y_max > y_min else 1.0)
+                ax.text(
+                    0.03,
+                    0.97,
+                    (
+                        f"{LowRankWaveformStatistics.format_p(p)}\n"
+                        f"{LowRankWaveformStatistics.format_delta(delta)}"
+                    ),
+                    transform=ax.transAxes,
+                    ha="left",
+                    va="top",
+                    fontsize=8.5,
+                    color="black",
+                    bbox={
+                        "facecolor": "white",
+                        "edgecolor": "none",
+                        "alpha": 0.78,
+                        "pad": 1.2,
+                    },
+                )
+                ax.set_ylim(y_min - pad, y_max + 2.2 * pad)
+
     @classmethod
     def _plot_paired_endpoint_grid(
         cls,
@@ -1902,6 +1932,9 @@ class LowRankWaveformCohortFigures:
         panels: tuple[tuple[str, str], ...],
         out_path: Path,
         group_order: list[str],
+        *,
+        ylabel: str | None = None,
+        annotate: bool = False,
     ) -> Path:
         out_path = Path(out_path)
         vessels = [
@@ -1924,12 +1957,17 @@ class LowRankWaveformCohortFigures:
             df = points_by_vessel.get(vessel, pd.DataFrame())
             for col_idx, (metric, title) in enumerate(panels):
                 ax = axes[row_idx, col_idx]
-                cls._draw_epoch_panel(ax, df, metric, group_order)
+                cls._draw_epoch_panel(
+                    ax, df, metric, group_order, annotate=annotate
+                )
                 ax.set_box_aspect(1)
                 if row_idx == 0:
                     ax.set_title(title, fontsize=11)
                 if col_idx == 0:
-                    ax.set_ylabel(vessel.capitalize(), fontsize=11)
+                    row_label = (
+                        ylabel if ylabel is not None else vessel.capitalize()
+                    )
+                    ax.set_ylabel(row_label, fontsize=11)
         fig.tight_layout(w_pad=1.0, h_pad=1.0)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(out_path, dpi=150, bbox_inches="tight")
@@ -1950,7 +1988,13 @@ class LowRankWaveformCohortFigures:
                 EPOCH_SHORT_TO_KEY.get(label, label) for label in labels.unique()
             )
         return cls._plot_paired_endpoint_grid(
-            points_by_vessel, cls.FIG5_PANELS, out_path, group_order
+            points_by_vessel,
+            cls.FIG5_PANELS,
+            out_path,
+            group_order,
+            # Panels mix units (s, mm/s, dimensionless); titles carry meaning.
+            ylabel="Value",
+            annotate=True,
         )
 
     @classmethod
