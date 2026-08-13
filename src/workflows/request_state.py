@@ -133,6 +133,16 @@ def build_workflow_request(
             ) from exc
         request_mode = input_plan.kind
 
+    input_mode_errors = _postprocess_input_mode_errors(
+        work_selection.postprocesses,
+        request_mode,
+    )
+    if input_mode_errors:
+        raise WorkflowInputError(
+            "Postprocess input",
+            "\n".join(input_mode_errors),
+        )
+
     if input_plan is not None and not input_plan.is_zip:
         reusable_h5_paths = input_plan.h5_paths
     elif input_selection.convention == "holo":
@@ -217,6 +227,21 @@ def resolve_workflow_output_dir(
         default_dir = input_path
     default_dir.mkdir(parents=True, exist_ok=True)
     return default_dir
+
+
+def _postprocess_input_mode_errors(
+    postprocesses: Sequence[object],
+    request_mode: str,
+) -> list[str]:
+    errors: list[str] = []
+    for postprocess in postprocesses:
+        accepted = tuple(getattr(postprocess, "accepted_input_modes", ()))
+        if accepted and request_mode not in accepted:
+            errors.append(
+                f"{postprocess.name} accepts only "
+                f"{' or '.join(accepted)} input; received {request_mode}."
+            )
+    return errors
 
 
 def resolve_base_output_dir(

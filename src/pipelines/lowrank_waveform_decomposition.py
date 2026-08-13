@@ -39,7 +39,6 @@ from .core.base import (
     registerPipeline,
 )
 
-
 T_INPUT = "Processing/VelocityPerBeat/BeatPeriodSeconds/value"
 
 FIGURE_VESSELS = ("artery",)
@@ -228,9 +227,11 @@ def _prepare_figure3_panel_block(
         arr = arr[None, ...]
     n_t = int(arr.shape[0])
     if mask.shape != arr.shape[1:]:
-        return np.full((n_t, 0, 0), np.nan, dtype=float), np.zeros(
-            (0, 0), dtype=bool
-        ), n_t
+        return (
+            np.full((n_t, 0, 0), np.nan, dtype=float),
+            np.zeros((0, 0), dtype=bool),
+            n_t,
+        )
     n_beats = int(mask.shape[0])
     return arr.reshape(n_t, n_beats, -1), mask.reshape(n_beats, -1), n_t
 
@@ -351,6 +352,7 @@ def figure3_panel_mean_pm_std(
 # Packed metrics discovery / load
 # =====================================================================
 
+
 def find_eyeflow_lowrank_group(h5file: h5py.File) -> h5py.Group | None:
     """Return EyeFlow's packed low-rank metrics group, if present."""
     for path in EYEFLOW_LOWRANK_GROUP_CANDIDATES:
@@ -427,10 +429,7 @@ def companion_png_dir_for_result(output_h5_path: Path | str) -> Path:
     """
     output_h5_path = Path(output_h5_path)
     parent = output_h5_path.parent
-    if (
-        parent.name.lower() == H5_OUTPUT_DIRNAME
-        and parent.parent.name.endswith("_AE")
-    ):
+    if parent.name.lower() == H5_OUTPUT_DIRNAME and parent.parent.name.endswith("_AE"):
         return parent.parent / PNG_OUTPUT_DIRNAME
     return parent
 
@@ -441,10 +440,7 @@ def acquisition_fig_stem(
     """Stem used for Figs 2--4 filenames (acquisition name, not ``_pipelines_result``)."""
     output_h5_path = Path(output_h5_path)
     parent = output_h5_path.parent
-    if (
-        parent.name.lower() == H5_OUTPUT_DIRNAME
-        and parent.parent.name.endswith("_AE")
-    ):
+    if parent.name.lower() == H5_OUTPUT_DIRNAME and parent.parent.name.endswith("_AE"):
         try:
             return dataset_stem_from_path(output_h5_path)
         except ValueError:
@@ -591,9 +587,7 @@ def _spectrum_payload_from_source(
         hi_name = "lambda_cumulative_hi" if cumulative else "lambda_hi"
     else:
         group_name = (
-            "fig4_energy_spectrum_cumulative"
-            if cumulative
-            else "fig4_energy_spectrum"
+            "fig4_energy_spectrum_cumulative" if cumulative else "fig4_energy_spectrum"
         )
         y_name = "lambda_cumulative" if cumulative else "lambda"
         lo_name = hi_name = ""
@@ -772,7 +766,7 @@ def load_vessel_data_from_result_h5(
     vessel: str,
     *,
     signal: str = COHORT_SIGNAL,
-    ) -> dict | None:
+) -> dict | None:
     """Load one vessel's packed endpoints from HDF5 for cohort tables / Fig. 4.
 
     EyeFlow already wrote A1, λ_m, per-beat arrays, etc. into the file; this
@@ -880,7 +874,10 @@ def load_vessel_data_from_result_h5(
                     decomposition["singular_energy_fraction"], dtype=float
                 )
 
-        if isinstance(inputs, h5py.Group) and "valid_fraction_columns_per_beat" in inputs:
+        if (
+            isinstance(inputs, h5py.Group)
+            and "valid_fraction_columns_per_beat" in inputs
+        ):
             vfb = np.asarray(inputs["valid_fraction_columns_per_beat"], dtype=float)
         else:
             vfb = np.asarray([], dtype=float)
@@ -893,13 +890,13 @@ def load_vessel_data_from_result_h5(
             beat_period_sd = float("nan")
 
         if "mu_b" in beatwise:
-            period_b = np.full(
-                np.asarray(beatwise["mu_b"]).shape[0], beat_period_mean
-            )
+            period_b = np.full(np.asarray(beatwise["mu_b"]).shape[0], beat_period_mean)
         elif "R0_b" in beatwise:
             period_b = np.full(np.asarray(beatwise["R0_b"]).shape[0], beat_period_mean)
         elif "R0" in per_beat_svd:
-            period_b = np.full(np.asarray(per_beat_svd["R0"]).shape[0], beat_period_mean)
+            period_b = np.full(
+                np.asarray(per_beat_svd["R0"]).shape[0], beat_period_mean
+            )
         else:
             period_b = np.asarray([], dtype=float)
 
@@ -978,9 +975,7 @@ def metrics_from_lowrank_group(
     metrics = _flatten_h5_group(group)
     if not veins_flag:
         metrics = {
-            key: value
-            for key, value in metrics.items()
-            if not key.startswith("vein/")
+            key: value for key, value in metrics.items() if not key.startswith("vein/")
         }
     resolved: list[str] = []
     for source_name in SOURCE_NAMES:
@@ -1037,9 +1032,7 @@ def ingest_lowrank_from_h5(
             "input HDF5. Run EyeFlow lowrank_waveform_decomposition first."
         )
 
-    metrics, resolved = metrics_from_lowrank_group(
-        root, veins_flag=bool(veins_flag)
-    )
+    metrics, resolved = metrics_from_lowrank_group(root, veins_flag=bool(veins_flag))
     if not resolved:
         raise ValueError(
             "EyeFlow low-rank metrics group is present but no vessel/signal "
@@ -1461,9 +1454,7 @@ class LowRankWaveformAcquisitionFigures:
                     t_s = t_s[:n]
                     xlabel = "Time (s)"
                     if np.isfinite(dt_s) and dt_s > 0:
-                        stride = max(
-                            1, int(round(cls.FIG2_WHISKER_INTERVAL_S / dt_s))
-                        )
+                        stride = max(1, int(round(cls.FIG2_WHISKER_INTERVAL_S / dt_s)))
                     else:
                         stride = 15
                 elif np.isfinite(dt_s) and dt_s > 0:
@@ -1607,9 +1598,7 @@ class LowRankWaveformAcquisitionFigures:
         """Fig. 3: arterial v, mu, w, a1u1, a2u2 from packed modes."""
         h5_path = Path(h5_path)
         out_path = Path(out_path)
-        variability_method = normalize_figure3_variability_method(
-            variability_method
-        )
+        variability_method = normalize_figure3_variability_method(variability_method)
         svd_method = normalize_svd_method(svd_method)
         rows: list[dict[str, np.ndarray] | None] = []
         for vessel in vessels or FIGURE_VESSELS:
@@ -1825,9 +1814,7 @@ class LowRankWaveformAcquisitionFigures:
         out_path = Path(out_path)
         method = normalize_svd_method(svd_method)
         wanted = list(vessels or FIGURE_VESSELS)
-        plot_vessels = [
-            v for v in wanted if vessel_bundle.get(v) is not None
-        ] or wanted
+        plot_vessels = [v for v in wanted if vessel_bundle.get(v) is not None] or wanted
         n_keep = SPECTRUM_N_MODES
         fig_h = 3.0
         fig, axes = plt.subplots(

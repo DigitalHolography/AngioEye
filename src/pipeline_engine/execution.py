@@ -222,14 +222,6 @@ def run_postprocesses(
             f"per-postprocess context build [{descriptor_name}]",
             time.monotonic() - context_started_at,
         )
-        log(f"[POST] Running {descriptor.name}...")
-        if skipped_files:
-            skipped_message = (
-                f"{descriptor.name} skipped {len(skipped_files)} file(s) "
-                "without required pipeline data."
-            )
-            failures.append(skipped_message)
-            log(f"[POST WARN] {skipped_message}")
         has_pipeline_requirements = bool(
             getattr(descriptor, "required_pipeline_options", ())
             or getattr(descriptor, "required_pipelines", ())
@@ -238,6 +230,25 @@ def run_postprocesses(
             log(f"[POST SKIP] {descriptor.name}: no compatible input files.")
             advance_progress(1.0)
             continue
+        minimum_input_files = max(
+            1,
+            int(getattr(descriptor, "minimum_input_files", 1)),
+        )
+        if processed_files and len(processed_files) < minimum_input_files:
+            log(
+                f"[POST SKIP] {descriptor.name}: requires at least "
+                f"{minimum_input_files} compatible acquisition(s); received "
+                f"{len(processed_files)}."
+            )
+            advance_progress(1.0)
+            continue
+        log(f"[POST] Running {descriptor.name}...")
+        if skipped_files:
+            skipped_message = (
+                f"{descriptor.name} skipped {len(skipped_files)} file(s) "
+                "without required pipeline data."
+            )
+            log(f"[POST SKIP] {skipped_message}")
         try:
             run_started_at = time.monotonic()
             result = postprocess.run(context)

@@ -6,8 +6,8 @@ from input_output.eyeflow_schema import (
     BEAT_PERIOD,
     SEGMENT_VELOCITY_PER_BEAT,
     VELOCITY_PER_BEAT,
-    has_path,
-    require_dataset,
+    candidate_paths,
+    resolve_path,
 )
 from math_utils import (
     harmonic_pack as build_harmonic_pack,
@@ -1548,7 +1548,21 @@ class ArterialSegExample(ProcessPipeline):
             "E_slope": r"$E_{\mathrm{slope}}=\frac{T^3}{M_0^2}\int_0^T \dot v(t)^2\,dt$",
         }
 
-        T = np.asarray(require_dataset(h5file, self.T_input))
+        T_path = resolve_path(h5file, self.T_input)
+        if T_path is None:
+            expected_paths = candidate_paths(self.T_input)
+            raise ValueError(
+                "Missing beat-period data required by waveform_shape_metrics. "
+                f"Expected one of: {', '.join(expected_paths)}"
+            )
+        T = np.asarray(h5file[T_path])
+        if T.ndim == 1:
+            T = T.reshape(1, -1)
+        if T.ndim != 2 or T.shape[0] != 1:
+            raise ValueError(
+                "Invalid beat-period data for waveform_shape_metrics: "
+                f"{T_path} has shape {T.shape}; expected (1, n_beats)."
+            )
         metrics = {}
 
         vessel_configs = [
@@ -1570,33 +1584,27 @@ class ArterialSegExample(ProcessPipeline):
 
         for cfg in vessel_configs:
             vessel_prefix = cfg["prefix"]
-
-            have_seg = (
-                has_path(h5file, cfg["v_raw_segment_input"])
-                and has_path(h5file, cfg["v_band_segment_input"])
+            raw_segment_path = resolve_path(h5file, cfg["v_raw_segment_input"])
+            band_segment_path = resolve_path(
+                h5file, cfg["v_band_segment_input"]
             )
+
+            have_seg = raw_segment_path is not None and band_segment_path is not None
             if have_seg:
-                v_raw_seg = np.asarray(
-                    require_dataset(h5file, cfg["v_raw_segment_input"])
-                )
-                v_band_seg = np.asarray(
-                    require_dataset(h5file, cfg["v_band_segment_input"])
-                )
+                v_raw_seg = np.asarray(h5file[raw_segment_path])
+                v_band_seg = np.asarray(h5file[band_segment_path])
                 self._pack_segment_outputs(
                     metrics, vessel_prefix, v_raw_seg, v_band_seg, T
                 )
 
-            have_glob = (
-                has_path(h5file, cfg["v_raw_global_input"])
-                and has_path(h5file, cfg["v_band_global_input"])
+            raw_global_path = resolve_path(h5file, cfg["v_raw_global_input"])
+            band_global_path = resolve_path(
+                h5file, cfg["v_band_global_input"]
             )
+            have_glob = raw_global_path is not None and band_global_path is not None
             if have_glob:
-                v_raw_gl = np.asarray(
-                    require_dataset(h5file, cfg["v_raw_global_input"])
-                )
-                v_band_gl = np.asarray(
-                    require_dataset(h5file, cfg["v_band_global_input"])
-                )
+                v_raw_gl = np.asarray(h5file[raw_global_path])
+                v_band_gl = np.asarray(h5file[band_global_path])
                 self._pack_global_outputs(
                     metrics,
                     vessel_prefix,
@@ -1605,5 +1613,11 @@ class ArterialSegExample(ProcessPipeline):
                     T,
                     latex_formulas,
                 )
+
+        if not metrics:
+            raise ValueError(
+                "No compatible per-beat artery or vein waveforms were found. "
+                "Run EyeFlow velocity-per-beat processing before this pipeline."
+            )
 
         return ProcessResult(metrics=metrics)

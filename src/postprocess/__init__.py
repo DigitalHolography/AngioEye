@@ -101,6 +101,10 @@ def _discover_postprocesses() -> tuple[
                 )
             ),
             visibility=getattr(cls, "visibility", "visible"),
+            minimum_input_files=getattr(cls, "minimum_input_files", 1),
+            accepted_input_modes=tuple(
+                getattr(cls, "accepted_input_modes", ())
+            ),
         )
         if is_available:
             available.append(desc)

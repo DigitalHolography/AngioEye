@@ -32,7 +32,7 @@
     "Variability and heterogeneity tables": false,
     "groups comparison dashboard": false,
     "HTML summary": false,
-    "Low-rank waveform cohort figures": true
+    "Low-rank waveform cohort figures": false
   },
   "persist_source": false,
   "ui_mode": "minimal"

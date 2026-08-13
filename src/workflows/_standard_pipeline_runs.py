@@ -89,6 +89,14 @@ def run_filesystem_pipeline_run(
         "filesystem pipeline run: discover/build file jobs",
         time.monotonic() - planning_started_at,
     )
+    if not pipelines:
+        result.processed_input_paths.extend(job.h5_path for job in jobs)
+        log(
+            "[PIPELINE] No pipelines selected; source HDF5 files will be "
+            "passed directly to the selected postprocess steps."
+        )
+        return result
+
     pipeline_names = _pipeline_names(pipelines)
     use_process_pool = settings.process_workers > 1 and (
         _can_run_pipeline_batches_in_process_pool(
@@ -338,6 +346,13 @@ def run_zip_pipeline_run(
     idle_callback: Callable[[], None] | None = None,
 ) -> PipelineRunResult:
     result = PipelineRunResult()
+    if not pipelines:
+        log(
+            "[PIPELINE] No pipelines selected; the source ZIP will be passed "
+            "directly to the selected postprocess steps."
+        )
+        return result
+
     pipeline_names = _pipeline_names(pipelines)
     use_process_pool = settings.process_workers > 1 and (
         _can_run_pipeline_batches_in_process_pool(

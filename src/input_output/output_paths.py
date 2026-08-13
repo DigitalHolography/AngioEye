@@ -58,7 +58,7 @@ def h5_output_parent(
 
 
 def cohort_results_dir(output_root: str | Path) -> Path:
-    """Return the batch directory for cohort-only products (Figs 5–7)."""
+    """Return the shared root for cohort-only ``h5`` and ``png`` products."""
     return Path(output_root) / COHORT_RESULTS_DIRNAME
 
 

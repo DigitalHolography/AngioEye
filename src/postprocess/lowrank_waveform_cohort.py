@@ -1,4 +1,4 @@
-"""Cohort low-rank Figs 4--8 and ``lowrank_cohort.h5`` from packed result H5s.
+"""Cohort low-rank Figs 4--8 and ``lowrank_cohort.h5`` from EyeFlow H5s.
 
 Joint-SVD Figs 4--8 keep the article acquisition scalars; a parallel
 ``*_pb.png`` set uses ``median_b`` of packed per-beat SVD endpoints (ρ is
@@ -12,10 +12,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import unicodedata
 import warnings
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from itertools import combinations
 from pathlib import Path
 
 import h5py
@@ -23,12 +25,19 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.ticker import FuncFormatter, LogLocator, NullFormatter
 import numpy as np
 import pandas as pd
+from matplotlib.ticker import FuncFormatter, LogLocator, NullFormatter
 from scipy.stats import kruskal, linregress, mannwhitneyu, spearmanr
 
-from input_output import cohort_results_dir
+from input_output import (
+    COHORT_RESULTS_DIRNAME,
+    H5_OUTPUT_DIRNAME,
+    cohort_results_dir,
+    find_hdf5_inputs,
+    h5_output_dir,
+    png_output_dir,
+)
 from input_output.archive_io import extracted_zip_tree
 from input_output.hdf5_io import (
     UTF8_STRING_DTYPE,
@@ -37,7 +46,6 @@ from input_output.hdf5_io import (
     write_value_dataset,
 )
 from input_output.hdf5_schema import ANGIOEYE_POSTPROCESS_ROOT
-
 from pipelines.lowrank_waveform_decomposition import (
     SPECTRUM_N_MODES,
     SVD_METHODS,
@@ -45,12 +53,11 @@ from pipelines.lowrank_waveform_decomposition import (
     aggregate_rho,
     coerce_beat_spectra,
     enabled_vessels,
+    find_eyeflow_lowrank_group,
     finite_std,
-    find_lowrank_result_h5s,
     is_usable_beat_spectra,
     load_acquisition_from_result_h5,
     mean_pm_std,
-    result_h5_has_lowrank,
 )
 
 from .core.base import (
@@ -59,7 +66,6 @@ from .core.base import (
     PostprocessResult,
     registerPostprocess,
 )
-
 
 # =====================================================================
 # Group / epoch identity
@@ -83,6 +89,9 @@ EPOCH_ALIASES = {
     "baseline2": "baseline2",
 }
 _LEADING_INDEX_RE = re.compile(r"^\d+[\s_\-]*")
+_NUMBERED_GROUP_RE = re.compile(
+    r"^(?P<index>\d+)_(?P<label>[A-Za-z0-9]+(?:[_-][A-Za-z0-9]+)*)$"
+)
 _PATIENT_ID_RE = re.compile(r"^(\d{6})")
 _FIG_LABEL_SIZE = 14
 _FIG_TICK_SIZE = 12
@@ -109,9 +118,22 @@ def epoch_key_from_folder(name: str) -> str | None:
 
 
 def group_display_label(group: str) -> str:
-    """B1 / Flicker / B2 when the folder is a flicker epoch, else the folder name."""
+    """Visible label with an indexed folder's numeric prefix removed.
+
+    The suffix is preserved exactly, including case: ``1_BL1`` becomes
+    ``BL1`` and ``2_Flicker`` becomes ``Flicker``.
+    """
+    match = _NUMBERED_GROUP_RE.fullmatch(group.strip())
+    if match is not None:
+        return match.group("label")
     key = epoch_key_from_folder(group)
     return EPOCH_SHORT[key] if key is not None else group
+
+
+def group_analysis_label(group: str) -> str:
+    """Canonical flicker identity used by statistics, else the display label."""
+    key = epoch_key_from_folder(group)
+    return EPOCH_SHORT[key] if key is not None else group_display_label(group)
 
 
 def _group_sort_key(group: str | None) -> tuple:
@@ -139,9 +161,9 @@ def ordered_groups(groups: Iterable[str | None]) -> list[str]:
     keys = [epoch_key_from_folder(g) for g in ordered]
     if set(keys) == set(EPOCH_ORDER) and all(
         key is not None and not _LEADING_INDEX_RE.match(g.strip())
-        for g, key in zip(ordered, keys)
+        for g, key in zip(ordered, keys, strict=True)
     ):
-        by_key = {key: g for g, key in zip(ordered, keys)}
+        by_key = {key: g for g, key in zip(ordered, keys, strict=True)}
         return [by_key[epoch] for epoch in EPOCH_ORDER]
     return ordered
 
@@ -174,10 +196,14 @@ def classify_cohort(
     """
     records: list[tuple[str | None, Path]] = []
     input_root = Path(input_root)
+    resolved_input_root = input_root.resolve()
     for h5_path in h5_paths:
         h5_path = Path(h5_path)
         try:
-            rel = h5_path.relative_to(input_root)
+            # On Windows, ``resolve`` can turn a mapped drive (for example Z:)
+            # into its UNC path. Normalize both sides before comparing so paths
+            # that name the same network file are not incorrectly skipped.
+            rel = h5_path.resolve().relative_to(resolved_input_root)
         except ValueError:
             continue
         group = rel.parts[0] if len(rel.parts) > 1 else None
@@ -201,19 +227,341 @@ def resolve_cohort_root(path: Path | str) -> Path:
         and not child.name.startswith(".")
         and child.name != "__MACOSX"
     )
-    return children[0] if len(children) == 1 else path
+    if len(children) != 1:
+        return path
+    # A lone numbered child is the cohort's only group, not a ZIP wrapper.
+    if _NUMBERED_GROUP_RE.fullmatch(children[0].name):
+        return path
+    return children[0]
+
+
+class CohortLayoutError(ValueError):
+    """The selected input does not use the numbered EyeFlow cohort layout."""
+
+
+@dataclass(frozen=True)
+class CohortInputLayout:
+    """Validated EyeFlow inputs grouped by consecutively numbered folders."""
+
+    root: Path
+    h5_paths: tuple[Path, ...]
+    group_order: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class CohortGroup:
+    """One numbered cohort folder and its inferred analysis role."""
+
+    folder: str
+    index: int
+    label: str
+    role: str
+
+
+@dataclass(frozen=True)
+class CohortProtocol:
+    """General protocol inferred from numbered folder labels.
+
+    The folder suffix is always the public label. Roles are deliberately
+    conservative: reference/intervention contrasts are enabled only when at
+    least one suffix is an unambiguous baseline/control alias.
+    """
+
+    groups: tuple[CohortGroup, ...]
+    kind: str
+    contrast_available: bool
+
+    @property
+    def group_order(self) -> tuple[str, ...]:
+        return tuple(group.folder for group in self.groups)
+
+    @property
+    def group_labels(self) -> tuple[str, ...]:
+        return tuple(group.label for group in self.groups)
+
+    @property
+    def group_roles(self) -> tuple[str, ...]:
+        return tuple(group.role for group in self.groups)
+
+    def role_for(self, folder: str) -> str:
+        for group in self.groups:
+            if group.folder == folder:
+                return group.role
+        return "unclassified"
+
+
+_REFERENCE_TOKEN_RE = re.compile(
+    r"^(?:bl|b|base|baseline|ctrl|ctl|control|ref|reference)(?:group)?(?P<ordinal>[12])?$"
+)
+_NUMBER_WORDS = {"one": "1", "first": "1", "two": "2", "second": "2"}
+
+
+def _normalized_role_token(label: str) -> str:
+    """Case/separator/camel-insensitive token used only for role inference."""
+    ascii_text = (
+        unicodedata.normalize("NFKD", str(label))
+        .encode("ascii", "ignore")
+        .decode("ascii")
+    )
+    # The compact form handles BL_1, baseline-1, BaselineOne and BASELINE1.
+    compact = re.sub(r"[^a-z0-9]+", "", ascii_text.casefold())
+    for word, digit in _NUMBER_WORDS.items():
+        if compact.endswith(word):
+            compact = compact[: -len(word)] + digit
+            break
+    return compact
+
+
+def _reference_ordinal(label: str) -> int | None:
+    """Return 1/2 for numbered aliases, 0 for plain aliases, else None."""
+    match = _REFERENCE_TOKEN_RE.fullmatch(_normalized_role_token(label))
+    if match is None:
+        return None
+    ordinal = match.group("ordinal")
+    return int(ordinal) if ordinal else 0
+
+
+def infer_cohort_protocol(groups: Iterable[str]) -> CohortProtocol:
+    """Infer safe roles while supporting any positive number of groups.
+
+    Examples include BL/CTRL aliases in any case, with separators or number
+    words (``BL1``, ``baseline_one``, ``ControlTwo``). Unrecognized layouts
+    remain valid and receive generic roles; their descriptive, omnibus and
+    pairwise analyses still run without inventing a reference contrast.
+    """
+    parsed: list[tuple[int, str, str, int | None]] = []
+    for fallback_index, folder in enumerate(groups, start=1):
+        match = _NUMBERED_GROUP_RE.fullmatch(str(folder).strip())
+        index = int(match.group("index")) if match is not None else fallback_index
+        label = (
+            match.group("label") if match is not None else group_display_label(folder)
+        )
+        parsed.append((index, str(folder), label, _reference_ordinal(label)))
+    parsed.sort(key=lambda item: item[0])
+    n_groups = len(parsed)
+    if n_groups == 0:
+        return CohortProtocol((), "empty", False)
+
+    reference_positions = [
+        position for position, item in enumerate(parsed) if item[3] is not None
+    ]
+    intervention_positions = [
+        position for position, item in enumerate(parsed) if item[3] is None
+    ]
+    contrast_available = bool(reference_positions and intervention_positions)
+
+    roles = [f"group_{position + 1}" for position in range(n_groups)]
+    if n_groups == 1:
+        roles[0] = "reference" if reference_positions else "single_group"
+        kind = "single_group"
+        contrast_available = False
+    elif contrast_available:
+        for sequence, position in enumerate(reference_positions, start=1):
+            ordinal = parsed[position][3]
+            if ordinal in (1, 2):
+                roles[position] = f"reference_{ordinal}"
+            elif len(reference_positions) == 1:
+                roles[position] = "reference"
+            else:
+                roles[position] = f"reference_{sequence}"
+        for sequence, position in enumerate(intervention_positions, start=1):
+            roles[position] = (
+                "intervention"
+                if len(intervention_positions) == 1
+                else f"intervention_{sequence}"
+            )
+        if n_groups == 2:
+            kind = "reference_vs_intervention"
+        elif n_groups == 3 and len(reference_positions) == 2:
+            kind = "reference_intervention_reference"
+        else:
+            kind = "multi_group_reference_comparison"
+    else:
+        kind = f"unclassified_{n_groups}_group"
+
+    return CohortProtocol(
+        tuple(
+            CohortGroup(folder=folder, index=index, label=label, role=role)
+            for (index, folder, label, _marker), role in zip(parsed, roles, strict=True)
+        ),
+        kind,
+        contrast_available,
+    )
+
+
+def _is_generated_output_h5(path: Path, root: Path) -> bool:
+    """Exclude standard output trees when validating source EyeFlow H5s."""
+    try:
+        relative = path.resolve().relative_to(root.resolve())
+    except ValueError:
+        return False
+    generated_roots = {
+        COHORT_RESULTS_DIRNAME.lower(),
+        H5_OUTPUT_DIRNAME.lower(),
+    }
+    return bool(relative.parts and relative.parts[0].lower() in generated_roots)
+
+
+def find_cohort_input_h5s(root: Path | str) -> list[Path]:
+    """Return candidate source H5s, excluding earlier cohort products."""
+    root = Path(root)
+    return [
+        path
+        for path in find_hdf5_inputs(root)
+        if not _is_generated_output_h5(path, root)
+    ]
+
+
+def eyeflow_h5_has_lowrank(path: Path | str) -> bool:
+    """True only for an EyeFlow H5 containing packed low-rank metrics."""
+    try:
+        with h5py.File(path, "r") as handle:
+            return find_eyeflow_lowrank_group(handle) is not None
+    except OSError:
+        return False
+
+
+def validate_cohort_layout(
+    h5_paths: Iterable[Path],
+    input_root: Path | str,
+) -> CohortInputLayout:
+    """Validate the explicit ``1_label``, ``2_label`` EyeFlow folder contract.
+
+    A valid cohort has one or more top-level group folders, numbered
+    consecutively from 1. Every selected HDF5 file must sit below one of those
+    folders and expose EyeFlow's low-rank metrics group. Acquisition/Holo trees,
+    files directly in the root, and AngioEye result H5s are therefore rejected.
+    """
+    input_root = Path(input_root)
+    unique_paths: list[Path] = []
+    seen: set[str] = set()
+    for path in h5_paths:
+        candidate = Path(path)
+        key = os.path.normcase(str(candidate.resolve()))
+        if key not in seen:
+            unique_paths.append(candidate)
+            seen.add(key)
+
+    if not unique_paths:
+        raise CohortLayoutError(
+            "no EyeFlow H5 files were found in numbered cohort folders"
+        )
+
+    incompatible = [path for path in unique_paths if not eyeflow_h5_has_lowrank(path)]
+    if incompatible:
+        names = ", ".join(path.name for path in incompatible[:3])
+        remainder = len(incompatible) - 3
+        if remainder > 0:
+            names += f", and {remainder} more"
+        raise CohortLayoutError(
+            "all cohort inputs must be EyeFlow H5 files containing packed "
+            f"low-rank metrics; incompatible file(s): {names}"
+        )
+
+    records, group_order = classify_cohort(unique_paths, input_root)
+    if len(records) != len(unique_paths):
+        raise CohortLayoutError("every EyeFlow H5 must be inside the selected folder")
+    if any(group is None for group, _path in records):
+        raise CohortLayoutError(
+            "EyeFlow H5 files must be inside numbered group folders, not directly "
+            "in the selected folder"
+        )
+    indexed_groups: list[tuple[int, str]] = []
+    invalid_groups: list[str] = []
+    for group in group_order:
+        match = _NUMBERED_GROUP_RE.fullmatch(group)
+        if match is None:
+            invalid_groups.append(group)
+            continue
+        indexed_groups.append((int(match.group("index")), group))
+    if invalid_groups:
+        raise CohortLayoutError(
+            "group folders must use the '<number>_<alphanumeric label>' format; "
+            f"invalid folder(s): {', '.join(invalid_groups)}"
+        )
+
+    indexed_groups.sort(key=lambda item: item[0])
+    indices = [index for index, _group in indexed_groups]
+    expected = list(range(1, len(indexed_groups) + 1))
+    if indices != expected:
+        raise CohortLayoutError(
+            "group folders must be uniquely and consecutively numbered from 1 "
+            f"(found {indices})"
+        )
+
+    ordered_names = tuple(group for _index, group in indexed_groups)
+    return CohortInputLayout(
+        root=input_root,
+        h5_paths=tuple(path for _group, path in records),
+        group_order=ordered_names,
+    )
 
 
 def acqs_by_canonical_epochs(
     acqs_by_group: dict[str, list[dict]],
+    protocol: CohortProtocol | None = None,
 ) -> dict[str, list[dict]]:
-    """Remap folder-keyed acquisition lists onto baseline1 / flicker / baseline2."""
+    """Map inferred reference/intervention roles onto the legacy triad schema."""
     out: dict[str, list[dict]] = {epoch: [] for epoch in EPOCH_ORDER}
     for group, acqs in acqs_by_group.items():
-        key = epoch_key_from_folder(group)
+        role = protocol.role_for(group) if protocol is not None else ""
+        if role == "reference_2":
+            key = "baseline2"
+        elif role.startswith("reference"):
+            key = "baseline1"
+        elif role.startswith("intervention"):
+            key = "flicker"
+        else:
+            key = epoch_key_from_folder(group)
         if key in out:
             out[key].extend(acqs)
     return out
+
+
+def _group_mask(df: pd.DataFrame, group: CohortGroup) -> pd.Series:
+    """Select one group from new tables or older epoch-only frames."""
+    if "group" in df.columns:
+        return df["group"].astype(str) == group.folder
+    if "epoch" not in df.columns:
+        return pd.Series(False, index=df.index, dtype=bool)
+    candidates = {
+        group.folder,
+        group.label,
+        group_analysis_label(group.folder),
+    }
+    return df["epoch"].astype(str).isin(candidates)
+
+
+def _legacy_epoch_for_role(role: str) -> str | None:
+    """Translate a generalized role to the compatibility stats schema."""
+    if role == "reference_2":
+        return EPOCH_SHORT["baseline2"]
+    if role.startswith("reference"):
+        return EPOCH_SHORT["baseline1"]
+    if role.startswith("intervention"):
+        return EPOCH_SHORT["flicker"]
+    return None
+
+
+def _legacy_acquisitions_frame(
+    acquisitions_df: pd.DataFrame,
+    protocol: CohortProtocol,
+) -> pd.DataFrame:
+    """Return a role-labelled copy for the existing stats/confound columns."""
+    frames: list[pd.DataFrame] = []
+    for group in protocol.groups:
+        epoch = _legacy_epoch_for_role(group.role)
+        if epoch is None:
+            key = epoch_key_from_folder(group.folder)
+            epoch = EPOCH_SHORT[key] if key is not None else None
+        if epoch is None:
+            continue
+        selected = acquisitions_df.loc[_group_mask(acquisitions_df, group)].copy()
+        selected["epoch"] = epoch
+        frames.append(selected)
+    if not frames:
+        return acquisitions_df.iloc[0:0].copy()
+    return pd.concat(frames, ignore_index=True)
 
 
 # =====================================================================
@@ -245,6 +593,23 @@ COHORT_DICTIONARY = {
     "columns": {
         "endpoint": "Published symbol for the endpoint.",
         "metric": "Internal acquisitions-table column name.",
+        "group": "Exact numbered source-folder name.",
+        "group_index": "Leading integer from the source-folder name.",
+        "label": "Visible group label: the exact suffix after the first underscore.",
+        "role": "Conservatively inferred reference/intervention role, or a generic role.",
+        "n": "Finite observations contributing to a descriptive row.",
+        "mean": "Arithmetic mean within one group.",
+        "std": "Sample standard deviation within one group; NaN for fewer than two values.",
+        "median": "Median within one group.",
+        "q1": "25th percentile within one group.",
+        "q3": "75th percentile within one group.",
+        "iqr": "Interquartile range (q3 - q1) within one group.",
+        "min": "Minimum within one group.",
+        "max": "Maximum within one group.",
+        "status": "Whether an omnibus test ran or the row is descriptive/insufficient only.",
+        "kw_p_holm": "Kruskal-Wallis p, Holm-adjusted across the endpoint family.",
+        "p_holm": "Pairwise p, Holm-adjusted across group pairs for this endpoint.",
+        "cliffs_delta_b_vs_a": "Cliff's delta for group B relative to group A.",
         "B1": "Baseline1 median [IQR].",
         "Flicker": "Flicker median [IQR].",
         "B2": "Baseline2 median [IQR].",
@@ -268,9 +633,7 @@ COHORT_DICTIONARY = {
             "Spearman correlation of the headline metric vs beat period T, "
             "on B1∪B2 only."
         ),
-        "spearman_p": (
-            "Spearman p-value vs beat period T, on B1∪B2 only."
-        ),
+        "spearman_p": ("Spearman p-value vs beat period T, on B1∪B2 only."),
         "r_squared": (
             "OLS R² of the B1∪B2 fit of endpoint vs beat period T "
             "(the line used for residualization)."
@@ -335,11 +698,35 @@ _INT_COLUMNS = {
     "beat_index",
     "n_valid_columns",
     "n_total_columns",
+    "group_index",
+    "n",
+    "n_groups",
+    "n_groups_with_data",
+    "n_total",
+    "n_a",
+    "n_b",
 }
 _BOOL_COLUMNS = {
     "aggregation_retained",
     "beat_period_retained",
     "retained",
+}
+_FLOAT_COLUMNS = {
+    "mean",
+    "std",
+    "median",
+    "q1",
+    "q3",
+    "iqr",
+    "min",
+    "max",
+    "kw_H",
+    "kw_p",
+    "kw_p_holm",
+    "mannwhitney_U",
+    "p",
+    "p_holm",
+    "cliffs_delta_b_vs_a",
 }
 
 
@@ -442,7 +829,7 @@ class LowRankWaveformStatistics:
                     "cliffs_delta": d,
                 }
                 for (a, b, _, _), p, ph, u, d in zip(
-                    pairs, raw_p, holm_p, raw_U, deltas
+                    pairs, raw_p, holm_p, raw_U, deltas, strict=True
                 )
             ],
             "pooled_p": pooled_p,
@@ -469,7 +856,7 @@ class LowRankWaveformStatistics:
         if p >= 1e-2:
             return f"{p:.3f}"
         exp = int(np.floor(np.log10(p)))
-        mant = p / (10 ** exp)
+        mant = p / (10**exp)
         return f"{mant:.2f}e{exp}"
 
     @classmethod
@@ -616,7 +1003,7 @@ class LowRankWaveformStatistics:
                 }
             )
 
-        for row, holm in zip(rows, cls.holm_adjust(pooled_raw)):
+        for row, holm in zip(rows, cls.holm_adjust(pooled_raw), strict=True):
             row["pooled_p_holm"] = holm
 
         column_order = [
@@ -665,22 +1052,200 @@ class LowRankWaveformStatistics:
         return pd.DataFrame(rows)[column_order]
 
     @classmethod
+    def build_general_tables(
+        cls,
+        acquisitions_df: pd.DataFrame,
+        protocol: CohortProtocol,
+    ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        """Build analyses that are well-defined for any number of groups.
+
+        One-group cohorts receive descriptive rows and an explicit
+        ``descriptive_only`` omnibus status. Two or more groups additionally
+        receive Kruskal-Wallis and all-pairs Mann-Whitney/Cliff's-delta rows.
+        """
+        descriptive_columns = [
+            "endpoint",
+            "metric",
+            "group_index",
+            "group",
+            "label",
+            "role",
+            "n",
+            "mean",
+            "std",
+            "median",
+            "q1",
+            "q3",
+            "iqr",
+            "min",
+            "max",
+        ]
+        omnibus_columns = [
+            "endpoint",
+            "metric",
+            "n_groups",
+            "n_groups_with_data",
+            "n_total",
+            "kw_H",
+            "kw_p",
+            "kw_p_holm",
+            "status",
+        ]
+        pairwise_columns = [
+            "endpoint",
+            "metric",
+            "group_a",
+            "label_a",
+            "role_a",
+            "n_a",
+            "group_b",
+            "label_b",
+            "role_b",
+            "n_b",
+            "mannwhitney_U",
+            "p",
+            "p_holm",
+            "cliffs_delta_b_vs_a",
+        ]
+
+        descriptive_rows: list[dict] = []
+        omnibus_rows: list[dict] = []
+        pairwise_rows: list[dict] = []
+        for metric, endpoint in CANONICAL_ENDPOINTS:
+            group_values: list[tuple[CohortGroup, np.ndarray]] = []
+            for group in protocol.groups:
+                values = (
+                    cls.clean(
+                        acquisitions_df.loc[_group_mask(acquisitions_df, group), metric]
+                    )
+                    if metric in acquisitions_df.columns
+                    else np.asarray([], dtype=float)
+                )
+                group_values.append((group, values))
+                descriptive_rows.append(
+                    {
+                        "endpoint": endpoint,
+                        "metric": metric,
+                        "group_index": group.index,
+                        "group": group.folder,
+                        "label": group.label,
+                        "role": group.role,
+                        "n": int(values.size),
+                        "mean": float(np.mean(values)) if values.size else np.nan,
+                        "std": finite_std(values),
+                        "median": float(np.median(values)) if values.size else np.nan,
+                        "q1": float(np.percentile(values, 25))
+                        if values.size
+                        else np.nan,
+                        "q3": float(np.percentile(values, 75))
+                        if values.size
+                        else np.nan,
+                        "iqr": (
+                            float(np.percentile(values, 75) - np.percentile(values, 25))
+                            if values.size
+                            else np.nan
+                        ),
+                        "min": float(np.min(values)) if values.size else np.nan,
+                        "max": float(np.max(values)) if values.size else np.nan,
+                    }
+                )
+
+            nonempty = [values for _group, values in group_values if values.size]
+            kw_H = kw_p = np.nan
+            if len(protocol.groups) == 1:
+                status = "descriptive_only"
+            elif len(nonempty) < 2:
+                status = "insufficient_groups_with_data"
+            else:
+                status = "ok"
+                concatenated = np.concatenate(nonempty)
+                if concatenated.size and np.ptp(concatenated) == 0:
+                    kw_H, kw_p = 0.0, 1.0
+                else:
+                    try:
+                        result = kruskal(*nonempty)
+                        kw_H, kw_p = float(result.statistic), float(result.pvalue)
+                    except ValueError:
+                        status = "test_not_defined"
+            omnibus_rows.append(
+                {
+                    "endpoint": endpoint,
+                    "metric": metric,
+                    "n_groups": len(protocol.groups),
+                    "n_groups_with_data": len(nonempty),
+                    "n_total": int(sum(values.size for values in nonempty)),
+                    "kw_H": kw_H,
+                    "kw_p": kw_p,
+                    "kw_p_holm": np.nan,
+                    "status": status,
+                }
+            )
+
+            endpoint_pair_rows: list[dict] = []
+            raw_p: list[float] = []
+            for (group_a, values_a), (group_b, values_b) in combinations(
+                group_values, 2
+            ):
+                U = p = np.nan
+                if values_a.size and values_b.size:
+                    result = mannwhitneyu(values_a, values_b, alternative="two-sided")
+                    U, p = float(result.statistic), float(result.pvalue)
+                raw_p.append(p)
+                endpoint_pair_rows.append(
+                    {
+                        "endpoint": endpoint,
+                        "metric": metric,
+                        "group_a": group_a.folder,
+                        "label_a": group_a.label,
+                        "role_a": group_a.role,
+                        "n_a": int(values_a.size),
+                        "group_b": group_b.folder,
+                        "label_b": group_b.label,
+                        "role_b": group_b.role,
+                        "n_b": int(values_b.size),
+                        "mannwhitney_U": U,
+                        "p": p,
+                        "p_holm": np.nan,
+                        "cliffs_delta_b_vs_a": cls.cliffs_delta(values_b, values_a),
+                    }
+                )
+            for row, adjusted in zip(
+                endpoint_pair_rows, cls.holm_adjust(raw_p), strict=True
+            ):
+                row["p_holm"] = adjusted
+            pairwise_rows.extend(endpoint_pair_rows)
+
+        omnibus_adjusted = cls.holm_adjust([row["kw_p"] for row in omnibus_rows])
+        for row, adjusted in zip(omnibus_rows, omnibus_adjusted, strict=True):
+            row["kw_p_holm"] = adjusted
+
+        return (
+            pd.DataFrame(descriptive_rows, columns=descriptive_columns),
+            pd.DataFrame(omnibus_rows, columns=omnibus_columns),
+            pd.DataFrame(pairwise_rows, columns=pairwise_columns),
+        )
+
+    @classmethod
     def build_stats_tables(
         cls,
         collection: CohortCollection,
         confounds: LowRankWaveformConfounds,
     ) -> tuple[dict[str, pd.DataFrame], dict[str, pd.DataFrame]]:
-        """``stats`` / ``confounds`` frames for the flicker triad (else empty)."""
+        """Build ``stats`` / ``confounds`` frames for every cohort vessel.
+
+        Non-triad cohorts retain the complete table schemas with unavailable
+        epoch comparisons represented by zero counts and NaN values.
+        """
+        protocol = infer_cohort_protocol(collection.group_order)
         stats_by_vessel: dict[str, pd.DataFrame] = {}
         confounds_by_vessel: dict[str, pd.DataFrame] = {}
-        if not collection.flicker_protocol:
-            return stats_by_vessel, confounds_by_vessel
 
         for vessel, acquisitions_df in collection.points_by_vessel.items():
             grid = confounds.build_grid(
-                acqs_by_canonical_epochs(collection.acqs_by_vessel[vessel])
+                acqs_by_canonical_epochs(collection.acqs_by_vessel[vessel], protocol)
             )
-            stats_by_vessel[vessel] = cls.build_stats_table(acquisitions_df, grid)
+            legacy_df = _legacy_acquisitions_frame(acquisitions_df, protocol)
+            stats_by_vessel[vessel] = cls.build_stats_table(legacy_df, grid)
             confounds_by_vessel[vessel] = grid
         return stats_by_vessel, confounds_by_vessel
 
@@ -739,12 +1304,10 @@ class LowRankWaveformConfounds:
         fit = linregress(base_periods[mask], base_values[mask])
         slope = float(fit.slope)
         intercept = float(fit.intercept)
-        r_squared = float(fit.rvalue ** 2)
+        r_squared = float(fit.rvalue**2)
 
         flicker_values = np.asarray(epoch_values.get("flicker", []), dtype=float)
-        flicker_periods = np.asarray(
-            epoch_beat_periods.get("flicker", []), dtype=float
-        )
+        flicker_periods = np.asarray(epoch_beat_periods.get("flicker", []), dtype=float)
         fl_mask = np.isfinite(flicker_values) & np.isfinite(flicker_periods)
         r_squared_flicker = float("nan")
         if int(np.sum(fl_mask)) >= 2:
@@ -952,9 +1515,7 @@ class LowRankWaveformConfounds:
             ps = [float(r["pooled_p"]) for r in rows]
             out[str(metric)] = {
                 "n_combinations": len(rows),
-                "n_significant": int(
-                    sum(1 for p in ps if np.isfinite(p) and p < 0.05)
-                ),
+                "n_significant": int(sum(1 for p in ps if np.isfinite(p) and p < 0.05)),
                 "aggregation_retained": cls._combination_retained(agg_rows),
                 "beat_period_retained": cls._combination_retained(period_rows),
                 "retained": cls._combination_retained(rows),
@@ -966,18 +1527,48 @@ class LowRankWaveformConfounds:
 # Figure annotations (p / Cliff's δ on Figs 6--8)
 # =====================================================================
 
+
 def _pooled_test(df: pd.DataFrame, metric: str) -> tuple[float, float]:
     """Mann-Whitney p and Cliff's δ for Flicker vs pooled Baseline (B1∪B2)."""
     baseline = LowRankWaveformStatistics.clean(
         df.loc[df["epoch"].isin(["B1", "B2"]), metric]
     )
-    flicker = LowRankWaveformStatistics.clean(
-        df.loc[df["epoch"] == "Flicker", metric]
-    )
+    flicker = LowRankWaveformStatistics.clean(df.loc[df["epoch"] == "Flicker", metric])
     if baseline.size < 2 or flicker.size < 2:
         return float("nan"), float("nan")
     p = float(mannwhitneyu(baseline, flicker, alternative="two-sided").pvalue)
     return p, LowRankWaveformStatistics.cliffs_delta(flicker, baseline)
+
+
+def _protocol_contrast_test(
+    df: pd.DataFrame,
+    metric: str,
+    protocol: CohortProtocol,
+) -> tuple[float, float]:
+    """Pooled inferred intervention-vs-reference test for any group count."""
+    reference_parts = [
+        df.loc[_group_mask(df, group), metric].to_numpy(dtype=float)
+        for group in protocol.groups
+        if group.role.startswith("reference") and metric in df.columns
+    ]
+    intervention_parts = [
+        df.loc[_group_mask(df, group), metric].to_numpy(dtype=float)
+        for group in protocol.groups
+        if group.role.startswith("intervention") and metric in df.columns
+    ]
+    reference = LowRankWaveformStatistics.clean(
+        np.concatenate(reference_parts) if reference_parts else []
+    )
+    intervention = LowRankWaveformStatistics.clean(
+        np.concatenate(intervention_parts) if intervention_parts else []
+    )
+    if reference.size < 2 or intervention.size < 2:
+        return float("nan"), float("nan")
+    result = mannwhitneyu(reference, intervention, alternative="two-sided")
+    return (
+        float(result.pvalue),
+        LowRankWaveformStatistics.cliffs_delta(intervention, reference),
+    )
 
 
 def _format_p(p: float) -> str:
@@ -997,6 +1588,7 @@ def _format_delta(delta: float) -> str:
 # =====================================================================
 # Figs 4--8
 # =====================================================================
+
 
 class LowRankWaveformCohortFigures:
     """Article Figs. 4--8, written once per cohort (joint and ``_pb``)."""
@@ -1039,6 +1631,7 @@ class LowRankWaveformCohortFigures:
         """Write Figs. 4--8 (joint and ``_pb``) for the artery cohort."""
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
+        protocol = infer_cohort_protocol(group_order)
         grids = (
             ("fig6_nonsvd_endpoints.png", cls.FIG5_PANELS),
             ("fig7_lowrank_endpoints.png", cls.FIG6_PANELS),
@@ -1076,6 +1669,7 @@ class LowRankWaveformCohortFigures:
                     / prefixed_filename("fig4_variance_fraction.png", patient_id),
                     points_by_vessel,
                     cumulative=False,
+                    group_order=group_order,
                 )
             )
             written.append(
@@ -1086,15 +1680,17 @@ class LowRankWaveformCohortFigures:
                     ),
                     points_by_vessel,
                     cumulative=True,
+                    group_order=group_order,
                 )
             )
-            if is_flicker_triad(group_order):
+            if protocol.contrast_available:
                 written.append(
                     cls._save_spectrum_ratio(
                         out_dir
                         / prefixed_filename("fig5_spectrum_ratio.png", patient_id),
                         points_by_vessel,
                         cumulative=False,
+                        group_order=group_order,
                     )
                 )
                 written.append(
@@ -1105,6 +1701,7 @@ class LowRankWaveformCohortFigures:
                         ),
                         points_by_vessel,
                         cumulative=True,
+                        group_order=group_order,
                     )
                 )
         beats = beats_by_vessel or {}
@@ -1120,6 +1717,7 @@ class LowRankWaveformCohortFigures:
                     / prefixed_filename("fig4_variance_fraction_pb.png", patient_id),
                     pb_spectrum_source,
                     cumulative=False,
+                    group_order=group_order,
                 )
             )
             written.append(
@@ -1130,6 +1728,7 @@ class LowRankWaveformCohortFigures:
                     ),
                     pb_spectrum_source,
                     cumulative=True,
+                    group_order=group_order,
                 )
             )
         return sorted(written, key=lambda path: path.name)
@@ -1144,44 +1743,46 @@ class LowRankWaveformCohortFigures:
     def _draw_epoch_panel(
         cls, ax, df: pd.DataFrame, metric: str, group_order: list[str]
     ) -> None:
-        """One endpoint panel: jittered dots, median±SD, pooled p/δ label."""
-        labels = [group_display_label(g) for g in group_order]
-        positions = {label: idx for idx, label in enumerate(labels)}
-        if is_flicker_triad(group_order):
-            for idx, group in enumerate(group_order):
-                if epoch_key_from_folder(group) == "flicker":
-                    ax.axvspan(
-                        idx - 0.5, idx + 0.5, color=cls.FLICKER_SHADE, zorder=0
-                    )
+        """One endpoint panel: one box-and-whisker plus dots per group."""
+        protocol = infer_cohort_protocol(group_order)
+        display_labels = list(protocol.group_labels)
+        if protocol.contrast_available:
+            for idx, group in enumerate(protocol.groups):
+                if group.role.startswith("intervention"):
+                    ax.axvspan(idx - 0.5, idx + 0.5, color=cls.FLICKER_SHADE, zorder=0)
                     ax.axvline(
                         idx - 0.5, color="black", linestyle=":", linewidth=1.5, zorder=1
                     )
                     ax.axvline(
                         idx + 0.5, color="black", linestyle=":", linewidth=1.5, zorder=1
                     )
-                    break
 
-        for label in labels:
+        for x0, group in enumerate(protocol.groups):
             vals = (
-                df.loc[df["epoch"] == label, metric].dropna().to_numpy(dtype=float)
+                df.loc[_group_mask(df, group), metric].dropna().to_numpy(dtype=float)
                 if metric in df.columns
                 else np.asarray([], dtype=float)
             )
             if vals.size == 0:
                 continue
-            x0 = positions[label]
             jitter = (_RNG.random(vals.size) - 0.5) * 0.16
             med = float(np.nanmedian(vals))
-            sd = finite_std(vals)
-            ax.errorbar(
-                [x0],
-                [med],
-                yerr=[sd],
-                fmt="none",
-                ecolor="black",
-                elinewidth=1.5,
-                capsize=4,
-                zorder=4,
+            ax.boxplot(
+                [vals],
+                positions=[x0],
+                widths=0.46,
+                whis=1.5,
+                showfliers=False,
+                patch_artist=True,
+                boxprops={
+                    "facecolor": "white",
+                    "edgecolor": "black",
+                    "linewidth": 1.25,
+                },
+                whiskerprops={"color": "black", "linewidth": 1.25},
+                capprops={"color": "black", "linewidth": 1.25},
+                medianprops={"color": "black", "linewidth": 1.5},
+                zorder=3,
             )
             ax.scatter(
                 x0 + jitter, vals, s=20, color="black", edgecolors="none", zorder=5
@@ -1196,15 +1797,20 @@ class LowRankWaveformCohortFigures:
                 zorder=6,
             )
 
-        ax.set_xticks(list(positions.values()))
-        ax.set_xticklabels(list(positions.keys()), fontsize=9)
-        ax.set_xlim(-0.5, max(len(labels) - 0.5, 0.5))
+        ax.set_xticks(range(len(display_labels)))
+        ax.set_xticklabels(
+            display_labels,
+            fontsize=9,
+            rotation=35 if len(display_labels) > 4 else 0,
+            ha="right" if len(display_labels) > 4 else "center",
+        )
+        ax.set_xlim(-0.5, max(len(display_labels) - 0.5, 0.5))
         cls._style_axes(ax)
 
-        if metric in df.columns and is_flicker_triad(group_order):
+        if metric in df.columns and protocol.contrast_available:
             all_vals = df[metric].to_numpy(dtype=float)
             if np.isfinite(all_vals).any():
-                p, delta = _pooled_test(df, metric)
+                p, delta = _protocol_contrast_test(df, metric, protocol)
                 y_min = float(np.nanmin(all_vals))
                 y_max = float(np.nanmax(all_vals))
                 pad = 0.08 * (y_max - y_min if y_max > y_min else 1.0)
@@ -1238,10 +1844,11 @@ class LowRankWaveformCohortFigures:
         out_path = Path(out_path)
         df = points_by_vessel.get("artery", pd.DataFrame())
         n_cols = len(panels)
+        panel_width = max(cls.PANEL_SIZE, 0.55 * len(group_order))
         fig, axes = plt.subplots(
             1,
             n_cols,
-            figsize=(cls.PANEL_SIZE * n_cols, cls.PANEL_SIZE),
+            figsize=(panel_width * n_cols, cls.PANEL_SIZE),
             squeeze=False,
         )
         for col_idx, (metric, title) in enumerate(panels):
@@ -1258,16 +1865,28 @@ class LowRankWaveformCohortFigures:
         return out_path
 
     @classmethod
-    def _draw_spectrum(cls, ax, df: pd.DataFrame, mode_cols: list[str], *, cumulative: bool) -> None:
-        """Draw Baseline vs Flicker mean±SD singular-value curves on ``ax``."""
-        if not mode_cols or df.empty or "epoch" not in df.columns:
+    def _draw_spectrum(
+        cls,
+        ax,
+        df: pd.DataFrame,
+        mode_cols: list[str],
+        *,
+        cumulative: bool,
+        group_order: list[str] | None = None,
+    ) -> None:
+        """Draw a mean±SD singular-value curve for every numbered group."""
+        if not mode_cols or df.empty or not ({"epoch", "group"} & set(df.columns)):
             return
         plot_modes = np.arange(1, len(mode_cols) + 1)
-        series = (
-            (df["epoch"].isin(["B1", "B2"]), *cls.SPECTRUM_BASELINE),
-            (df["epoch"] == "Flicker", *cls.SPECTRUM_FLICKER),
-        )
-        for mask, color, style, marker in series:
+        identity = df["group"] if "group" in df.columns else df["epoch"]
+        groups = group_order or ordered_groups(identity)
+        protocol = infer_cohort_protocol(groups)
+        color_map = plt.get_cmap("tab10")
+        markers = ("o", "s", "^", "D", "v", "P", "X", "<", ">", "h")
+        for position, group in enumerate(protocol.groups):
+            mask = _group_mask(df, group)
+            color = color_map(position % 10)
+            marker = markers[position % len(markers)]
             vals = df.loc[mask, mode_cols].to_numpy(dtype=float)
             if vals.size == 0:
                 continue
@@ -1280,8 +1899,9 @@ class LowRankWaveformCohortFigures:
                 plot_modes,
                 mean,
                 color=color,
-                linestyle=style,
+                linestyle="-" if position % 2 == 0 else "--",
                 marker=marker,
+                label=group.label,
                 linewidth=1.5,
                 markersize=5,
                 markerfacecolor="white",
@@ -1289,6 +1909,12 @@ class LowRankWaveformCohortFigures:
                 markeredgewidth=1.2,
             )
             ax.fill_between(plot_modes, lo, hi, color=color, alpha=0.12, linewidth=0)
+        if len(protocol.groups) > 1:
+            ax.legend(
+                frameon=False,
+                fontsize=8,
+                ncol=max(1, min(3, (len(protocol.groups) + 5) // 6)),
+            )
 
     @classmethod
     def _save_spectrum(
@@ -1297,6 +1923,7 @@ class LowRankWaveformCohortFigures:
         beats_by_vessel: dict[str, pd.DataFrame] | None,
         *,
         cumulative: bool,
+        group_order: list[str] | None = None,
     ) -> Path:
         """Write the per-mode or cumulative λ spectrum PNG."""
         out_path = Path(out_path)
@@ -1308,7 +1935,13 @@ class LowRankWaveformCohortFigures:
         fig_h = 3.0
         fig, axes = plt.subplots(1, 1, figsize=(2.0 * fig_h, fig_h), squeeze=False)
         ax = axes[0, 0]
-        cls._draw_spectrum(ax, df, mode_cols, cumulative=cumulative)
+        cls._draw_spectrum(
+            ax,
+            df,
+            mode_cols,
+            cumulative=cumulative,
+            group_order=group_order,
+        )
 
         modes = np.arange(1, SPECTRUM_N_MODES + 1)
         ax.set_xticks(modes)
@@ -1342,15 +1975,24 @@ class LowRankWaveformCohortFigures:
         mode_cols: list[str],
         *,
         cumulative: bool,
+        group_order: list[str] | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Return modes and percent flicker/baseline spectrum change."""
         modes = np.arange(1, len(mode_cols) + 1)
-        if df.empty or not mode_cols or "epoch" not in df.columns:
+        if df.empty or not mode_cols or not ({"epoch", "group"} & set(df.columns)):
             return modes, np.full(len(mode_cols), np.nan, dtype=float)
-        baseline = df.loc[df["epoch"].isin(["B1", "B2"]), mode_cols].to_numpy(
-            dtype=float
-        )
-        flicker = df.loc[df["epoch"] == "Flicker", mode_cols].to_numpy(dtype=float)
+        identity = df["group"] if "group" in df.columns else df["epoch"]
+        groups = group_order or ordered_groups(identity)
+        protocol = infer_cohort_protocol(groups)
+        reference_mask = pd.Series(False, index=df.index, dtype=bool)
+        intervention_mask = pd.Series(False, index=df.index, dtype=bool)
+        for group in protocol.groups:
+            if group.role.startswith("reference"):
+                reference_mask |= _group_mask(df, group)
+            elif group.role.startswith("intervention"):
+                intervention_mask |= _group_mask(df, group)
+        baseline = df.loc[reference_mask, mode_cols].to_numpy(dtype=float)
+        flicker = df.loc[intervention_mask, mode_cols].to_numpy(dtype=float)
         if baseline.size == 0 or flicker.size == 0:
             return modes, np.full(len(mode_cols), np.nan, dtype=float)
         with np.errstate(all="ignore"):
@@ -1374,6 +2016,7 @@ class LowRankWaveformCohortFigures:
         points_by_vessel: dict[str, pd.DataFrame] | None,
         *,
         cumulative: bool,
+        group_order: list[str] | None = None,
     ) -> Path:
         """Write Fig. 5 spectrum ratio PNG from acquisition-level singular values."""
         out_path = Path(out_path)
@@ -1384,6 +2027,7 @@ class LowRankWaveformCohortFigures:
             df,
             mode_cols,
             cumulative=cumulative,
+            group_order=group_order,
         )
 
         fig_h = 3.0
@@ -1412,11 +2056,7 @@ class LowRankWaveformCohortFigures:
         ax.set_xlim(0.5, SPECTRUM_N_MODES + 0.5)
         ax.set_xlabel(r"$m$", fontsize=_FIG_LABEL_SIZE)
         ax.set_ylabel(
-            (
-                r"$100(Q^{\mathrm{cum}}_m-1)$ (%)"
-                if cumulative
-                else r"$100(Q_m-1)$ (%)"
-            ),
+            (r"$100(Q^{\mathrm{cum}}_m-1)$ (%)" if cumulative else r"$100(Q_m-1)$ (%)"),
             fontsize=_FIG_LABEL_SIZE,
         )
         ax.set_box_aspect(0.5)
@@ -1449,9 +2089,7 @@ def _spectrum_mode_cols(df: pd.DataFrame) -> list[str]:
     if df is None or df.empty:
         return []
     return [
-        f"mode{i}"
-        for i in range(1, SPECTRUM_N_MODES + 1)
-        if f"mode{i}" in df.columns
+        f"mode{i}" for i in range(1, SPECTRUM_N_MODES + 1) if f"mode{i}" in df.columns
     ]
 
 
@@ -1619,9 +2257,7 @@ def _points_row(
         "n_total_columns": vessel_data["n_total_columns"],
     }
     for m in range(1, SPECTRUM_N_MODES + 1):
-        row[f"mode{m}"] = (
-            float(spectrum[m - 1]) if spectrum.size >= m else float("nan")
-        )
+        row[f"mode{m}"] = float(spectrum[m - 1]) if spectrum.size >= m else float("nan")
     return row
 
 
@@ -1707,6 +2343,8 @@ def collect_payload(
     if not records:
         raise ValueError(f"No acquisition HDF5 files found under {input_root}.")
 
+    protocol = infer_cohort_protocol(group_order)
+    groups_by_folder = {group.folder: group for group in protocol.groups}
     group_keys = list(dict.fromkeys([*group_order, *EPOCH_ORDER]))
     vessels = enabled_vessels(bool(veins))
     acqs_by_vessel = {v: {g: [] for g in group_keys} for v in vessels}
@@ -1728,22 +2366,36 @@ def collect_payload(
                 seq = flat_sequence[vessel]
                 flat_sequence[vessel] += 1
                 label = "ungrouped"
+                group_index = 0
+                role = "unclassified"
             else:
                 acqs_by_vessel[vessel].setdefault(group, [])
                 sequence[vessel].setdefault(group, 0)
                 acqs_by_vessel[vessel][group].append(vessel_data)
                 seq = sequence[vessel][group]
                 sequence[vessel][group] += 1
-                label = group_display_label(group)
-            points_rows[vessel].append(
-                _points_row(vessel, h5_path, seq, label, vessel_data)
+                group_spec = groups_by_folder[group]
+                label = group_spec.label
+                group_index = group_spec.index
+                role = group_spec.role
+            row_identity = {
+                "group": group or "ungrouped",
+                "group_index": group_index,
+                "group_label": label,
+                "group_role": role,
+            }
+            point_row = _points_row(vessel, h5_path, seq, label, vessel_data)
+            point_row.update(row_identity)
+            points_rows[vessel].append(point_row)
+            point_pb_row = _points_row_per_beat(
+                vessel, h5_path, seq, label, vessel_data
             )
-            points_rows_per_beat[vessel].append(
-                _points_row_per_beat(vessel, h5_path, seq, label, vessel_data)
-            )
-            beat_rows[vessel].extend(
-                _beat_rows(vessel, h5_path, seq, label, vessel_data)
-            )
+            point_pb_row.update(row_identity)
+            points_rows_per_beat[vessel].append(point_pb_row)
+            acquisition_beats = _beat_rows(vessel, h5_path, seq, label, vessel_data)
+            for beat_row in acquisition_beats:
+                beat_row.update(row_identity)
+            beat_rows[vessel].extend(acquisition_beats)
 
     points_by_vessel: dict[str, pd.DataFrame] = {}
     points_by_vessel_per_beat: dict[str, pd.DataFrame] = {}
@@ -1753,13 +2405,13 @@ def collect_payload(
         rows = points_rows[vessel]
         if not rows:
             continue
-        rows.sort(key=lambda r: (_row_sort_key(r["epoch"]), r["acquisition"]))
+        rows.sort(key=lambda r: (r["group_index"], r["acquisition"]))
         pb_rows = points_rows_per_beat[vessel]
-        pb_rows.sort(key=lambda r: (_row_sort_key(r["epoch"]), r["acquisition"]))
+        pb_rows.sort(key=lambda r: (r["group_index"], r["acquisition"]))
         beats = beat_rows[vessel]
         beats.sort(
             key=lambda r: (
-                _row_sort_key(r["epoch"]),
+                r["group_index"],
                 r["acquisition"],
                 r["beat_index"],
             )
@@ -1813,6 +2465,7 @@ def _cohort_root_from_paths(
 # lowrank_cohort.h5 writer
 # =====================================================================
 
+
 def _column_dtype(name: str, series: pd.Series):
     """HDF5-friendly dtype for one DataFrame column."""
     if name in _BOOL_COLUMNS or pd.api.types.is_bool_dtype(series):
@@ -1821,7 +2474,7 @@ def _column_dtype(name: str, series: pd.Series):
         pd.api.types.is_integer_dtype(series) and not pd.api.types.is_bool_dtype(series)
     ):
         return np.int64
-    if pd.api.types.is_float_dtype(series):
+    if name in _FLOAT_COLUMNS or pd.api.types.is_float_dtype(series):
         return np.float64
     return UTF8_STRING_DTYPE
 
@@ -1843,9 +2496,7 @@ def dataframe_to_compound(df: pd.DataFrame) -> np.ndarray:
                 .to_numpy()
             )
         elif kind == "f":
-            rec[col] = pd.to_numeric(series, errors="coerce").to_numpy(
-                dtype=np.float64
-            )
+            rec[col] = pd.to_numeric(series, errors="coerce").to_numpy(dtype=np.float64)
         else:
             rec[col] = series.fillna("").astype(str).to_numpy()
     return rec
@@ -1857,7 +2508,19 @@ def write_compound_dataset(group: h5py.Group, name: str, df: pd.DataFrame) -> No
         del group[name]
     rec = dataframe_to_compound(df)
     if rec.size == 0:
-        group.create_dataset(name, shape=(0,), dtype=rec.dtype)
+        if not rec.dtype.names:
+            group.create_dataset(name, shape=(0,), dtype=np.uint8)
+            return
+        # HDF5 rejects a zero-length compound dataset containing variable-length
+        # strings on some h5py/HDF5 builds. No strings are stored in an empty
+        # table, so a one-byte fixed string preserves the schema safely.
+        empty_dtype = np.dtype(
+            [
+                (field, "S1" if rec.dtype[field].kind == "O" else rec.dtype[field])
+                for field in rec.dtype.names or ()
+            ]
+        )
+        group.create_dataset(name, shape=(0,), dtype=empty_dtype)
     else:
         group.create_dataset(name, data=rec)
 
@@ -1896,9 +2559,7 @@ def validate_stats_confounds(
     conf_endpoints = set(confounds_df["endpoint"].astype(str))
     missing = stats_endpoints - conf_endpoints
     if missing:
-        raise ValueError(
-            f"stats endpoints missing from confounds: {sorted(missing)}"
-        )
+        raise ValueError(f"stats endpoints missing from confounds: {sorted(missing)}")
     for _, row in stats_df.iterrows():
         metric = str(row["metric"])
         n_declared = int(row["n_combinations"])
@@ -1913,7 +2574,11 @@ def validate_stats_confounds(
 def _epoch_counts(acquisitions_df: pd.DataFrame) -> dict[str, int]:
     """Finite-row counts per flicker epoch from the acquisitions table."""
     counts = {"n_B1": 0, "n_Flicker": 0, "n_B2": 0}
-    if acquisitions_df is None or acquisitions_df.empty or "epoch" not in acquisitions_df:
+    if (
+        acquisitions_df is None
+        or acquisitions_df.empty
+        or "epoch" not in acquisitions_df
+    ):
         return counts
     value_counts = acquisitions_df["epoch"].astype(str).value_counts()
     counts["n_B1"] = int(value_counts.get(EPOCH_SHORT["baseline1"], 0))
@@ -1933,6 +2598,9 @@ def write_cohort_h5(
     source_files: list[str] | None = None,
     stats_by_vessel: dict[str, pd.DataFrame] | None = None,
     confounds_by_vessel: dict[str, pd.DataFrame] | None = None,
+    group_statistics_by_vessel: dict[str, pd.DataFrame] | None = None,
+    omnibus_statistics_by_vessel: dict[str, pd.DataFrame] | None = None,
+    pairwise_statistics_by_vessel: dict[str, pd.DataFrame] | None = None,
 ) -> Path:
     """Write acquisitions/beats/stats/confounds as compound datasets.
 
@@ -1941,13 +2609,20 @@ def write_cohort_h5(
     * root attributes — provenance
     * ``dictionary`` — UTF-8 JSON of column / value meanings
     * ``{vessel}/acquisitions``, ``{vessel}/beats`` — compound tables
-    * ``{vessel}/stats``, ``{vessel}/confounds`` — flicker triad only
+    * ``{vessel}/stats``, ``{vessel}/confounds`` — compatibility contrast tables
+    * ``{vessel}/group_statistics`` — per-group descriptive statistics
+    * ``{vessel}/omnibus_statistics`` — Kruskal-Wallis results (N >= 2)
+    * ``{vessel}/pairwise_statistics`` — all-pairs MWU/Holm/effect sizes
     """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     stats_by_vessel = stats_by_vessel or {}
     confounds_by_vessel = confounds_by_vessel or {}
+    group_statistics_by_vessel = group_statistics_by_vessel or {}
+    omnibus_statistics_by_vessel = omnibus_statistics_by_vessel or {}
+    pairwise_statistics_by_vessel = pairwise_statistics_by_vessel or {}
+    protocol = infer_cohort_protocol(group_order)
     dict_text = dictionary_json()
     for vessel, stats_df in stats_by_vessel.items():
         if vessel not in confounds_by_vessel:
@@ -1967,19 +2642,23 @@ def write_cohort_h5(
         primary = acquisitions_by_vessel["artery"]
     elif acquisitions_by_vessel:
         primary = next(iter(acquisitions_by_vessel.values()))
-    root_counts = _epoch_counts(primary if primary is not None else pd.DataFrame())
+    legacy_primary = _legacy_acquisitions_frame(
+        primary if primary is not None else pd.DataFrame(), protocol
+    )
+    root_counts = _epoch_counts(legacy_primary)
 
     with open_h5(output_path, "w") as handle:
         root = handle.require_group(COHORT_H5_ROOT)
-        set_attr_safe(
-            root, "subject", "UNSET" if not patient_id else str(patient_id)
-        )
+        set_attr_safe(root, "subject", "UNSET" if not patient_id else str(patient_id))
         set_attr_safe(
             root,
             "protocol",
-            "Baseline1 / Flicker / Baseline2" if flicker_protocol else "custom",
+            ("Baseline1 / Flicker / Baseline2" if flicker_protocol else protocol.kind),
         )
         set_attr_safe(root, "flicker_protocol", bool(flicker_protocol))
+        set_attr_safe(root, "protocol_kind", protocol.kind)
+        set_attr_safe(root, "contrast_available", protocol.contrast_available)
+        set_attr_safe(root, "n_groups", len(protocol.groups))
         set_attr_safe(root, "n_acquisitions", int(n_acquisitions))
         set_attr_safe(root, "n_baseline1", int(root_counts["n_B1"]))
         set_attr_safe(root, "n_flicker", int(root_counts["n_Flicker"]))
@@ -1987,6 +2666,8 @@ def write_cohort_h5(
         set_attr_safe(root, "svd_methods", list(SVD_METHODS))
         set_attr_safe(root, "beat_aggregations", ["median", "mean"])
         set_attr_safe(root, "group_order", list(group_order))
+        set_attr_safe(root, "group_labels", list(protocol.group_labels))
+        set_attr_safe(root, "group_roles", list(protocol.group_roles))
         set_attr_safe(root, "source_files", list(source_files or []))
         set_attr_safe(
             root,
@@ -1997,7 +2678,9 @@ def write_cohort_h5(
 
         for vessel, acquisitions_df in acquisitions_by_vessel.items():
             vessel_group = root.require_group(str(vessel))
-            counts = _epoch_counts(acquisitions_df)
+            counts = _epoch_counts(
+                _legacy_acquisitions_frame(acquisitions_df, protocol)
+            )
             set_attr_safe(vessel_group, "n_B1", counts["n_B1"])
             set_attr_safe(vessel_group, "n_Flicker", counts["n_Flicker"])
             set_attr_safe(vessel_group, "n_B2", counts["n_B2"])
@@ -2011,6 +2694,21 @@ def write_cohort_h5(
             confounds_df = confounds_by_vessel.get(vessel)
             if confounds_df is not None and not confounds_df.empty:
                 write_compound_dataset(vessel_group, "confounds", confounds_df)
+            group_statistics_df = group_statistics_by_vessel.get(vessel)
+            if group_statistics_df is not None:
+                write_compound_dataset(
+                    vessel_group, "group_statistics", group_statistics_df
+                )
+            omnibus_statistics_df = omnibus_statistics_by_vessel.get(vessel)
+            if omnibus_statistics_df is not None:
+                write_compound_dataset(
+                    vessel_group, "omnibus_statistics", omnibus_statistics_df
+                )
+            pairwise_statistics_df = pairwise_statistics_by_vessel.get(vessel)
+            if pairwise_statistics_df is not None:
+                write_compound_dataset(
+                    vessel_group, "pairwise_statistics", pairwise_statistics_df
+                )
 
     return output_path
 
@@ -2021,12 +2719,22 @@ def write_stats_h5(
     output_dir: Path,
 ) -> Path:
     """Pack ``collection`` into ``{patient_id_}lowrank_cohort.h5`` under output_dir."""
-    stats_by_vessel, confounds_by_vessel = (
-        LowRankWaveformStatistics.build_stats_tables(collection, confounds)
+    stats_by_vessel, confounds_by_vessel = LowRankWaveformStatistics.build_stats_tables(
+        collection, confounds
     )
+    protocol = infer_cohort_protocol(collection.group_order)
+    group_statistics_by_vessel: dict[str, pd.DataFrame] = {}
+    omnibus_statistics_by_vessel: dict[str, pd.DataFrame] = {}
+    pairwise_statistics_by_vessel: dict[str, pd.DataFrame] = {}
+    for vessel, acquisitions_df in collection.points_by_vessel.items():
+        group_table, omnibus_table, pairwise_table = (
+            LowRankWaveformStatistics.build_general_tables(acquisitions_df, protocol)
+        )
+        group_statistics_by_vessel[vessel] = group_table
+        omnibus_statistics_by_vessel[vessel] = omnibus_table
+        pairwise_statistics_by_vessel[vessel] = pairwise_table
     return write_cohort_h5(
-        Path(output_dir)
-        / prefixed_filename(COHORT_H5_BASENAME, collection.patient_id),
+        Path(output_dir) / prefixed_filename(COHORT_H5_BASENAME, collection.patient_id),
         acquisitions_by_vessel=collection.points_by_vessel,
         beats_by_vessel=collection.beats_by_vessel,
         group_order=collection.group_order,
@@ -2035,6 +2743,9 @@ def write_stats_h5(
         source_files=collection.source_files,
         stats_by_vessel=stats_by_vessel,
         confounds_by_vessel=confounds_by_vessel,
+        group_statistics_by_vessel=group_statistics_by_vessel,
+        omnibus_statistics_by_vessel=omnibus_statistics_by_vessel,
+        pairwise_statistics_by_vessel=pairwise_statistics_by_vessel,
     )
 
 
@@ -2044,25 +2755,30 @@ def _run_on_paths(
     output_dir: Path,
     *,
     veins: bool,
+    patient_id: str | None = None,
 ) -> tuple[str, list[Path]]:
-    """Collect packed H5s, write ``lowrank_cohort.h5``, and figures when split."""
-    if not h5_paths:
-        raise ValueError(
-            "No packed AngioEye result H5 files with low-rank metrics were "
-            "found for cohort postprocess. Run lowrank_waveform_decomposition "
-            "first so result H5s contain the metrics."
-        )
-    collection = collect_payload(h5_paths, cohort_root, veins=veins)
+    """Validate and collect EyeFlow H5s, then write the cohort products."""
+    layout = validate_cohort_layout(h5_paths, cohort_root)
+    collection = collect_payload(
+        layout.h5_paths,
+        layout.root,
+        veins=veins,
+    )
+    if collection.patient_id is None and patient_id is not None:
+        collection.patient_id = patient_id
     generated_paths: list[Path] = []
     generated_paths.append(
-        write_stats_h5(collection, LowRankWaveformConfounds(), Path(output_dir))
+        write_stats_h5(
+            collection,
+            LowRankWaveformConfounds(),
+            h5_output_dir(output_dir),
+        )
     )
-    has_cohort_split = len(collection.group_order) >= 2
-    if has_cohort_split and collection.points_by_vessel:
+    if collection.points_by_vessel:
         generated_paths.extend(
             LowRankWaveformCohortFigures.plot_all(
                 collection.points_by_vessel,
-                Path(output_dir),
+                png_output_dir(output_dir),
                 collection.group_order,
                 patient_id=collection.patient_id,
                 beats_by_vessel=collection.beats_by_vessel,
@@ -2074,16 +2790,15 @@ def _run_on_paths(
     for vessel, points_df in collection.points_by_vessel.items():
         acqs_by_group = collection.acqs_by_vessel[vessel]
         n_acq = len(points_df)
-        group_counts = ", ".join(
-            f"{group_display_label(g)}={len(acqs_by_group.get(g, []))}"
-            for g in collection.group_order
-        ) or f"ungrouped={n_acq}"
+        group_counts = (
+            ", ".join(
+                f"{group_display_label(g)}={len(acqs_by_group.get(g, []))}"
+                for g in collection.group_order
+            )
+            or f"ungrouped={n_acq}"
+        )
         vessel_summaries.append(f"{vessel}={n_acq} ({group_counts})")
-    split_note = (
-        f"cohort split={collection.group_order}"
-        if has_cohort_split
-        else "no cohort split (no Figs 5--7)"
-    )
+    split_note = f"cohort groups={collection.group_order}"
     n_rows = sum(len(df) for df in collection.points_by_vessel.values())
     h5_note = generated_paths[0].name if generated_paths else "no stats h5"
     summary = (
@@ -2101,18 +2816,25 @@ def run(
     veins: bool = True,
     result_h5_paths: Iterable[Path] | None = None,
 ) -> tuple[str, list[Path]]:
-    """Build ``lowrank_cohort.h5`` and Figs 4--8 from packed AngioEye result H5s.
+    """Build ``lowrank_cohort.h5`` and Figs 4--8 from grouped EyeFlow H5s.
 
-    Accepts a cohort folder, a ZIP of that tree, or an explicit
-    ``result_h5_paths`` list. Writes under ``output_dir``.
+    The folder (or extracted ZIP) must contain consecutively numbered group
+    folders such as ``1_baseline1`` / ``2_flicker`` / ``3_baseline2`` or
+    ``1_ctrl`` / ``2_path``. Any other input or layout raises
+    :class:`CohortLayoutError` before an output directory is created.
+    ``result_h5_paths`` remains available for callers that already discovered
+    the EyeFlow files, but it is subject to the same validation.
     """
     input_path = Path(input_path).expanduser()
     output_dir = Path(output_dir).expanduser()
-    output_dir.mkdir(parents=True, exist_ok=True)
 
     if result_h5_paths is not None:
-        h5_paths = [Path(p) for p in result_h5_paths if result_h5_has_lowrank(p)]
+        h5_paths = [Path(path) for path in result_h5_paths]
         preferred = input_path if input_path.is_dir() else None
+        if not h5_paths:
+            raise CohortLayoutError(
+                "no EyeFlow H5 files were provided for cohort postprocessing"
+            )
         return _run_on_paths(
             h5_paths,
             _cohort_root_from_paths(h5_paths, preferred),
@@ -2124,33 +2846,40 @@ def run(
         with extracted_zip_tree(input_path) as extracted_root:
             cohort_root = resolve_cohort_root(extracted_root)
             return _run_on_paths(
-                find_lowrank_result_h5s(cohort_root),
+                find_cohort_input_h5s(cohort_root),
                 cohort_root,
                 output_dir,
                 veins=veins,
+                patient_id=extract_patient_id(input_path),
             )
 
     if input_path.is_dir():
         cohort_root = resolve_cohort_root(input_path)
         return _run_on_paths(
-            find_lowrank_result_h5s(cohort_root),
+            find_cohort_input_h5s(cohort_root),
             cohort_root,
             output_dir,
             veins=veins,
         )
 
-    raise ValueError(
-        f"Input must be a cohort folder or .zip archive, got: {input_path}"
+    input_kind = (
+        f"{input_path.suffix.lower()} file" if input_path.is_file() else "missing path"
+    )
+    raise CohortLayoutError(
+        "low-rank cohort postprocessing accepts only a folder or .zip archive; "
+        f"received {input_kind}: {input_path}"
     )
 
 
 @registerPostprocess(
     name="Low-rank waveform cohort figures",
     description=(
-        "From AngioEye result H5s produced by lowrank_waveform_decomposition, "
+        "From EyeFlow H5s arranged in consecutively numbered group folders, "
         "write ``lowrank_cohort.h5`` (stats, confounds, acquisitions, beats) "
-        "and cohort Figs. 4--8 (joint and _pb) when 2+ group folders are "
-        "present. Writes under ``cohort-results/``."
+        "under ``cohort-results/h5`` and cohort Figs. 4--8 (joint and _pb) "
+        "under ``cohort-results/png``. This manual postprocess requires one or "
+        "more folders such as ``1_ctrl`` or ``1_ctrl`` / ``2_path``. Any "
+        "positive number of groups is supported."
     ),
     required_deps=[
         "numpy>=1.24",
@@ -2159,29 +2888,20 @@ def run(
         "matplotlib>=3.7",
         "h5py>=3.8",
     ],
-    required_pipelines=["lowrank_waveform_decomposition"],
+    accepted_input_modes=["folder", "zip"],
 )
 class LowRankWaveformCohortPostprocess(BatchPostprocess):
     veins_flag = False
 
     def run(self, context: PostprocessContext) -> PostprocessResult:
-        """Registered entry: resolve result H5s and write stats H5 plus figures."""
+        """Registered entry: read the explicitly selected cohort folder/ZIP."""
         input_path = Path(context.input_path).expanduser()
         output_dir = cohort_results_dir(context.output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        result_paths = tuple(context.processed_files) or None
-        if result_paths is None and not input_path.exists():
-            raise FileNotFoundError(
-                "No pipeline result H5s were provided and input path does not "
-                f"exist: {input_path}. Run lowrank_waveform_decomposition first."
-            )
 
         summary, generated_paths = run(
-            input_path if input_path.exists() else Path(result_paths[0]).parent,
+            input_path,
             output_dir,
             veins=bool(self.veins_flag),
-            result_h5_paths=result_paths,
         )
         return PostprocessResult(
             summary=summary,
@@ -2190,6 +2910,6 @@ class LowRankWaveformCohortPostprocess(BatchPostprocess):
                 "input_path": str(input_path),
                 "output_dir": str(output_dir),
                 "n_generated": len(generated_paths),
-                "n_result_h5": len(result_paths) if result_paths else 0,
+                "n_context_h5": len(context.input_h5_paths),
             },
         )
