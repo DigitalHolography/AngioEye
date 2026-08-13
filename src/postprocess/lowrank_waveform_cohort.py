@@ -229,10 +229,22 @@ def resolve_cohort_root(path: Path | str) -> Path:
     )
     if len(children) != 1:
         return path
-    # A lone numbered child is the cohort's only group, not a ZIP wrapper.
-    if _NUMBERED_GROUP_RE.fullmatch(children[0].name):
+    child = children[0]
+    match = _NUMBERED_GROUP_RE.fullmatch(child.name)
+    # A lone ``1_<label>`` folder is the cohort's only group. Patient-id ZIP
+    # wraps such as ``260803_Flicker_EF`` also match ``number_label`` but are
+    # not group folders — unwrap those so ``1_BL1`` / ``2_Flicker`` / … remain
+    # the groups.
+    if (
+        match is not None
+        and int(match.group("index")) == 1
+        and not any(
+            nested.is_dir() and _NUMBERED_GROUP_RE.fullmatch(nested.name)
+            for nested in child.iterdir()
+        )
+    ):
         return path
-    return children[0]
+    return child
 
 
 class CohortLayoutError(ValueError):
@@ -326,7 +338,7 @@ def infer_cohort_protocol(groups: Iterable[str]) -> CohortProtocol:
 
     Examples include BL/CTRL aliases in any case, with separators or number
     words (``BL1``, ``baseline_one``, ``ControlTwo``). Unrecognized layouts
-    remain valid and receive generic roles; their descriptive, omnibus and
+    remain valid and receive generic roles; their descriptive, Kruskal-Wallis and
     pairwise analyses still run without inventing a reference contrast.
     """
     parsed: list[tuple[int, str, str, int | None]] = []
@@ -606,7 +618,7 @@ COHORT_DICTIONARY = {
         "iqr": "Interquartile range (q3 - q1) within one group.",
         "min": "Minimum within one group.",
         "max": "Maximum within one group.",
-        "status": "Whether an omnibus test ran or the row is descriptive/insufficient only.",
+        "status": "Whether a Kruskal-Wallis test ran or the row is descriptive/insufficient only.",
         "kw_p_holm": "Kruskal-Wallis p, Holm-adjusted across the endpoint family.",
         "p_holm": "Pairwise p, Holm-adjusted across group pairs for this endpoint.",
         "cliffs_delta_b_vs_a": "Cliff's delta for group B relative to group A.",
@@ -1060,7 +1072,7 @@ class LowRankWaveformStatistics:
         """Build analyses that are well-defined for any number of groups.
 
         One-group cohorts receive descriptive rows and an explicit
-        ``descriptive_only`` omnibus status. Two or more groups additionally
+        ``descriptive_only`` Kruskal-Wallis status. Two or more groups additionally
         receive Kruskal-Wallis and all-pairs Mann-Whitney/Cliff's-delta rows.
         """
         descriptive_columns = [
@@ -1080,7 +1092,7 @@ class LowRankWaveformStatistics:
             "min",
             "max",
         ]
-        omnibus_columns = [
+        kruskal_columns = [
             "endpoint",
             "metric",
             "n_groups",
@@ -1109,7 +1121,7 @@ class LowRankWaveformStatistics:
         ]
 
         descriptive_rows: list[dict] = []
-        omnibus_rows: list[dict] = []
+        kruskal_rows: list[dict] = []
         pairwise_rows: list[dict] = []
         for metric, endpoint in CANONICAL_ENDPOINTS:
             group_values: list[tuple[CohortGroup, np.ndarray]] = []
@@ -1167,7 +1179,7 @@ class LowRankWaveformStatistics:
                         kw_H, kw_p = float(result.statistic), float(result.pvalue)
                     except ValueError:
                         status = "test_not_defined"
-            omnibus_rows.append(
+            kruskal_rows.append(
                 {
                     "endpoint": endpoint,
                     "metric": metric,
@@ -1215,13 +1227,13 @@ class LowRankWaveformStatistics:
                 row["p_holm"] = adjusted
             pairwise_rows.extend(endpoint_pair_rows)
 
-        omnibus_adjusted = cls.holm_adjust([row["kw_p"] for row in omnibus_rows])
-        for row, adjusted in zip(omnibus_rows, omnibus_adjusted, strict=True):
+        kruskal_adjusted = cls.holm_adjust([row["kw_p"] for row in kruskal_rows])
+        for row, adjusted in zip(kruskal_rows, kruskal_adjusted, strict=True):
             row["kw_p_holm"] = adjusted
 
         return (
             pd.DataFrame(descriptive_rows, columns=descriptive_columns),
-            pd.DataFrame(omnibus_rows, columns=omnibus_columns),
+            pd.DataFrame(kruskal_rows, columns=kruskal_columns),
             pd.DataFrame(pairwise_rows, columns=pairwise_columns),
         )
 
@@ -1743,7 +1755,7 @@ class LowRankWaveformCohortFigures:
     def _draw_epoch_panel(
         cls, ax, df: pd.DataFrame, metric: str, group_order: list[str]
     ) -> None:
-        """One endpoint panel: one box-and-whisker plus dots per group."""
+        """One endpoint panel: jittered dots, median±SD, pooled p/δ label."""
         protocol = infer_cohort_protocol(group_order)
         display_labels = list(protocol.group_labels)
         if protocol.contrast_available:
@@ -1767,22 +1779,16 @@ class LowRankWaveformCohortFigures:
                 continue
             jitter = (_RNG.random(vals.size) - 0.5) * 0.16
             med = float(np.nanmedian(vals))
-            ax.boxplot(
-                [vals],
-                positions=[x0],
-                widths=0.46,
-                whis=1.5,
-                showfliers=False,
-                patch_artist=True,
-                boxprops={
-                    "facecolor": "white",
-                    "edgecolor": "black",
-                    "linewidth": 1.25,
-                },
-                whiskerprops={"color": "black", "linewidth": 1.25},
-                capprops={"color": "black", "linewidth": 1.25},
-                medianprops={"color": "black", "linewidth": 1.5},
-                zorder=3,
+            sd = finite_std(vals)
+            ax.errorbar(
+                [x0],
+                [med],
+                yerr=[sd],
+                fmt="none",
+                ecolor="black",
+                elinewidth=1.5,
+                capsize=4,
+                zorder=4,
             )
             ax.scatter(
                 x0 + jitter, vals, s=20, color="black", edgecolors="none", zorder=5
@@ -1844,11 +1850,10 @@ class LowRankWaveformCohortFigures:
         out_path = Path(out_path)
         df = points_by_vessel.get("artery", pd.DataFrame())
         n_cols = len(panels)
-        panel_width = max(cls.PANEL_SIZE, 0.55 * len(group_order))
         fig, axes = plt.subplots(
             1,
             n_cols,
-            figsize=(panel_width * n_cols, cls.PANEL_SIZE),
+            figsize=(cls.PANEL_SIZE * n_cols, cls.PANEL_SIZE),
             squeeze=False,
         )
         for col_idx, (metric, title) in enumerate(panels):
@@ -1874,19 +1879,31 @@ class LowRankWaveformCohortFigures:
         cumulative: bool,
         group_order: list[str] | None = None,
     ) -> None:
-        """Draw a mean±SD singular-value curve for every numbered group."""
+        """Draw pooled-baseline vs flicker mean±SD singular-value curves."""
         if not mode_cols or df.empty or not ({"epoch", "group"} & set(df.columns)):
             return
         plot_modes = np.arange(1, len(mode_cols) + 1)
         identity = df["group"] if "group" in df.columns else df["epoch"]
         groups = group_order or ordered_groups(identity)
         protocol = infer_cohort_protocol(groups)
-        color_map = plt.get_cmap("tab10")
-        markers = ("o", "s", "^", "D", "v", "P", "X", "<", ">", "h")
-        for position, group in enumerate(protocol.groups):
-            mask = _group_mask(df, group)
-            color = color_map(position % 10)
-            marker = markers[position % len(markers)]
+        if protocol.contrast_available:
+            baseline_mask = pd.Series(False, index=df.index, dtype=bool)
+            flicker_mask = pd.Series(False, index=df.index, dtype=bool)
+            for group in protocol.groups:
+                if group.role.startswith("reference"):
+                    baseline_mask |= _group_mask(df, group)
+                elif group.role.startswith("intervention"):
+                    flicker_mask |= _group_mask(df, group)
+        elif "epoch" in df.columns:
+            baseline_mask = df["epoch"].isin(["B1", "B2"])
+            flicker_mask = df["epoch"] == "Flicker"
+        else:
+            return
+        series = (
+            (baseline_mask, *cls.SPECTRUM_BASELINE),
+            (flicker_mask, *cls.SPECTRUM_FLICKER),
+        )
+        for mask, color, style, marker in series:
             vals = df.loc[mask, mode_cols].to_numpy(dtype=float)
             if vals.size == 0:
                 continue
@@ -1899,9 +1916,8 @@ class LowRankWaveformCohortFigures:
                 plot_modes,
                 mean,
                 color=color,
-                linestyle="-" if position % 2 == 0 else "--",
+                linestyle=style,
                 marker=marker,
-                label=group.label,
                 linewidth=1.5,
                 markersize=5,
                 markerfacecolor="white",
@@ -1909,12 +1925,6 @@ class LowRankWaveformCohortFigures:
                 markeredgewidth=1.2,
             )
             ax.fill_between(plot_modes, lo, hi, color=color, alpha=0.12, linewidth=0)
-        if len(protocol.groups) > 1:
-            ax.legend(
-                frameon=False,
-                fontsize=8,
-                ncol=max(1, min(3, (len(protocol.groups) + 5) // 6)),
-            )
 
     @classmethod
     def _save_spectrum(
@@ -2599,7 +2609,7 @@ def write_cohort_h5(
     stats_by_vessel: dict[str, pd.DataFrame] | None = None,
     confounds_by_vessel: dict[str, pd.DataFrame] | None = None,
     group_statistics_by_vessel: dict[str, pd.DataFrame] | None = None,
-    omnibus_statistics_by_vessel: dict[str, pd.DataFrame] | None = None,
+    kruskal_statistics_by_vessel: dict[str, pd.DataFrame] | None = None,
     pairwise_statistics_by_vessel: dict[str, pd.DataFrame] | None = None,
 ) -> Path:
     """Write acquisitions/beats/stats/confounds as compound datasets.
@@ -2611,7 +2621,7 @@ def write_cohort_h5(
     * ``{vessel}/acquisitions``, ``{vessel}/beats`` — compound tables
     * ``{vessel}/stats``, ``{vessel}/confounds`` — compatibility contrast tables
     * ``{vessel}/group_statistics`` — per-group descriptive statistics
-    * ``{vessel}/omnibus_statistics`` — Kruskal-Wallis results (N >= 2)
+    * ``{vessel}/kruskal_statistics`` — Kruskal-Wallis results (N >= 2)
     * ``{vessel}/pairwise_statistics`` — all-pairs MWU/Holm/effect sizes
     """
     output_path = Path(output_path)
@@ -2620,7 +2630,7 @@ def write_cohort_h5(
     stats_by_vessel = stats_by_vessel or {}
     confounds_by_vessel = confounds_by_vessel or {}
     group_statistics_by_vessel = group_statistics_by_vessel or {}
-    omnibus_statistics_by_vessel = omnibus_statistics_by_vessel or {}
+    kruskal_statistics_by_vessel = kruskal_statistics_by_vessel or {}
     pairwise_statistics_by_vessel = pairwise_statistics_by_vessel or {}
     protocol = infer_cohort_protocol(group_order)
     dict_text = dictionary_json()
@@ -2699,10 +2709,10 @@ def write_cohort_h5(
                 write_compound_dataset(
                     vessel_group, "group_statistics", group_statistics_df
                 )
-            omnibus_statistics_df = omnibus_statistics_by_vessel.get(vessel)
-            if omnibus_statistics_df is not None:
+            kruskal_statistics_df = kruskal_statistics_by_vessel.get(vessel)
+            if kruskal_statistics_df is not None:
                 write_compound_dataset(
-                    vessel_group, "omnibus_statistics", omnibus_statistics_df
+                    vessel_group, "kruskal_statistics", kruskal_statistics_df
                 )
             pairwise_statistics_df = pairwise_statistics_by_vessel.get(vessel)
             if pairwise_statistics_df is not None:
@@ -2724,14 +2734,14 @@ def write_stats_h5(
     )
     protocol = infer_cohort_protocol(collection.group_order)
     group_statistics_by_vessel: dict[str, pd.DataFrame] = {}
-    omnibus_statistics_by_vessel: dict[str, pd.DataFrame] = {}
+    kruskal_statistics_by_vessel: dict[str, pd.DataFrame] = {}
     pairwise_statistics_by_vessel: dict[str, pd.DataFrame] = {}
     for vessel, acquisitions_df in collection.points_by_vessel.items():
-        group_table, omnibus_table, pairwise_table = (
+        group_table, kruskal_table, pairwise_table = (
             LowRankWaveformStatistics.build_general_tables(acquisitions_df, protocol)
         )
         group_statistics_by_vessel[vessel] = group_table
-        omnibus_statistics_by_vessel[vessel] = omnibus_table
+        kruskal_statistics_by_vessel[vessel] = kruskal_table
         pairwise_statistics_by_vessel[vessel] = pairwise_table
     return write_cohort_h5(
         Path(output_dir) / prefixed_filename(COHORT_H5_BASENAME, collection.patient_id),
@@ -2744,7 +2754,7 @@ def write_stats_h5(
         stats_by_vessel=stats_by_vessel,
         confounds_by_vessel=confounds_by_vessel,
         group_statistics_by_vessel=group_statistics_by_vessel,
-        omnibus_statistics_by_vessel=omnibus_statistics_by_vessel,
+        kruskal_statistics_by_vessel=kruskal_statistics_by_vessel,
         pairwise_statistics_by_vessel=pairwise_statistics_by_vessel,
     )
 

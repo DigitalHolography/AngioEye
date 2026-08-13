@@ -20,7 +20,7 @@ from batch_engine import (
     run_task_batch,
     run_threaded_batches_in_process_pool,
 )
-from input_output import ZipH5Member
+from input_output import ZipH5Member, strip_epoch_wrap
 from pipelines import load_pipeline_catalog
 from pipeline_engine import OutputPathAllocator
 
@@ -78,7 +78,7 @@ def run_filesystem_pipeline_run(
     jobs = [
         PipelineFileJob(
             h5_path=h5_path,
-            output_relative_parent=relative_parent(h5_path, data_root),
+            output_relative_parent=strip_epoch_wrap(relative_parent(h5_path, data_root)),
             output_filename=output_filename,
             input_label=str(h5_path),
             log_label=h5_path.name,
@@ -426,7 +426,7 @@ def run_zip_pipeline_run(
         jobs = [
             PipelineFileJob(
                 h5_path=h5_path,
-                output_relative_parent=member.relative_path.parent,
+                output_relative_parent=strip_epoch_wrap(member.relative_path.parent),
                 output_filename=None,
                 input_label=member.name,
                 log_label=member.name,
@@ -594,7 +594,7 @@ def _iter_zip_job_batches_from_stream(
         jobs = [
             PipelineFileJob(
                 h5_path=h5_path,
-                output_relative_parent=member.relative_path.parent,
+                output_relative_parent=strip_epoch_wrap(member.relative_path.parent),
                 output_filename=None,
                 input_label=member.name,
                 log_label=member.name,

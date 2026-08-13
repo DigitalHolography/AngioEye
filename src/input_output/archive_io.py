@@ -152,6 +152,7 @@ def create_zip_from_tree(
     *,
     source_paths: Iterable[str | Path] | None = None,
     exclude_root_dirs: Iterable[str] | None = None,
+    archive_root_name: str | None = None,
     compresslevel: int = 1,
     progress_callback: Callable[[int, int, Path], None] | None = None,
 ) -> Path:
@@ -159,6 +160,7 @@ def create_zip_from_tree(
     zip_path_obj = Path(zip_path)
     zip_path_obj.parent.mkdir(parents=True, exist_ok=True)
     excluded_root_dirs = set(exclude_root_dirs or ())
+    wrap = Path(archive_root_name) if archive_root_name else Path()
 
     if source_paths is None:
         files = sorted(
@@ -207,9 +209,10 @@ def create_zip_from_tree(
             progress_callback(0, total_files, Path("."))
         for idx, file_path in enumerate(files, start=1):
             rel_path = file_path.relative_to(tree_root_path)
-            archive.write(file_path, rel_path)
+            arcname = (wrap / rel_path).as_posix() if archive_root_name else rel_path
+            archive.write(file_path, arcname)
             if progress_callback is not None:
-                progress_callback(idx, total_files, rel_path)
+                progress_callback(idx, total_files, Path(arcname))
     return zip_path_obj
 
 

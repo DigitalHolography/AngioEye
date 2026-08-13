@@ -128,7 +128,7 @@ class ProcessPipeline:
         """Optional side-car outputs (PNG/HTML) next to the shared result H5.
 
         Default is a no-op. Called by the pipeline engine after the combined
-        ``*_AE.h5`` / ``*_pipelines_result.h5`` has been written.
+        ``*_AE.h5`` has been written.
         """
         del result, source_h5_path, output_h5_path
         return []

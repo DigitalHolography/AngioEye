@@ -1,13 +1,22 @@
 from collections.abc import Sequence
+import re
 from pathlib import Path
 
 from .hdf5_schema import is_hdf5_path
 
 H5_OUTPUT_DIRNAME = "h5"
 PNG_OUTPUT_DIRNAME = "png"
+PNGS_OUTPUT_DIRNAME = "pngs"
 HTML_OUTPUT_DIRNAME = "html"
 COHORT_RESULTS_DIRNAME = "cohort-results"
 APP_SUFFIXES = ("HD", "DV", "EF", "AE")
+_APP_STEM_SUFFIXES = tuple(f"_{suffix}" for suffix in APP_SUFFIXES)
+# Epoch folders are ``1_label``, ``2_label``, … Patient-id ZIP wraps such as
+# ``260803_Flicker_EF`` also match ``number_label`` but are not epochs.
+_EPOCH_FOLDER_RE = re.compile(
+    r"^(?P<index>\d+)_(?P<label>[A-Za-z0-9]+(?:[_-][A-Za-z0-9]+)*)$"
+)
+_MAX_EPOCH_INDEX = 99
 
 
 def default_h5_output_dir(path: str | Path) -> Path:
@@ -55,6 +64,56 @@ def h5_output_parent(
 ) -> Path:
     """Return the standard parent directory for one generated HDF5 output."""
     return h5_output_dir(output_root) / Path(relative_parent)
+
+
+def is_epoch_folder(name: str) -> bool:
+    """True for numbered cohort epoch folders such as ``1_BL1`` / ``2_Flicker``."""
+    match = _EPOCH_FOLDER_RE.fullmatch(str(name).strip())
+    if match is None:
+        return False
+    return 1 <= int(match.group("index")) <= _MAX_EPOCH_INDEX
+
+
+def strip_epoch_wrap(relative_parent: str | Path) -> Path:
+    """Drop a ZIP wrap folder so epoch folders sit at the output root.
+
+    ``260803_Flicker_EF/1_BL1`` → ``1_BL1``. ``1_BL1`` is unchanged.
+    """
+    relative = Path(relative_parent)
+    parts = relative.parts
+    if not parts:
+        return Path(".")
+    for index, part in enumerate(parts):
+        if is_epoch_folder(part):
+            return Path(*parts[index:])
+    return relative
+
+
+def ae_result_filename(source_h5: str | Path) -> str:
+    """``260803_GOA_1_EF.h5`` → ``260803_GOA_1_AE.h5``."""
+    stem = Path(source_h5).stem
+    if stem.endswith("_pipelines_result"):
+        stem = stem[: -len("_pipelines_result")]
+    for suffix in _APP_STEM_SUFFIXES:
+        if stem.endswith(suffix):
+            stem = stem[: -len(suffix)] or stem
+            break
+    return f"{stem}_AE.h5"
+
+
+def pipeline_result_parent(
+    output_root: str | Path,
+    relative_parent: str | Path = Path("."),
+) -> Path:
+    """Parent directory for one pipeline result H5.
+
+    Epoch folders (``1_BL1``, …) keep H5s beside ``pngs/``. A flat relative
+    parent still uses the canonical ``h5/`` product folder (``.holo`` runs).
+    """
+    relative = strip_epoch_wrap(relative_parent)
+    if relative == Path("."):
+        return h5_output_parent(output_root, relative)
+    return Path(output_root) / relative
 
 
 def cohort_results_dir(output_root: str | Path) -> Path:

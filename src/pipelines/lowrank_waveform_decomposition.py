@@ -6,9 +6,9 @@ This module does **not** import EyeFlow or recompute decomposition: it
 ingests that group into the AngioEye result H5 and writes Figs 2--4.
 Joint SVD and per-beat SVD are always ingested together; ``veins_flag``
 selects whether venous products are included for both. Fig. 2 has no SVD.
-Figs 3--4 are written for joint SVD and again with a ``_pb`` suffix for
-per-beat SVD. Cohort Figs 4--8 and ``lowrank_cohort.h5`` live in
-``postprocess.lowrank_waveform_cohort``.
+Fig. 3 is written for joint SVD and again with a ``_pb`` suffix for
+per-beat SVD; Fig. 4 is the joint energy spectrum. Cohort Figs 4--8 and
+``lowrank_cohort.h5`` live in ``postprocess.lowrank_waveform_cohort``.
 """
 
 from __future__ import annotations
@@ -25,11 +25,13 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter, MultipleLocator, NullFormatter
 
+from input_output.hdf5_io import find_first_existing_path
 from input_output.hdf5_schema import find_pipeline_group
 from input_output.inputs import find_hdf5_inputs
 from input_output.output_paths import (
     H5_OUTPUT_DIRNAME,
     PNG_OUTPUT_DIRNAME,
+    PNGS_OUTPUT_DIRNAME,
     dataset_stem_from_path,
 )
 
@@ -386,7 +388,7 @@ def result_h5_has_lowrank(h5_path: Path | str) -> bool:
 def find_lowrank_result_h5s(root: Path | str) -> list[Path]:
     """Discover AngioEye result H5s that already pack low-rank metrics.
 
-    Prefers ``*_AE.h5`` (canonical full-chain product). Also accepts ZIP
+    Prefers ``*_AE.h5`` (canonical full-chain product). Also accepts legacy
     ``*_pipelines_result.h5`` files that contain the low-rank group.
     Skips raw EyeFlow ``*_EF.h5`` inputs (ingest those via the pipeline).
     """
@@ -424,14 +426,13 @@ def companion_png_dir_for_result(output_h5_path: Path | str) -> Path:
     """PNG companion folder for a shared AngioEye result H5.
 
     Canonical AE product: ``{stem}_AE/png/`` beside ``{stem}_AE/h5/``.
-    ZIP / ``*_pipelines_result.h5`` layout: write PNGs next to the result H5
-    (do not treat an ancestor folder named ``*_EF`` as an acquisition root).
+    Epoch layout: ``{epoch}/pngs/`` beside ``{epoch}/{stem}_AE.h5``.
     """
     output_h5_path = Path(output_h5_path)
     parent = output_h5_path.parent
     if parent.name.lower() == H5_OUTPUT_DIRNAME and parent.parent.name.endswith("_AE"):
         return parent.parent / PNG_OUTPUT_DIRNAME
-    return parent
+    return parent / PNGS_OUTPUT_DIRNAME
 
 
 def acquisition_fig_stem(
@@ -1265,8 +1266,33 @@ def load_packed_waveform(
 
 
 class LowRankWaveformAcquisitionFigures:
-    """Per-acquisition arterial Figs. 2--4 from packed EyeFlow low-rank metrics."""
+    """Per-acquisition arterial Figs. 2--4 from packed EyeFlow low-rank metrics.
 
+    Fig. 2 is the full-acquisition cardiac velocity (spatial mean over
+    ``(k, r)`` with 0.1 s std whiskers). It does not use EyeFlow's packed
+    one-cycle ``figures/fig2_frequency_velocity`` summary.
+    """
+
+    SEGMENT_VELOCITY_CANDIDATES = {
+        "artery": (
+            "Processing/Velocity/segments/Artery/Raw/value",
+            "EyeFlow/Processing/Velocity/segments/Artery/Raw/value",
+        ),
+        "vein": (
+            "Processing/Velocity/segments/Vein/Raw/value",
+            "EyeFlow/Processing/Velocity/segments/Vein/Raw/value",
+        ),
+    }
+    GLOBAL_VELOCITY_CANDIDATES = {
+        "artery": (
+            "Processing/Velocity/global/Artery/Raw/value",
+            "EyeFlow/Processing/Velocity/global/Artery/Raw/value",
+        ),
+        "vein": (
+            "Processing/Velocity/global/Vein/Raw/value",
+            "EyeFlow/Processing/Velocity/global/Vein/Raw/value",
+        ),
+    }
     FIG2_ASPECT = 3.0
     FIG2_HEIGHT = 2.8
     FIG2_WHISKER_INTERVAL_S = 0.1
@@ -1274,6 +1300,8 @@ class LowRankWaveformAcquisitionFigures:
     FIG3_X_PAD_FRAC = 0.02
     FIG2_TICK_SIZE = 12
     FIG2_LABEL_SIZE = 14
+    FIG2_M_S_PEAK = 1.0
+    FIG2_M_S_TO_MM_S = 1000.0
     PANEL_SIZE = 2.5
 
     @staticmethod
@@ -1299,8 +1327,8 @@ class LowRankWaveformAcquisitionFigures:
     ) -> list[Path]:
         """Write Figs. 2--4 into ``out_dir`` from packed low-rank metrics.
 
-        Fig. 2 has no SVD. Figs 3--4 are written for joint SVD and, when
-        packed, again with a ``_pb`` suffix for per-beat SVD.
+        Fig. 2 has no SVD. Fig. 3 is written for joint SVD and again with a
+        ``_pb`` suffix for per-beat SVD. Fig. 4 is the joint energy spectrum.
         ``veins_flag`` adds a venous row to every figure.
         """
         h5_path = Path(h5_path)
@@ -1345,37 +1373,34 @@ class LowRankWaveformAcquisitionFigures:
         )
         if fig4 is not None:
             written.append(fig4)
-        fig4_c = cls.plot_energy_spectrum_cumulative(
-            vessel_bundle,
-            out_dir / f"{stem}_fig4_energy_spectrum_cumulative.png",
-            vessels=vessels,
-            svd_method="joint",
-            h5_path=h5_path,
-            signal=signal,
-        )
-        if fig4_c is not None:
-            written.append(fig4_c)
-        fig4_pb = cls.plot_energy_spectrum(
-            vessel_bundle,
-            out_dir / f"{stem}_fig4_energy_spectrum_pb.png",
-            vessels=vessels,
-            svd_method="per_beat",
-            h5_path=h5_path,
-            signal=signal,
-        )
-        if fig4_pb is not None:
-            written.append(fig4_pb)
-        fig4_pb_c = cls.plot_energy_spectrum_cumulative(
-            vessel_bundle,
-            out_dir / f"{stem}_fig4_energy_spectrum_cumulative_pb.png",
-            vessels=vessels,
-            svd_method="per_beat",
-            h5_path=h5_path,
-            signal=signal,
-        )
-        if fig4_pb_c is not None:
-            written.append(fig4_pb_c)
         return written
+
+    @staticmethod
+    def _velocity_dt_seconds(h5: h5py.File) -> float:
+        """Sample interval of the Doppler velocity time series (seconds)."""
+        dt = float(h5.attrs.get("dt_seconds", np.nan)) if h5.attrs else float("nan")
+        if np.isfinite(dt) and dt > 0:
+            return dt
+        batch = float(h5.attrs.get("batch_stride", np.nan)) if h5.attrs else float("nan")
+        fs = float(h5.attrs.get("sampling_freq", np.nan)) if h5.attrs else float("nan")
+        if np.isfinite(batch) and np.isfinite(fs) and fs > 0 and batch > 0:
+            return batch / fs
+        return float("nan")
+
+    @classmethod
+    def _velocity_to_mm_s(cls, values: np.ndarray) -> np.ndarray:
+        """Display native EyeFlow velocity in mm/s.
+
+        Some files store SI metres per second (peak ≪ 1); those are scaled.
+        Values already in mm/s are left unchanged.
+        """
+        arr = np.asarray(values, dtype=float)
+        if arr.size == 0:
+            return arr
+        peak = float(np.nanmax(np.abs(arr)))
+        if np.isfinite(peak) and 0.0 < peak < cls.FIG2_M_S_PEAK:
+            return arr * cls.FIG2_M_S_TO_MM_S
+        return arr
 
     @classmethod
     def _segment_spatial_mean_std(
@@ -1391,6 +1416,50 @@ class LowRankWaveformAcquisitionFigures:
         return mean, mean - lo
 
     @classmethod
+    def _fig2_waveform(
+        cls,
+        h5: h5py.File,
+        h5_path: Path,
+        vessel: str,
+        signal: str,
+    ) -> tuple[np.ndarray, np.ndarray, float] | None:
+        """Full-acquisition spatial mean ± std and sample interval.
+
+        Prefers ``Velocity/segments``, then global velocity, then concatenated
+        packed beat-aligned ``v``. Ignores the one-cycle figure payload.
+        """
+        seg_path = find_first_existing_path(
+            h5, list(cls.SEGMENT_VELOCITY_CANDIDATES.get(vessel, ()))
+        )
+        glob_path = find_first_existing_path(
+            h5, list(cls.GLOBAL_VELOCITY_CANDIDATES.get(vessel, ()))
+        )
+        dt_s = cls._velocity_dt_seconds(h5)
+        if seg_path is not None:
+            mean, std = cls._segment_spatial_mean_std(
+                np.asarray(h5[seg_path], dtype=float)
+            )
+            return mean, std, dt_s
+        if glob_path is not None:
+            mean = np.asarray(h5[glob_path], dtype=float).reshape(-1)
+            return mean, np.zeros_like(mean), dt_s
+
+        packed = load_packed_waveform(h5_path, vessel, signal=signal)
+        if packed is None:
+            return None
+        v = np.asarray(packed["v"], dtype=float)
+        n_t = int(packed["n_t"])
+        n_beats = int(v.shape[1]) if v.ndim > 1 else 1
+        v_cat = np.transpose(v, (1, 0) + tuple(range(2, v.ndim)))
+        v_cat = v_cat.reshape((n_beats * n_t,) + v.shape[2:])
+        mean, std = cls._segment_spatial_mean_std(v_cat)
+        if not (np.isfinite(dt_s) and dt_s > 0):
+            period = float(packed["beat_period_mean"])
+            if np.isfinite(period) and period > 0 and n_t > 0:
+                dt_s = period / n_t
+        return mean, std, dt_s
+
+    @classmethod
     def plot_frequency_velocity(
         cls,
         h5_path: Path | str,
@@ -1399,7 +1468,13 @@ class LowRankWaveformAcquisitionFigures:
         signal: str = "raw",
         vessels: tuple[str, ...] | None = None,
     ) -> Path | None:
-        """Fig. 2: reconstructed arterial velocity, beats concatenated in time."""
+        """Fig. 2: full-acquisition arterial velocity, time in seconds.
+
+        Spatial mean over vessel locations ``(k, r)`` with whiskers showing
+        the spatial standard deviation. Falls back to the global velocity
+        trace, then to concatenated packed beats, when segment data are
+        missing. Does not plot EyeFlow's one-cycle figure payload.
+        """
         h5_path = Path(h5_path)
         out_path = Path(out_path)
         vessels = list(vessels or FIGURE_VESSELS)
@@ -1418,84 +1493,59 @@ class LowRankWaveformAcquisitionFigures:
             return f"{x:.2g}"
 
         any_data = False
-        for row_idx, vessel in enumerate(vessels):
-            ax = axes[row_idx, 0]
-            payload = load_figure2_payload(h5_path, vessel, signal=signal)
-            mean = std = None
-            dt_s = float("nan")
-            t_s = None
-            xlabel = "Time (s)"
-            if payload is not None:
-                t_s = np.asarray(payload["t"], dtype=float)
-                mean = np.asarray(payload["mean"], dtype=float)
-                std = np.asarray(payload["std"], dtype=float)
-                finite_dt = np.diff(t_s[np.isfinite(t_s)])
-                finite_dt = finite_dt[finite_dt > 0]
-                if finite_dt.size:
-                    dt_s = float(np.median(finite_dt))
-            else:
-                packed = load_packed_waveform(h5_path, vessel, signal=signal)
-                if packed is not None:
-                    v = np.asarray(packed["v"], dtype=float)
-                    # (n_t, n_beats, k, r) → concatenate beats along time.
-                    n_t = int(packed["n_t"])
-                    n_beats = int(v.shape[1])
-                    v_cat = np.transpose(v, (1, 0) + tuple(range(2, v.ndim)))
-                    v_cat = v_cat.reshape((n_beats * n_t,) + v.shape[2:])
-                    mean, std = cls._segment_spatial_mean_std(v_cat)
-                    period = float(packed["beat_period_mean"])
-                    if np.isfinite(period) and period > 0 and n_t > 0:
-                        dt_s = period / n_t
+        with h5py.File(h5_path, "r") as h5:
+            for row_idx, vessel in enumerate(vessels):
+                ax = axes[row_idx, 0]
+                series = cls._fig2_waveform(h5, h5_path, vessel, signal)
+                mean = std = None
+                dt_s = float("nan")
+                if series is not None:
+                    mean, std, dt_s = series
+                    mean = cls._velocity_to_mm_s(mean)
+                    std = cls._velocity_to_mm_s(std)
 
-            if mean is not None and mean.size:
-                any_data = True
-                n = int(mean.size)
-                if t_s is not None and t_s.size >= n:
-                    t_s = t_s[:n]
-                    xlabel = "Time (s)"
+                if mean is not None and mean.size:
+                    any_data = True
+                    n = int(mean.size)
                     if np.isfinite(dt_s) and dt_s > 0:
+                        t_s = np.arange(n, dtype=float) * dt_s
+                        xlabel = "Time (s)"
                         stride = max(1, int(round(cls.FIG2_WHISKER_INTERVAL_S / dt_s)))
                     else:
+                        t_s = np.arange(n, dtype=float)
+                        xlabel = "Sample index"
                         stride = 15
-                elif np.isfinite(dt_s) and dt_s > 0:
-                    t_s = np.arange(n, dtype=float) * dt_s
-                    xlabel = "Time (s)"
-                    stride = max(1, int(round(cls.FIG2_WHISKER_INTERVAL_S / dt_s)))
+
+                    ax.plot(t_s, mean, color="black", linewidth=1.1, zorder=3)
+                    if std is not None and np.any(std > 0):
+                        idx = np.arange(0, n, stride, dtype=int)
+                        ax.errorbar(
+                            t_s[idx],
+                            mean[idx],
+                            yerr=std[idx],
+                            fmt="none",
+                            ecolor="black",
+                            elinewidth=0.8,
+                            capsize=2.5,
+                            capthick=0.8,
+                            zorder=2,
+                        )
+                    t0, t1 = float(t_s[0]), float(t_s[-1])
+                    pad = cls.FIG2_X_PAD_FRAC * (t1 - t0 if t1 > t0 else 1.0)
+                    ax.set_xlim(t0 - pad, t1 + pad)
+                    if np.isfinite(dt_s) and dt_s > 0:
+                        ax.xaxis.set_major_locator(MultipleLocator(0.5))
+                    ax.set_xlabel(xlabel, fontsize=cls.FIG2_LABEL_SIZE)
                 else:
-                    t_s = np.arange(n, dtype=float)
-                    xlabel = "Sample index"
-                    stride = 15
+                    ax.set_xlabel("Time (s)", fontsize=cls.FIG2_LABEL_SIZE)
 
-                ax.plot(t_s, mean, color="black", linewidth=1.1, zorder=3)
-                if std is not None and np.any(std > 0):
-                    idx = np.arange(0, n, stride, dtype=int)
-                    ax.errorbar(
-                        t_s[idx],
-                        mean[idx],
-                        yerr=std[idx],
-                        fmt="none",
-                        ecolor="black",
-                        elinewidth=0.8,
-                        capsize=2.5,
-                        capthick=0.8,
-                        zorder=2,
-                    )
-                t0, t1 = float(t_s[0]), float(t_s[-1])
-                pad = cls.FIG2_X_PAD_FRAC * (t1 - t0 if t1 > t0 else 1.0)
-                ax.set_xlim(t0 - pad, t1 + pad)
-                if np.isfinite(dt_s) and dt_s > 0:
-                    ax.xaxis.set_major_locator(MultipleLocator(0.5))
-                ax.set_xlabel(xlabel, fontsize=cls.FIG2_LABEL_SIZE)
-            else:
-                ax.set_xlabel("Time (s)", fontsize=cls.FIG2_LABEL_SIZE)
-
-            ax.axhline(0, color="#555555", linewidth=0.6, linestyle=":")
-            ax.set_ylabel("Velocity (mm/s)", fontsize=cls.FIG2_LABEL_SIZE)
-            ax.yaxis.set_major_formatter(FuncFormatter(_two_sig))
-            ax.set_box_aspect(1.0 / cls.FIG2_ASPECT)
-            cls._style_axes(
-                ax, tick_size=cls.FIG2_TICK_SIZE, label_size=cls.FIG2_LABEL_SIZE
-            )
+                ax.axhline(0, color="#555555", linewidth=0.6, linestyle=":")
+                ax.set_ylabel("Velocity (mm/s)", fontsize=cls.FIG2_LABEL_SIZE)
+                ax.yaxis.set_major_formatter(FuncFormatter(_two_sig))
+                ax.set_box_aspect(1.0 / cls.FIG2_ASPECT)
+                cls._style_axes(
+                    ax, tick_size=cls.FIG2_TICK_SIZE, label_size=cls.FIG2_LABEL_SIZE
+                )
 
         if not any_data:
             plt.close(fig)

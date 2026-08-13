@@ -113,6 +113,7 @@ def zip_output_dir(
     return create_zip_from_tree(
         folder,
         target_path,
+        archive_root_name=target_path.stem,
         exclude_root_dirs=ZIP_COMPANION_OUTPUT_FOLDERS,
         compresslevel=1,
         progress_callback=progress_callback,
