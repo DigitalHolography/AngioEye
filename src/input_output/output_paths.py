@@ -6,6 +6,7 @@ from .hdf5_schema import is_hdf5_path
 H5_OUTPUT_DIRNAME = "h5"
 PNG_OUTPUT_DIRNAME = "png"
 HTML_OUTPUT_DIRNAME = "html"
+COHORT_RESULTS_DIRNAME = "cohort-results"
 APP_SUFFIXES = ("HD", "DV", "EF", "AE")
 
 
@@ -54,6 +55,11 @@ def h5_output_parent(
 ) -> Path:
     """Return the standard parent directory for one generated HDF5 output."""
     return h5_output_dir(output_root) / Path(relative_parent)
+
+
+def cohort_results_dir(output_root: str | Path) -> Path:
+    """Return the batch directory for cohort-only products (Figs 5–7)."""
+    return Path(output_root) / COHORT_RESULTS_DIRNAME
 
 
 def png_output_dir(output_root: str | Path) -> Path:
