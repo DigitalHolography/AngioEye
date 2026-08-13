@@ -7,7 +7,7 @@ ingests that group into the AngioEye result H5 and writes Figs 2--4.
 Joint SVD and per-beat SVD are always ingested together; ``veins_flag``
 selects whether venous products are included for both. Fig. 2 has no SVD.
 Figs 3--4 are written for joint SVD and again with a ``_pb`` suffix for
-per-beat SVD. Cohort Figs 4--7 and ``lowrank_cohort.h5`` live in
+per-beat SVD. Cohort Figs 4--8 and ``lowrank_cohort.h5`` live in
 ``postprocess.lowrank_waveform_cohort``.
 """
 
@@ -61,6 +61,19 @@ SOURCE_NAMES = (
 )
 
 SPECTRUM_N_MODES = 12
+ENDPOINT_METRICS = (
+    "A1",
+    "A2",
+    "R0",
+    "R1",
+    "R2",
+    "rho1",
+    "rho2",
+    "MPR",
+    "Reff",
+    "PR",
+)
+FIG3_PANEL_KEYS = ("v", "mu", "x", "a1u1", "a2u2")
 FIG3_VARIABILITY_METHODS = (
     "beat_location",
     "beat",
@@ -101,10 +114,10 @@ def aggregate_beatwise(values_per_beat: np.ndarray, stat: str) -> float:
     return float(np.mean(x)) if stat == "mean" else float(np.median(x))
 
 
-def aggregate_rho(R_b: np.ndarray, TPR_b: np.ndarray, stat: str) -> float:
+def aggregate_rho(R_b: np.ndarray, R0_b: np.ndarray, stat: str) -> float:
     """Residual ratio R/R0 from separately aggregated residual and pulsatile RMS."""
     r = aggregate_beatwise(R_b, stat)
-    t = aggregate_beatwise(TPR_b, stat)
+    t = aggregate_beatwise(R0_b, stat)
     if not np.isfinite(r) or not np.isfinite(t) or abs(t) <= 1e-12:
         return float("nan")
     return float(r / (t + 1e-12))
@@ -461,8 +474,289 @@ def _group_dataset_map(group: h5py.Group) -> dict[str, np.ndarray]:
     return out
 
 
-def _scalar_from_group(group: h5py.Group, name: str, default: float = float("nan")) -> float:
+def _dataset_vector(group: h5py.Group | None, name: str) -> np.ndarray | None:
+    """Read one numeric dataset as a finite-length vector."""
+    if group is None or name not in group:
+        return None
+    obj = group[name]
+    if not isinstance(obj, h5py.Dataset):
+        return None
+    arr = np.asarray(obj, dtype=float).reshape(-1)
+    return arr if arr.size else None
+
+
+def _group_has_datasets(group: h5py.Group | None) -> bool:
+    """True when ``group`` directly contains at least one dataset."""
+    return isinstance(group, h5py.Group) and any(
+        isinstance(obj, h5py.Dataset) for obj in group.values()
+    )
+
+
+def _endpoint_group(source: h5py.Group, method: str) -> h5py.Group | None:
+    """Official EyeFlow endpoint group: ``endpoints/joint`` or ``endpoints/per_beat``."""
+    endpoints = source.get("endpoints")
+    if not isinstance(endpoints, h5py.Group):
+        return None
+    child = endpoints.get(method)
+    return child if isinstance(child, h5py.Group) else None
+
+
+def _read_endpoint_values(group: h5py.Group | None) -> dict[str, np.ndarray]:
+    """Read the official EyeFlow endpoint metric datasets from one endpoint group."""
+    if not isinstance(group, h5py.Group):
+        return {}
+    out: dict[str, np.ndarray] = {}
+    for key in ENDPOINT_METRICS:
+        arr = _dataset_vector(group, key)
+        if arr is not None:
+            out[key] = arr
+    return out
+
+
+def _figure_group(source: h5py.Group, name: str) -> h5py.Group | None:
+    """Return one official ``figures/<name>`` group."""
+    figures = source.get("figures")
+    if not isinstance(figures, h5py.Group):
+        return None
+    group = figures.get(name)
+    return group if isinstance(group, h5py.Group) else None
+
+
+def _fig2_payload_from_source(source: h5py.Group) -> dict[str, np.ndarray] | None:
+    """Official Fig. 2 payload from ``figures/fig2_frequency_velocity``."""
+    group = _figure_group(source, "fig2_frequency_velocity")
+    t = _dataset_vector(group, "t")
+    mean = _dataset_vector(group, "mean")
+    std = _dataset_vector(group, "std")
+    if t is None or mean is None or std is None:
+        return None
+    n = min(t.size, mean.size, std.size)
+    if n == 0:
+        return None
+    return {"t": t[:n], "mean": mean[:n], "std": std[:n]}
+
+
+def _fig3_payload_from_source(source: h5py.Group, method: str) -> dict | None:
+    """Official Fig. 3 payload from joint or per-beat figure storage."""
+    name = (
+        "fig3_waveform_decomposition_pb"
+        if normalize_svd_method(method) == "per_beat"
+        else "fig3_waveform_decomposition"
+    )
+    group = _figure_group(source, name)
+    t = _dataset_vector(group, "t")
+    if t is None:
+        return None
+    out: dict[str, dict[str, np.ndarray] | np.ndarray] = {"t": t}
+    n = int(t.size)
+    for panel in FIG3_PANEL_KEYS:
+        panel_group = group.get(panel) if isinstance(group, h5py.Group) else None
+        if not isinstance(panel_group, h5py.Group):
+            return None
+        band: dict[str, np.ndarray] = {}
+        for stat in ("mean", "lo", "hi"):
+            arr = _dataset_vector(panel_group, stat)
+            if arr is None:
+                return None
+            band[stat] = arr
+            n = min(n, arr.size)
+        out[panel] = band
+    if n == 0:
+        return None
+    out["t"] = np.asarray(out["t"], dtype=float)[:n]
+    for panel in FIG3_PANEL_KEYS:
+        out[panel] = {
+            stat: np.asarray(out[panel][stat], dtype=float)[:n]
+            for stat in ("mean", "lo", "hi")
+        }
+    return out
+
+
+def _spectrum_payload_from_source(
+    source: h5py.Group,
+    *,
+    method: str,
+    cumulative: bool,
+) -> dict[str, np.ndarray] | None:
+    """Official Fig. 4 payload from joint/per-beat spectrum figure storage."""
+    method = normalize_svd_method(method)
+    if method == "per_beat":
+        group_name = (
+            "fig4_energy_spectrum_cumulative_pb"
+            if cumulative
+            else "fig4_energy_spectrum_pb"
+        )
+        y_name = "lambda_cumulative_mean" if cumulative else "lambda_mean"
+        lo_name = "lambda_cumulative_lo" if cumulative else "lambda_lo"
+        hi_name = "lambda_cumulative_hi" if cumulative else "lambda_hi"
+    else:
+        group_name = (
+            "fig4_energy_spectrum_cumulative"
+            if cumulative
+            else "fig4_energy_spectrum"
+        )
+        y_name = "lambda_cumulative" if cumulative else "lambda"
+        lo_name = hi_name = ""
+
+    group = _figure_group(source, group_name)
+    mode = _dataset_vector(group, "mode")
+    mean = _dataset_vector(group, y_name)
+    if mode is None or mean is None:
+        return None
+    n = min(mode.size, mean.size)
+    if n == 0:
+        return None
+    payload = {"mode": mode[:n], "mean": mean[:n]}
+    if method == "per_beat":
+        lo = _dataset_vector(group, lo_name)
+        hi = _dataset_vector(group, hi_name)
+        if lo is not None and hi is not None:
+            n = min(n, lo.size, hi.size)
+            payload = {
+                "mode": payload["mode"][:n],
+                "mean": payload["mean"][:n],
+                "lo": lo[:n],
+                "hi": hi[:n],
+            }
+    return payload
+
+
+def _source_figure_payload(
+    h5_path: Path | str,
+    vessel: str,
+    signal: str,
+    loader,
+):
+    """Open one vessel/signal group and apply an official figure-payload reader."""
+    with h5py.File(h5_path, "r") as h5file:
+        root = find_lowrank_metrics_group(h5file)
+        if root is None:
+            return None
+        source = root.get(f"{vessel}/{signal}")
+        if not isinstance(source, h5py.Group):
+            return None
+        if not _group_flag_or_payload(
+            source,
+            "svd_available",
+            default_from_payload=_source_group_has_metric_payload(source),
+        ):
+            return None
+        return loader(source)
+
+
+def load_figure2_payload(
+    h5_path: Path | str,
+    vessel: str,
+    signal: str = COHORT_SIGNAL,
+) -> dict[str, np.ndarray] | None:
+    """Load official EyeFlow Fig. 2 storage for one vessel."""
+    return _source_figure_payload(h5_path, vessel, signal, _fig2_payload_from_source)
+
+
+def load_figure3_payload(
+    h5_path: Path | str,
+    vessel: str,
+    signal: str = COHORT_SIGNAL,
+    *,
+    svd_method: str = DEFAULT_SVD_METHOD,
+) -> dict | None:
+    """Load official EyeFlow Fig. 3 storage for one vessel/SVD method."""
+    method = normalize_svd_method(svd_method)
+    return _source_figure_payload(
+        h5_path,
+        vessel,
+        signal,
+        lambda source: _fig3_payload_from_source(source, method),
+    )
+
+
+def load_spectrum_payload(
+    h5_path: Path | str,
+    vessel: str,
+    signal: str = COHORT_SIGNAL,
+    *,
+    svd_method: str = DEFAULT_SVD_METHOD,
+    cumulative: bool = False,
+) -> dict[str, np.ndarray] | None:
+    """Load official EyeFlow Fig. 4 storage for one vessel/SVD method."""
+    method = normalize_svd_method(svd_method)
+    return _source_figure_payload(
+        h5_path,
+        vessel,
+        signal,
+        lambda source: _spectrum_payload_from_source(
+            source, method=method, cumulative=bool(cumulative)
+        ),
+    )
+
+
+def _source_has_metric_payload(metrics: dict, source_name: str) -> bool:
+    """True when the vessel/signal source contains low-rank endpoint content."""
+    prefixes = (
+        f"{source_name}/endpoints/joint/",
+        f"{source_name}/endpoints/per_beat/",
+        f"{source_name}/figures/",
+        f"{source_name}/decomposition/singular_values",
+        f"{source_name}/decomposition/singular_energy_fraction",
+    )
+    return any(key.startswith(prefix) for prefix in prefixes for key in metrics)
+
+
+def _source_available(metrics: dict, source_name: str, flag_name: str) -> bool:
+    """Honor explicit QC flags, otherwise infer availability from metrics."""
+    flag = metrics.get(f"{source_name}/qc/{flag_name}")
+    if flag is None:
+        return _source_has_metric_payload(metrics, source_name)
+    return int(np.asarray(flag).reshape(-1)[0]) == 1
+
+
+def _group_flag_or_payload(
+    source: h5py.Group,
+    flag_name: str,
+    *,
+    default_from_payload: bool,
+) -> bool:
+    """Read ``qc/<flag_name>`` when present, else use payload inference."""
+    flag = _scalar_from_group(source, f"qc/{flag_name}", float("nan"))
+    if np.isfinite(flag):
+        return int(flag) == 1
+    return bool(default_from_payload)
+
+
+def _source_group_has_metric_payload(source: h5py.Group) -> bool:
+    """True when a source group has official endpoints, figures, or spectra."""
+    endpoints = source.get("endpoints")
+    if isinstance(endpoints, h5py.Group):
+        for method in SVD_METHODS:
+            if _group_has_datasets(endpoints.get(method)):
+                return True
+    figures = source.get("figures")
+    if isinstance(figures, h5py.Group):
+        for obj in figures.values():
+            if isinstance(obj, h5py.Group):
+                if _group_has_datasets(obj):
+                    return True
+                if any(isinstance(child, h5py.Group) for child in obj.values()):
+                    return True
+    decomp = source.get("decomposition")
+    if isinstance(decomp, h5py.Group) and any(
+        name in decomp for name in ("singular_values", "singular_energy_fraction")
+    ):
+        return True
+    per_beat = source.get("per_beat")
+    return isinstance(per_beat, h5py.Group) and any(
+        name in per_beat for name in ("singular_values_b", "u_mode1_tb")
+    )
+
+
+def _scalar_from_group(
+    group: h5py.Group | None,
+    name: str,
+    default: float = float("nan"),
+) -> float:
     """Read one numeric dataset (nested path ok) as a Python float."""
+    if group is None:
+        return float(default)
     try:
         obj = group[name]
     except KeyError:
@@ -492,33 +786,41 @@ def load_vessel_data_from_result_h5(
         source = root.get(f"{vessel}/{signal}")
         if not isinstance(source, h5py.Group):
             return None
-        if int(_scalar_from_group(source, "qc/input_available", 0)) != 1:
+        has_payload = _source_group_has_metric_payload(source)
+        if not _group_flag_or_payload(
+            source,
+            "input_available",
+            default_from_payload=has_payload,
+        ):
             return None
-        if int(_scalar_from_group(source, "qc/svd_available", 0)) != 1:
+        if not _group_flag_or_payload(
+            source,
+            "svd_available",
+            default_from_payload=has_payload,
+        ):
             return None
 
-        endpoints = source["endpoints"] if "endpoints" in source else None
+        joint_endpoints = _endpoint_group(source, "joint")
+        per_beat_endpoints = _endpoint_group(source, "per_beat")
         variability = source["variability"] if "variability" in source else None
         decomposition = source["decomposition"] if "decomposition" in source else None
         baseline = source["baseline"] if "baseline" in source else None
         beatwise_g = source["beatwise"] if "beatwise" in source else None
-        per_beat_g = source["per_beat"] if "per_beat" in source else None
         inputs = source["inputs"] if "inputs" in source else None
         beat_period = source["beat_period"] if "beat_period" in source else None
 
         acq: dict[str, float] = {}
-        if isinstance(endpoints, h5py.Group):
-            for key, arr in _group_dataset_map(endpoints).items():
-                flat = np.asarray(arr, dtype=float).reshape(-1)
-                acq[key] = float(flat[0]) if flat.size else float("nan")
+        for key, arr in _read_endpoint_values(joint_endpoints).items():
+            flat = np.asarray(arr, dtype=float).reshape(-1)
+            acq[key] = float(flat[0]) if flat.size else float("nan")
         if isinstance(variability, h5py.Group):
             for key, arr in _group_dataset_map(variability).items():
                 flat = np.asarray(arr, dtype=float).reshape(-1)
                 acq[key] = float(flat[0]) if flat.size else float("nan")
         if isinstance(decomposition, h5py.Group):
             for key in (
-                "effective_rank",
-                "participation_ratio",
+                "Reff",
+                "PR",
                 "spectrum_mode_count_M",
             ):
                 if key in decomposition:
@@ -539,22 +841,37 @@ def load_vessel_data_from_result_h5(
             if "abs_mu_b" in baseline and "abs_mu_b" not in beatwise:
                 beatwise["abs_mu_b"] = np.asarray(baseline["abs_mu_b"], dtype=float)
 
-        per_beat_svd = (
-            _group_dataset_map(per_beat_g) if isinstance(per_beat_g, h5py.Group) else {}
-        )
-        per_beat_svd = {
-            key: value
-            for key, value in per_beat_svd.items()
-            if not key.startswith("u_mode") and not key.startswith("scores_mode")
-        }
+        per_beat_svd = _read_endpoint_values(per_beat_endpoints)
+        legacy_per_beat = source["per_beat"] if "per_beat" in source else None
+        if isinstance(legacy_per_beat, h5py.Group):
+            legacy_per_beat_svd = {
+                key: value
+                for key, value in _group_dataset_map(legacy_per_beat).items()
+                if not key.startswith("u_mode") and not key.startswith("scores_mode")
+            }
+            if "singular_values_b" in legacy_per_beat_svd:
+                per_beat_svd["singular_values_b"] = legacy_per_beat_svd[
+                    "singular_values_b"
+                ]
         per_beat_svd["singular_values_b"] = coerce_beat_spectra(
             per_beat_svd.get("singular_values_b")
         )
 
         singular_values = np.asarray([], dtype=float)
         energy_fraction = np.asarray([], dtype=float)
+        per_beat_spectrum = np.asarray([], dtype=float)
+        joint_spectrum_payload = _spectrum_payload_from_source(
+            source, method="joint", cumulative=False
+        )
+        if joint_spectrum_payload is not None:
+            singular_values = np.asarray(joint_spectrum_payload["mean"], dtype=float)
+        pb_spectrum_payload = _spectrum_payload_from_source(
+            source, method="per_beat", cumulative=False
+        )
+        if pb_spectrum_payload is not None:
+            per_beat_spectrum = np.asarray(pb_spectrum_payload["mean"], dtype=float)
         if isinstance(decomposition, h5py.Group):
-            if "singular_values" in decomposition:
+            if singular_values.size == 0 and "singular_values" in decomposition:
                 singular_values = np.asarray(
                     decomposition["singular_values"], dtype=float
                 )
@@ -579,14 +896,10 @@ def load_vessel_data_from_result_h5(
             period_b = np.full(
                 np.asarray(beatwise["mu_b"]).shape[0], beat_period_mean
             )
-        elif "TPR_b" in beatwise:
-            period_b = np.full(
-                np.asarray(beatwise["TPR_b"]).shape[0], beat_period_mean
-            )
-        elif "TPR_b_pb" in per_beat_svd:
-            period_b = np.full(
-                np.asarray(per_beat_svd["TPR_b_pb"]).shape[0], beat_period_mean
-            )
+        elif "R0_b" in beatwise:
+            period_b = np.full(np.asarray(beatwise["R0_b"]).shape[0], beat_period_mean)
+        elif "R0" in per_beat_svd:
+            period_b = np.full(np.asarray(per_beat_svd["R0"]).shape[0], beat_period_mean)
         else:
             period_b = np.asarray([], dtype=float)
 
@@ -608,6 +921,7 @@ def load_vessel_data_from_result_h5(
         "mu": acq.get("mu_acq", float("nan")),
         "energy_fraction": energy_fraction,
         "singular_values": singular_values,
+        "per_beat_spectrum": per_beat_spectrum,
         "beat_period_mean": beat_period_mean,
         "beat_period_sd": beat_period_sd,
         "beat_period_b": period_b,
@@ -672,10 +986,11 @@ def metrics_from_lowrank_group(
     for source_name in SOURCE_NAMES:
         if not veins_flag and source_name.startswith("vein/"):
             continue
-        flag = metrics.get(f"{source_name}/qc/input_available")
-        if flag is None:
-            continue
-        if int(np.asarray(flag).reshape(-1)[0]) == 1:
+        if _source_available(
+            metrics,
+            source_name,
+            "input_available",
+        ) and _source_available(metrics, source_name, "svd_available"):
             resolved.append(source_name)
     return metrics, resolved
 
@@ -700,7 +1015,7 @@ def build_ingest_attrs(
         "veins_flag": bool(veins_flag),
         "representations": representations,
         "primary_endpoints": ["A1", "rho1", "A2", "rho2"],
-        "context_endpoint": "TPR",
+        "context_endpoint": "R0",
         "input_beat_period_path": input_beat_period_path,
         "source": "eyeflow_metrics",
     }
@@ -872,7 +1187,11 @@ def load_packed_waveform(
         source = root.get(f"{vessel}/{signal}")
         if not isinstance(source, h5py.Group):
             return None
-        if int(_scalar_from_group(source, "qc/svd_available", 0)) != 1:
+        if not _group_flag_or_payload(
+            source,
+            "svd_available",
+            default_from_payload=_source_group_has_metric_payload(source),
+        ):
             return None
 
         decomp = source.get("decomposition")
@@ -1023,27 +1342,33 @@ class LowRankWaveformAcquisitionFigures:
         )
         if fig3_pb is not None:
             written.append(fig3_pb)
-        written.append(
-            cls.plot_energy_spectrum(
-                vessel_bundle,
-                out_dir / f"{stem}_fig4_energy_spectrum.png",
-                vessels=vessels,
-                svd_method="joint",
-            )
+        fig4 = cls.plot_energy_spectrum(
+            vessel_bundle,
+            out_dir / f"{stem}_fig4_energy_spectrum.png",
+            vessels=vessels,
+            svd_method="joint",
+            h5_path=h5_path,
+            signal=signal,
         )
-        written.append(
-            cls.plot_energy_spectrum_cumulative(
-                vessel_bundle,
-                out_dir / f"{stem}_fig4_energy_spectrum_cumulative.png",
-                vessels=vessels,
-                svd_method="joint",
-            )
+        if fig4 is not None:
+            written.append(fig4)
+        fig4_c = cls.plot_energy_spectrum_cumulative(
+            vessel_bundle,
+            out_dir / f"{stem}_fig4_energy_spectrum_cumulative.png",
+            vessels=vessels,
+            svd_method="joint",
+            h5_path=h5_path,
+            signal=signal,
         )
+        if fig4_c is not None:
+            written.append(fig4_c)
         fig4_pb = cls.plot_energy_spectrum(
             vessel_bundle,
             out_dir / f"{stem}_fig4_energy_spectrum_pb.png",
             vessels=vessels,
             svd_method="per_beat",
+            h5_path=h5_path,
+            signal=signal,
         )
         if fig4_pb is not None:
             written.append(fig4_pb)
@@ -1052,6 +1377,8 @@ class LowRankWaveformAcquisitionFigures:
             out_dir / f"{stem}_fig4_energy_spectrum_cumulative_pb.png",
             vessels=vessels,
             svd_method="per_beat",
+            h5_path=h5_path,
+            signal=signal,
         )
         if fig4_pb_c is not None:
             written.append(fig4_pb_c)
@@ -1100,25 +1427,46 @@ class LowRankWaveformAcquisitionFigures:
         any_data = False
         for row_idx, vessel in enumerate(vessels):
             ax = axes[row_idx, 0]
-            packed = load_packed_waveform(h5_path, vessel, signal=signal)
+            payload = load_figure2_payload(h5_path, vessel, signal=signal)
             mean = std = None
             dt_s = float("nan")
-            if packed is not None:
-                v = np.asarray(packed["v"], dtype=float)
-                # (n_t, n_beats, k, r) → concatenate beats along time.
-                n_t = int(packed["n_t"])
-                n_beats = int(v.shape[1])
-                v_cat = np.transpose(v, (1, 0) + tuple(range(2, v.ndim)))
-                v_cat = v_cat.reshape((n_beats * n_t,) + v.shape[2:])
-                mean, std = cls._segment_spatial_mean_std(v_cat)
-                period = float(packed["beat_period_mean"])
-                if np.isfinite(period) and period > 0 and n_t > 0:
-                    dt_s = period / n_t
+            t_s = None
+            xlabel = "Time (s)"
+            if payload is not None:
+                t_s = np.asarray(payload["t"], dtype=float)
+                mean = np.asarray(payload["mean"], dtype=float)
+                std = np.asarray(payload["std"], dtype=float)
+                finite_dt = np.diff(t_s[np.isfinite(t_s)])
+                finite_dt = finite_dt[finite_dt > 0]
+                if finite_dt.size:
+                    dt_s = float(np.median(finite_dt))
+            else:
+                packed = load_packed_waveform(h5_path, vessel, signal=signal)
+                if packed is not None:
+                    v = np.asarray(packed["v"], dtype=float)
+                    # (n_t, n_beats, k, r) → concatenate beats along time.
+                    n_t = int(packed["n_t"])
+                    n_beats = int(v.shape[1])
+                    v_cat = np.transpose(v, (1, 0) + tuple(range(2, v.ndim)))
+                    v_cat = v_cat.reshape((n_beats * n_t,) + v.shape[2:])
+                    mean, std = cls._segment_spatial_mean_std(v_cat)
+                    period = float(packed["beat_period_mean"])
+                    if np.isfinite(period) and period > 0 and n_t > 0:
+                        dt_s = period / n_t
 
             if mean is not None and mean.size:
                 any_data = True
                 n = int(mean.size)
-                if np.isfinite(dt_s) and dt_s > 0:
+                if t_s is not None and t_s.size >= n:
+                    t_s = t_s[:n]
+                    xlabel = "Time (s)"
+                    if np.isfinite(dt_s) and dt_s > 0:
+                        stride = max(
+                            1, int(round(cls.FIG2_WHISKER_INTERVAL_S / dt_s))
+                        )
+                    else:
+                        stride = 15
+                elif np.isfinite(dt_s) and dt_s > 0:
                     t_s = np.arange(n, dtype=float) * dt_s
                     xlabel = "Time (s)"
                     stride = max(1, int(round(cls.FIG2_WHISKER_INTERVAL_S / dt_s)))
@@ -1178,6 +1526,12 @@ class LowRankWaveformAcquisitionFigures:
         svd_method: str = DEFAULT_SVD_METHOD,
     ) -> dict[str, dict[str, np.ndarray]] | None:
         """Build Fig. 3 curves for one vessel and gray-band definition."""
+        payload = load_figure3_payload(
+            h5_path, vessel, signal=signal, svd_method=svd_method
+        )
+        if payload is not None:
+            return payload
+
         packed = load_packed_waveform(
             h5_path, vessel, signal=signal, svd_method=svd_method
         )
@@ -1333,7 +1687,7 @@ class LowRankWaveformAcquisitionFigures:
                     )
                 cls._style_axes(ax, tick_size=9, label_size=10)
                 ax.set_box_aspect(1)
-        fig.get_layout_engine().set(w_pad=0.0, h_pad=0.0, wspace=0.02, hspace=0.02)
+        fig.get_layout_engine().set(w_pad=0.25, h_pad=0.0, wspace=0.08, hspace=0.02)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(out_path, dpi=150, bbox_inches="tight", pad_inches=0.02)
         plt.close(fig)
@@ -1419,6 +1773,8 @@ class LowRankWaveformAcquisitionFigures:
         *,
         vessels: tuple[str, ...] | None = None,
         svd_method: str = "joint",
+        h5_path: Path | str | None = None,
+        signal: str = "raw",
     ) -> Path | None:
         """Fig. 4: singular values vs mode index for one SVD method."""
         return cls._save_energy_spectrum_figure(
@@ -1427,6 +1783,8 @@ class LowRankWaveformAcquisitionFigures:
             cumulative=False,
             vessels=vessels,
             svd_method=svd_method,
+            h5_path=h5_path,
+            signal=signal,
         )
 
     @classmethod
@@ -1437,6 +1795,8 @@ class LowRankWaveformAcquisitionFigures:
         *,
         vessels: tuple[str, ...] | None = None,
         svd_method: str = "joint",
+        h5_path: Path | str | None = None,
+        signal: str = "raw",
     ) -> Path | None:
         """Standalone cumulative-sum panel (same 2:1 aspect as Fig. 4)."""
         return cls._save_energy_spectrum_figure(
@@ -1445,6 +1805,8 @@ class LowRankWaveformAcquisitionFigures:
             cumulative=True,
             vessels=vessels,
             svd_method=svd_method,
+            h5_path=h5_path,
+            signal=signal,
         )
 
     @classmethod
@@ -1456,6 +1818,8 @@ class LowRankWaveformAcquisitionFigures:
         cumulative: bool,
         vessels: tuple[str, ...] | None = None,
         svd_method: str = "joint",
+        h5_path: Path | str | None = None,
+        signal: str = "raw",
     ) -> Path | None:
         """Write Fig. 4 from joint or packed per-beat singular values."""
         out_path = Path(out_path)
@@ -1477,7 +1841,38 @@ class LowRankWaveformAcquisitionFigures:
         for vessel_idx, vessel in enumerate(plot_vessels):
             ax = axes[vessel_idx, 0]
             data = vessel_bundle.get(vessel)
-            if method == "per_beat":
+            payload = (
+                load_spectrum_payload(
+                    h5_path,
+                    vessel,
+                    signal=signal,
+                    svd_method=method,
+                    cumulative=cumulative,
+                )
+                if h5_path is not None
+                else None
+            )
+            if payload is not None:
+                mode = np.asarray(payload["mode"], dtype=float)
+                mean = np.asarray(payload["mean"], dtype=float)
+                n_modes = min(n_keep, mode.size, mean.size)
+                if n_modes:
+                    mode = mode[:n_modes]
+                    mean = mean[:n_modes]
+                    cls._draw_spectrum_curve(ax, mode, mean)
+                    lo = np.asarray(payload.get("lo", []), dtype=float)
+                    hi = np.asarray(payload.get("hi", []), dtype=float)
+                    if lo.size >= n_modes and hi.size >= n_modes:
+                        ax.fill_between(
+                            mode,
+                            lo[:n_modes],
+                            hi[:n_modes],
+                            color="black",
+                            alpha=0.12,
+                            linewidth=0,
+                        )
+                    any_drawn = True
+            elif method == "per_beat":
                 spectra = cls._beat_spectra(data)
                 if is_usable_beat_spectra(spectra):
                     cls._draw_spectrum_mean_std(
@@ -1496,7 +1891,7 @@ class LowRankWaveformAcquisitionFigures:
             cls._style_spectrum_panel(
                 ax, n_keep=n_keep, ylabel=ylabel, log_y=not cumulative
             )
-        if method == "per_beat" and not any_drawn:
+        if not any_drawn:
             plt.close(fig)
             return None
         fig.tight_layout()

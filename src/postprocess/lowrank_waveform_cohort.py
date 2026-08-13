@@ -1,10 +1,10 @@
-"""Cohort low-rank Figs 4--7 and ``lowrank_cohort.h5`` from packed result H5s.
+"""Cohort low-rank Figs 4--8 and ``lowrank_cohort.h5`` from packed result H5s.
 
-Joint-SVD Figs 4--7 keep the article acquisition scalars; a parallel
+Joint-SVD Figs 4--8 keep the article acquisition scalars; a parallel
 ``*_pb.png`` set uses ``median_b`` of packed per-beat SVD endpoints (ρ is
-``median_b(R)/median_b(R0)``). ``T``, ``μ``, TPR, and MPR stay joint.
-Fig. 4 joint uses packed joint singular values. Stats / confounds live in
-the same ``lowrank_cohort.h5``.
+``median_b(R)/median_b(R0)``). ``T``, ``μ``, R0, and MPR stay joint.
+Fig. 4 joint and Fig. 5 ratio plots use packed joint singular values. Stats /
+confounds live in the same ``lowrank_cohort.h5``.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import warnings
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -226,19 +227,19 @@ COHORT_H5_BASENAME = "lowrank_cohort.h5"
 CANONICAL_ENDPOINTS = (
     ("A1", "A1"),
     ("A2", "A2"),
-    ("TPR", "R0"),
+    ("R0", "R0"),
     ("R1", "R1"),
     ("R2", "R2"),
     ("rho1", "rho1"),
     ("rho2", "rho2"),
-    ("mpr", "MPR"),
-    ("effective_rank", "Reff"),
-    ("participation_ratio", "PR"),
+    ("MPR", "MPR"),
+    ("Reff", "Reff"),
+    ("PR", "PR"),
 )
 ENDPOINT_BY_METRIC = dict(CANONICAL_ENDPOINTS)
 
-CONFUND_EIGHT = ("A1", "A2", "R1", "R2", "rho1", "rho2", "TPR", "mpr")
-CONFUND_SIX = ("effective_rank", "participation_ratio")
+CONFUND_EIGHT = ("A1", "A2", "R1", "R2", "rho1", "rho2", "R0", "MPR")
+CONFUND_SIX = ("Reff", "PR")
 
 COHORT_DICTIONARY = {
     "columns": {
@@ -311,14 +312,14 @@ COHORT_DICTIONARY = {
         "endpoint": {
             "A1": "Mode-1 amplitude.",
             "A2": "Mode-2 amplitude.",
-            "R0": "TPR (total pulsatile RMS).",
+            "R0": "Total pulsatile RMS.",
             "R1": "Mode-1 residual RMS.",
             "R2": "Mode-2 residual RMS.",
             "rho1": "Mode-1 residual ratio R1/R0.",
             "rho2": "Mode-2 residual ratio R2/R0.",
-            "MPR": "mpr (mean-to-pulsatile ratio).",
-            "Reff": "effective_rank.",
-            "PR": "participation_ratio.",
+            "MPR": "Mean-to-pulsatile ratio.",
+            "Reff": "Effective rank.",
+            "PR": "Participation ratio.",
         },
     },
 }
@@ -780,38 +781,38 @@ class LowRankWaveformConfounds:
             beatwise = a.get("beatwise") or {}
             per_beat = a.get("per_beat_svd") or {}
             acq = a.get("acq") or {}
-            if metric == "TPR":
+            if metric == "R0":
                 if svd_method == "per_beat":
-                    arr = self._first_finite_array(per_beat, "TPR_b_pb", "R0_b_pb")
+                    arr = self._first_finite_array(per_beat, "R0")
                 else:
-                    arr = self._first_finite_array(beatwise, "TPR_b")
+                    arr = self._first_finite_array(beatwise, "R0_b")
                 out.append(aggregate_beatwise(arr, stat if stat != "n/a" else "median"))
-            elif metric == "mpr":
+            elif metric == "MPR":
                 if svd_method == "per_beat":
-                    arr = self._first_finite_array(per_beat, "mpr_b_pb", "MPR_b_pb")
+                    arr = self._first_finite_array(per_beat, "MPR")
                 else:
-                    arr = self._first_finite_array(beatwise, "mpr_b")
+                    arr = self._first_finite_array(beatwise, "MPR_b")
                 out.append(aggregate_beatwise(arr, stat if stat != "n/a" else "median"))
             elif metric in ("A1", "A2", "R1", "R2"):
                 if svd_method == "per_beat":
-                    arr = self._first_finite_array(per_beat, f"{metric}_b_pb")
+                    arr = self._first_finite_array(per_beat, metric)
                 else:
                     arr = self._first_finite_array(beatwise, f"{metric}_b")
                 out.append(aggregate_beatwise(arr, stat if stat != "n/a" else "median"))
             elif metric in ("rho1", "rho2"):
                 m = metric[-1]
                 if svd_method == "per_beat":
-                    R_b = self._first_finite_array(per_beat, f"R{m}_b_pb")
-                    tpr_b = self._first_finite_array(per_beat, "TPR_b_pb", "R0_b_pb")
+                    R_b = self._first_finite_array(per_beat, f"R{m}")
+                    tpr_b = self._first_finite_array(per_beat, "R0")
                 else:
                     R_b = self._first_finite_array(beatwise, f"R{m}_b")
-                    tpr_b = self._first_finite_array(beatwise, "TPR_b")
+                    tpr_b = self._first_finite_array(beatwise, "R0_b")
                 out.append(
                     aggregate_rho(R_b, tpr_b, stat if stat != "n/a" else "median")
                 )
-            elif metric in ("effective_rank", "participation_ratio"):
+            elif metric in ("Reff", "PR"):
                 if svd_method == "per_beat":
-                    arr = self._first_finite_array(per_beat, f"{metric}_b_pb")
+                    arr = self._first_finite_array(per_beat, metric)
                     out.append(
                         aggregate_beatwise(arr, stat if stat != "n/a" else "median")
                     )
@@ -962,7 +963,7 @@ class LowRankWaveformConfounds:
 
 
 # =====================================================================
-# Figure annotations (p / Cliff's δ on Figs 5--7)
+# Figure annotations (p / Cliff's δ on Figs 6--8)
 # =====================================================================
 
 def _pooled_test(df: pd.DataFrame, metric: str) -> tuple[float, float]:
@@ -994,11 +995,11 @@ def _format_delta(delta: float) -> str:
 
 
 # =====================================================================
-# Figs 5--7
+# Figs 4--8
 # =====================================================================
 
 class LowRankWaveformCohortFigures:
-    """Article Figs. 4--7, written once per cohort (joint and ``_pb``)."""
+    """Article Figs. 4--8, written once per cohort (joint and ``_pb``)."""
 
     PANEL_SIZE = 2.5
     FLICKER_SHADE = "#add8e6"
@@ -1008,8 +1009,8 @@ class LowRankWaveformCohortFigures:
     FIG5_PANELS = (
         ("beat_period", r"Beat period" "\n" r"$T$"),
         ("mu", r"Baseline level" "\n" r"$\mu$"),
-        ("TPR", r"Total Pulsatile RMS" "\n" r"$R_0$"),
-        ("mpr", r"Mean-to-pulsatile ratio" "\n" r"MPR"),
+        ("R0", r"Total Pulsatile RMS" "\n" r"$R_0$"),
+        ("MPR", r"Mean-to-pulsatile ratio" "\n" r"MPR"),
     )
     FIG6_PANELS = (
         ("A1", r"Mode-1 amplitude" "\n" r"$A_1$"),
@@ -1020,8 +1021,8 @@ class LowRankWaveformCohortFigures:
     FIG7_PANELS = (
         ("rho1", r"Residual ratio" "\n" r"$\rho_1$"),
         ("rho2", r"Residual ratio" "\n" r"$\rho_2$"),
-        ("effective_rank", r"Effective rank" "\n" r"$R_{\mathrm{eff}}$"),
-        ("participation_ratio", r"Participation ratio" "\n" r"PR"),
+        ("Reff", r"Effective rank" "\n" r"$R_{\mathrm{eff}}$"),
+        ("PR", r"Participation ratio" "\n" r"PR"),
     )
 
     @classmethod
@@ -1035,13 +1036,13 @@ class LowRankWaveformCohortFigures:
         beats_by_vessel: dict[str, pd.DataFrame] | None = None,
         points_by_vessel_per_beat: dict[str, pd.DataFrame] | None = None,
     ) -> list[Path]:
-        """Write Figs. 4--7 (joint and ``_pb``) for the artery cohort."""
+        """Write Figs. 4--8 (joint and ``_pb``) for the artery cohort."""
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         grids = (
-            ("fig5_nonsvd_endpoints.png", cls.FIG5_PANELS),
-            ("fig6_lowrank_endpoints.png", cls.FIG6_PANELS),
-            ("fig7_residual_spectrum_endpoints.png", cls.FIG7_PANELS),
+            ("fig6_nonsvd_endpoints.png", cls.FIG5_PANELS),
+            ("fig7_lowrank_endpoints.png", cls.FIG6_PANELS),
+            ("fig8_residual_spectrum_endpoints.png", cls.FIG7_PANELS),
         )
         written = [
             cls._plot_endpoint_grid(
@@ -1055,9 +1056,9 @@ class LowRankWaveformCohortFigures:
         pb_points = points_by_vessel_per_beat or {}
         if _has_per_beat_endpoint_dots(pb_points):
             pb_grids = (
-                ("fig5_nonsvd_endpoints_pb.png", cls.FIG5_PANELS),
-                ("fig6_lowrank_endpoints_pb.png", cls.FIG6_PANELS),
-                ("fig7_residual_spectrum_endpoints_pb.png", cls.FIG7_PANELS),
+                ("fig6_nonsvd_endpoints_pb.png", cls.FIG5_PANELS),
+                ("fig7_lowrank_endpoints_pb.png", cls.FIG6_PANELS),
+                ("fig8_residual_spectrum_endpoints_pb.png", cls.FIG7_PANELS),
             )
             written.extend(
                 cls._plot_endpoint_grid(
@@ -1068,28 +1069,56 @@ class LowRankWaveformCohortFigures:
                 )
                 for name, panels in pb_grids
             )
-        written.append(
-            cls._save_spectrum(
-                out_dir / prefixed_filename("fig4_variance_fraction.png", patient_id),
-                points_by_vessel,
-                cumulative=False,
+        if _has_spectrum_modes(points_by_vessel.get("artery", pd.DataFrame())):
+            written.append(
+                cls._save_spectrum(
+                    out_dir
+                    / prefixed_filename("fig4_variance_fraction.png", patient_id),
+                    points_by_vessel,
+                    cumulative=False,
+                )
             )
-        )
-        written.append(
-            cls._save_spectrum(
-                out_dir
-                / prefixed_filename("fig4_variance_fraction_cumulative.png", patient_id),
-                points_by_vessel,
-                cumulative=True,
+            written.append(
+                cls._save_spectrum(
+                    out_dir
+                    / prefixed_filename(
+                        "fig4_variance_fraction_cumulative.png", patient_id
+                    ),
+                    points_by_vessel,
+                    cumulative=True,
+                )
             )
-        )
+            if is_flicker_triad(group_order):
+                written.append(
+                    cls._save_spectrum_ratio(
+                        out_dir
+                        / prefixed_filename("fig5_spectrum_ratio.png", patient_id),
+                        points_by_vessel,
+                        cumulative=False,
+                    )
+                )
+                written.append(
+                    cls._save_spectrum_ratio(
+                        out_dir
+                        / prefixed_filename(
+                            "fig5_spectrum_ratio_cumulative.png", patient_id
+                        ),
+                        points_by_vessel,
+                        cumulative=True,
+                    )
+                )
         beats = beats_by_vessel or {}
-        if _has_spectrum_modes(beats.get("artery", pd.DataFrame())):
+        pb_spectrum_source = (
+            pb_points
+            if _has_spectrum_modes(pb_points.get("artery", pd.DataFrame()))
+            else beats
+        )
+        if _has_spectrum_modes(pb_spectrum_source.get("artery", pd.DataFrame())):
             written.append(
                 cls._save_spectrum(
                     out_dir
                     / prefixed_filename("fig4_variance_fraction_pb.png", patient_id),
-                    beats,
+                    pb_spectrum_source,
                     cumulative=False,
                 )
             )
@@ -1099,11 +1128,11 @@ class LowRankWaveformCohortFigures:
                     / prefixed_filename(
                         "fig4_variance_fraction_cumulative_pb.png", patient_id
                     ),
-                    beats,
+                    pb_spectrum_source,
                     cumulative=True,
                 )
             )
-        return written
+        return sorted(written, key=lambda path: path.name)
 
     @staticmethod
     def _style_axes(ax, *, tick_size: int = 9) -> None:
@@ -1307,6 +1336,97 @@ class LowRankWaveformCohortFigures:
         plt.close(fig)
         return out_path
 
+    @staticmethod
+    def _spectrum_ratio_values(
+        df: pd.DataFrame,
+        mode_cols: list[str],
+        *,
+        cumulative: bool,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Return modes and percent flicker/baseline spectrum change."""
+        modes = np.arange(1, len(mode_cols) + 1)
+        if df.empty or not mode_cols or "epoch" not in df.columns:
+            return modes, np.full(len(mode_cols), np.nan, dtype=float)
+        baseline = df.loc[df["epoch"].isin(["B1", "B2"]), mode_cols].to_numpy(
+            dtype=float
+        )
+        flicker = df.loc[df["epoch"] == "Flicker", mode_cols].to_numpy(dtype=float)
+        if baseline.size == 0 or flicker.size == 0:
+            return modes, np.full(len(mode_cols), np.nan, dtype=float)
+        with np.errstate(all="ignore"):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                baseline_mean = np.nanmean(baseline, axis=0)
+                flicker_mean = np.nanmean(flicker, axis=0)
+        if cumulative:
+            baseline_mean = np.nancumsum(baseline_mean)
+            flicker_mean = np.nancumsum(flicker_mean)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ratio = flicker_mean / baseline_mean
+        percent_change = 100.0 * (ratio - 1.0)
+        percent_change = np.where(np.isfinite(percent_change), percent_change, np.nan)
+        return modes, percent_change
+
+    @classmethod
+    def _save_spectrum_ratio(
+        cls,
+        out_path: Path,
+        points_by_vessel: dict[str, pd.DataFrame] | None,
+        *,
+        cumulative: bool,
+    ) -> Path:
+        """Write Fig. 5 spectrum ratio PNG from acquisition-level singular values."""
+        out_path = Path(out_path)
+        frames = points_by_vessel or {}
+        df = frames.get("artery", pd.DataFrame())
+        mode_cols = _spectrum_mode_cols(df)
+        modes, percent_change = cls._spectrum_ratio_values(
+            df,
+            mode_cols,
+            cumulative=cumulative,
+        )
+
+        fig_h = 3.0
+        fig, axes = plt.subplots(1, 1, figsize=(2.0 * fig_h, fig_h), squeeze=False)
+        ax = axes[0, 0]
+        ax.axhline(0.0, color="black", linestyle=":", linewidth=1.1)
+        ax.plot(
+            modes,
+            percent_change,
+            color="black",
+            linestyle="-",
+            marker="o",
+            linewidth=1.5,
+            markersize=5,
+            markerfacecolor="white",
+            markeredgecolor="black",
+            markeredgewidth=1.2,
+        )
+
+        finite = percent_change[np.isfinite(percent_change)]
+        if finite.size:
+            extent = max(5.0, float(np.nanmax(np.abs(finite))) * 1.2)
+            ax.set_ylim(-extent, extent)
+        ax.set_xticks(np.arange(1, SPECTRUM_N_MODES + 1))
+        ax.set_xticklabels([str(m) for m in range(1, SPECTRUM_N_MODES + 1)])
+        ax.set_xlim(0.5, SPECTRUM_N_MODES + 0.5)
+        ax.set_xlabel(r"$m$", fontsize=_FIG_LABEL_SIZE)
+        ax.set_ylabel(
+            (
+                r"$100(Q^{\mathrm{cum}}_m-1)$ (%)"
+                if cumulative
+                else r"$100(Q_m-1)$ (%)"
+            ),
+            fontsize=_FIG_LABEL_SIZE,
+        )
+        ax.set_box_aspect(0.5)
+        cls._style_axes(ax, tick_size=_FIG_TICK_SIZE)
+        fig.tight_layout()
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(out_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        return out_path
+
 
 # =====================================================================
 # Collection from packed result H5s
@@ -1319,8 +1439,8 @@ PER_BEAT_POINT_METRICS = (
     "R2",
     "rho1",
     "rho2",
-    "effective_rank",
-    "participation_ratio",
+    "Reff",
+    "PR",
 )
 
 
@@ -1395,10 +1515,10 @@ def _beat_rows(
     per_beat_svd = vessel_data["per_beat_svd"]
     n_beats = 0
     for mapping, key in (
-        (beatwise, "TPR_b"),
+        (beatwise, "R0_b"),
         (beatwise, "A1_b"),
-        (per_beat_svd, "TPR_b_pb"),
-        (per_beat_svd, "A1_b_pb"),
+        (per_beat_svd, "R0"),
+        (per_beat_svd, "A1"),
     ):
         if key in mapping:
             n_beats = len(np.asarray(mapping[key]))
@@ -1419,33 +1539,25 @@ def _beat_rows(
             "beat_period": _finite_at(period_b, b),
             "valid_fraction": _finite_at(vfb, b),
             "mu": _beat_get(beatwise, "mu_b", b),
-            "TPR": _beat_get(beatwise, "TPR_b", b),
-            "mpr": _beat_get(beatwise, "mpr_b", b),
+            "R0": _beat_get(beatwise, "R0_b", b),
+            "MPR": _beat_get(beatwise, "MPR_b", b),
             "A1": _beat_get(beatwise, "A1_b", b),
             "R1": _beat_get(beatwise, "R1_b", b),
             "rho1": _beat_get(beatwise, "rho1_b", b),
             "A2": _beat_get(beatwise, "A2_b", b),
             "R2": _beat_get(beatwise, "R2_b", b),
             "rho2": _beat_get(beatwise, "rho2_b", b),
-            "A1_pb": _beat_get(per_beat_svd, "A1_b_pb", b),
-            "R1_pb": _beat_get(per_beat_svd, "R1_b_pb", b),
-            "A2_pb": _beat_get(per_beat_svd, "A2_b_pb", b),
-            "R2_pb": _beat_get(per_beat_svd, "R2_b_pb", b),
-            "rho1_pb": _beat_get(per_beat_svd, "rho1_b_pb", b),
-            "rho2_pb": _beat_get(per_beat_svd, "rho2_b_pb", b),
-            "TPR_pb": _beat_get(per_beat_svd, "TPR_b_pb", b),
-            "mpr_pb": _beat_get(per_beat_svd, "MPR_b_pb", b),
-            "effective_rank_pb": _beat_get(
-                per_beat_svd, "effective_rank_b_pb", b
-            ),
-            "participation_ratio_pb": _beat_get(
-                per_beat_svd, "participation_ratio_b_pb", b
-            ),
+            "A1_pb": _beat_get(per_beat_svd, "A1", b),
+            "R1_pb": _beat_get(per_beat_svd, "R1", b),
+            "A2_pb": _beat_get(per_beat_svd, "A2", b),
+            "R2_pb": _beat_get(per_beat_svd, "R2", b),
+            "rho1_pb": _beat_get(per_beat_svd, "rho1", b),
+            "rho2_pb": _beat_get(per_beat_svd, "rho2", b),
+            "R0_pb": _beat_get(per_beat_svd, "R0", b),
+            "MPR_pb": _beat_get(per_beat_svd, "MPR", b),
+            "Reff_pb": _beat_get(per_beat_svd, "Reff", b),
+            "PR_pb": _beat_get(per_beat_svd, "PR", b),
         }
-        if not np.isfinite(row["TPR_pb"]):
-            row["TPR_pb"] = _beat_get(per_beat_svd, "R0_b_pb", b)
-        if not np.isfinite(row["mpr_pb"]):
-            row["mpr_pb"] = _beat_get(per_beat_svd, "mpr_b_pb", b)
         if emit_modes:
             for m in range(1, SPECTRUM_N_MODES + 1):
                 if b < singular_b.shape[0] and m <= singular_b.shape[1]:
@@ -1489,12 +1601,12 @@ def _points_row(
         "R2": scalar("R2"),
         "rho2": scalar("rho2"),
         "rho2_sd": scalar("sigma_rho2_beat"),
-        "TPR": scalar("TPR"),
-        "TPR_sd": scalar("sigma_TPR_beat"),
-        "mpr": scalar("mpr"),
-        "mpr_sd": scalar("sigma_mpr_beat"),
-        "effective_rank": scalar("effective_rank"),
-        "participation_ratio": scalar("participation_ratio"),
+        "R0": scalar("R0"),
+        "R0_sd": scalar("sigma_R0_beat"),
+        "MPR": scalar("MPR"),
+        "MPR_sd": scalar("sigma_MPR_beat"),
+        "Reff": scalar("Reff"),
+        "PR": scalar("PR"),
         "beat_period": vessel_data["beat_period_mean"],
         "beat_period_sd": vessel_data["beat_period_sd"],
         "mu": scalar("mu_acq"),
@@ -1540,8 +1652,8 @@ def _std_per_beat(mapping: dict, *keys: str) -> float:
 def _rho_from_per_beat(mapping: dict, mode: str) -> float:
     """Article ρ = median_b(R) / median_b(R0) from packed per-beat arrays."""
     return aggregate_rho(
-        _first_usable_array(mapping, f"R{mode}_b_pb"),
-        _first_usable_array(mapping, "TPR_b_pb", "R0_b_pb"),
+        _first_usable_array(mapping, f"R{mode}"),
+        _first_usable_array(mapping, "R0"),
         "median",
     )
 
@@ -1555,27 +1667,31 @@ def _points_row_per_beat(
 ) -> dict:
     """Acquisition row from packed per-beat SVD endpoints.
 
-    ``T``, ``μ``, TPR, and MPR are not SVD-derived and stay the joint
+    ``T``, ``μ``, R0, and MPR are not SVD-derived and stay the joint
     values. Mode amplitudes and residuals use ``median_b``; ρ uses
     ``median_b(R)/median_b(R0)``. Beat SDs are taken from the same
     per-beat arrays.
     """
     row = _points_row(vessel, h5_path, sequence, epoch_short, vessel_data)
     pb = vessel_data.get("per_beat_svd") or {}
-    row["A1"] = _median_per_beat(pb, "A1_b_pb")
-    row["A2"] = _median_per_beat(pb, "A2_b_pb")
-    row["R1"] = _median_per_beat(pb, "R1_b_pb")
-    row["R2"] = _median_per_beat(pb, "R2_b_pb")
+    row["A1"] = _median_per_beat(pb, "A1")
+    row["A2"] = _median_per_beat(pb, "A2")
+    row["R1"] = _median_per_beat(pb, "R1")
+    row["R2"] = _median_per_beat(pb, "R2")
     row["rho1"] = _rho_from_per_beat(pb, "1")
     row["rho2"] = _rho_from_per_beat(pb, "2")
-    row["effective_rank"] = _median_per_beat(pb, "effective_rank_b_pb")
-    row["participation_ratio"] = _median_per_beat(
-        pb, "participation_ratio_b_pb"
-    )
-    row["A1_sd"] = _std_per_beat(pb, "A1_b_pb")
-    row["A2_sd"] = _std_per_beat(pb, "A2_b_pb")
-    row["rho1_sd"] = _std_per_beat(pb, "rho1_b_pb")
-    row["rho2_sd"] = _std_per_beat(pb, "rho2_b_pb")
+    row["Reff"] = _median_per_beat(pb, "Reff")
+    row["PR"] = _median_per_beat(pb, "PR")
+    row["A1_sd"] = _std_per_beat(pb, "A1")
+    row["A2_sd"] = _std_per_beat(pb, "A2")
+    row["rho1_sd"] = _std_per_beat(pb, "rho1")
+    row["rho2_sd"] = _std_per_beat(pb, "rho2")
+    spectrum = np.asarray(vessel_data.get("per_beat_spectrum", []), dtype=float)
+    if spectrum.size:
+        for m in range(1, SPECTRUM_N_MODES + 1):
+            row[f"mode{m}"] = (
+                float(spectrum[m - 1]) if spectrum.size >= m else float("nan")
+            )
     return row
 
 
@@ -1929,7 +2045,7 @@ def _run_on_paths(
     *,
     veins: bool,
 ) -> tuple[str, list[Path]]:
-    """Collect packed H5s, write ``lowrank_cohort.h5``, and Figs 5--7 when split."""
+    """Collect packed H5s, write ``lowrank_cohort.h5``, and figures when split."""
     if not h5_paths:
         raise ValueError(
             "No packed AngioEye result H5 files with low-rank metrics were "
@@ -1985,7 +2101,7 @@ def run(
     veins: bool = True,
     result_h5_paths: Iterable[Path] | None = None,
 ) -> tuple[str, list[Path]]:
-    """Build ``lowrank_cohort.h5`` and Figs 4--7 from packed AngioEye result H5s.
+    """Build ``lowrank_cohort.h5`` and Figs 4--8 from packed AngioEye result H5s.
 
     Accepts a cohort folder, a ZIP of that tree, or an explicit
     ``result_h5_paths`` list. Writes under ``output_dir``.
@@ -2033,7 +2149,7 @@ def run(
     description=(
         "From AngioEye result H5s produced by lowrank_waveform_decomposition, "
         "write ``lowrank_cohort.h5`` (stats, confounds, acquisitions, beats) "
-        "and cohort Figs. 4--7 (joint and _pb) when 2+ group folders are "
+        "and cohort Figs. 4--8 (joint and _pb) when 2+ group folders are "
         "present. Writes under ``cohort-results/``."
     ),
     required_deps=[
@@ -2049,7 +2165,7 @@ class LowRankWaveformCohortPostprocess(BatchPostprocess):
     veins_flag = False
 
     def run(self, context: PostprocessContext) -> PostprocessResult:
-        """Registered entry: resolve result H5s and write stats H5 plus Figs 4--7."""
+        """Registered entry: resolve result H5s and write stats H5 plus figures."""
         input_path = Path(context.input_path).expanduser()
         output_dir = cohort_results_dir(context.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
