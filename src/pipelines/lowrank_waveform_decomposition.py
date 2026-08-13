@@ -4,32 +4,32 @@ EyeFlow owns SVD / endpoints and writes them under
 ``Processing/Metrics/lowrank_waveform_decomposition/`` in ``*_EF.h5``.
 This module does **not** import EyeFlow or recompute decomposition: it
 ingests that group into the AngioEye result H5 and writes Figs 2--4.
-Cohort H5 / Figs 5--7 live in ``postprocess.utils.lowrank_waveform``.
+Select ``veins_flag`` and ``svd_method`` (``joint`` or ``per_beat``) the
+same way EyeFlow exposes Veins / Joint SVD / Per-beat SVD options.
+Cohort Figs 5--7 live in ``postprocess.lowrank_waveform_cohort``.
+``lowrank_cohort.h5`` is written by ``scripts.lowrank_cohort_stats``.
 """
 
 from __future__ import annotations
 
-import re
+import warnings
 from pathlib import Path
 
 import h5py
 import numpy as np
 
-# Worker threads / process pools must not use an interactive GUI backend.
 import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.ticker import FuncFormatter, LogLocator, NullFormatter
+from matplotlib.ticker import FuncFormatter, MultipleLocator, NullFormatter
 
-from input_output.hdf5_io import find_first_existing_path
 from input_output.hdf5_schema import find_pipeline_group
-from input_output.inputs import find_hdf5_inputs, relative_hdf5_parent
+from input_output.inputs import find_hdf5_inputs
 from input_output.output_paths import (
     H5_OUTPUT_DIRNAME,
     PNG_OUTPUT_DIRNAME,
     dataset_stem_from_path,
-    h5_output_parent,
 )
 
 from .core.base import (
@@ -40,17 +40,14 @@ from .core.base import (
 
 
 T_INPUT = "Processing/VelocityPerBeat/BeatPeriodSeconds/value"
-V_RAW_SEGMENT_INPUT_ARTERY = "Processing/VelocityPerBeat/Artery/Segments/Raw/value"
-V_BAND_SEGMENT_INPUT_ARTERY = "Processing/VelocityPerBeat/Artery/Segments/BandLimited/value"
-V_RAW_SEGMENT_INPUT_VEIN = "Processing/VelocityPerBeat/Vein/Segments/Raw/value"
-V_BAND_SEGMENT_INPUT_VEIN = "Processing/VelocityPerBeat/Vein/Segments/BandLimited/value"
-VESSEL_TYPES = ("artery", "vein")
-# Figures are arterial-only; vein endpoints may still be used for tables.
+
 FIGURE_VESSELS = ("artery",)
 PIPELINE_NAME = "lowrank_waveform_decomposition"
-# Cohort tables / figs prefer the joint-SVD raw arterial (venous) pack.
+
 COHORT_SIGNAL = "raw"
-# EyeFlow packed metrics (active schema uses Processing/Metrics/...).
+SVD_METHODS = ("joint", "per_beat")
+DEFAULT_SVD_METHOD = "joint"
+
 EYEFLOW_LOWRANK_GROUP_CANDIDATES = (
     "Processing/Metrics/lowrank_waveform_decomposition",
     "Metrics/lowrank_waveform_decomposition",
@@ -64,52 +61,155 @@ SOURCE_NAMES = (
 
 SPECTRUM_N_MODES = 12
 
-# =====================================================================
-# Patient identification
-# =====================================================================
 
-PATIENT_ID_RE = re.compile(r"^(\d{6})")
-
-
-def extract_patient_id(input_path: Path | str) -> str | None:
-    """Returns the 6-digit patient ID prefixing the input ZIP/folder name,
-    or None if the name isn't ID-prefixed."""
-    match = PATIENT_ID_RE.match(Path(input_path).name)
-    return match.group(1) if match else None
-
-
-def prefixed_filename(filename: str, patient_id: str | None) -> str:
-    """Prepends ``{patient_id}_`` to filename when a patient ID is known,
-    leaving it unchanged otherwise."""
-    return f"{patient_id}_{filename}" if patient_id else filename
-
-# =====================================================================
-# Vessel/schema resolution
-# =====================================================================
-
-
-def _enabled_vessels(veins_flag: bool) -> tuple[str, ...]:
+def enabled_vessels(veins_flag: bool) -> tuple[str, ...]:
+    """Return ``("artery",)`` or ``("artery", "vein")`` from the Veins flag."""
     return ("artery", "vein") if veins_flag else ("artery",)
 
 
-def _filter_vessel_candidates(
-    candidates: dict[str, str], veins_flag: bool
-) -> dict[str, str]:
-    if veins_flag:
-        return candidates
-    return {k: v for k, v in candidates.items() if not k.startswith("vein/")}
-
-
-def _resolve_vessel_sources(h5file, veins_flag: bool) -> tuple[dict[str, str], str] | None:
-    if find_first_existing_path(h5file, [T_INPUT]) is None:
-        return None
-    candidates = {
-        "artery/raw": V_RAW_SEGMENT_INPUT_ARTERY,
-        "artery/bandlimited": V_BAND_SEGMENT_INPUT_ARTERY,
-        "vein/raw": V_RAW_SEGMENT_INPUT_VEIN,
-        "vein/bandlimited": V_BAND_SEGMENT_INPUT_VEIN,
+def normalize_svd_method(value: str | None) -> str:
+    """Return ``joint`` or ``per_beat`` from a pipeline/postprocess flag."""
+    text = str(DEFAULT_SVD_METHOD if value is None else value).strip().lower()
+    text = text.replace("-", "_").replace(" ", "_")
+    aliases = {
+        "joint": "joint",
+        "joint_svd": "joint",
+        "per_beat": "per_beat",
+        "per_beat_svd": "per_beat",
+        "perbeat": "per_beat",
+        "perbeat_svd": "per_beat",
     }
-    return _filter_vessel_candidates(candidates, veins_flag), T_INPUT
+    if text not in aliases:
+        raise ValueError(
+            f"Unknown svd_method {value!r}. Expected one of {SVD_METHODS}."
+        )
+    return aliases[text]
+
+
+def aggregate_beatwise(values_per_beat: np.ndarray, stat: str) -> float:
+    """Collapse a per-beat array to one acquisition scalar (mean or median)."""
+    x = np.asarray(values_per_beat, dtype=float)
+    x = x[np.isfinite(x)]
+    if x.size == 0:
+        return float("nan")
+    return float(np.mean(x)) if stat == "mean" else float(np.median(x))
+
+
+def aggregate_rho(R_b: np.ndarray, TPR_b: np.ndarray, stat: str) -> float:
+    """Residual ratio R/R0 from separately aggregated residual and pulsatile RMS."""
+    r = aggregate_beatwise(R_b, stat)
+    t = aggregate_beatwise(TPR_b, stat)
+    if not np.isfinite(r) or not np.isfinite(t) or abs(t) <= 1e-12:
+        return float("nan")
+    return float(r / (t + 1e-12))
+
+
+def finite_std(values: np.ndarray, *, ddof: int = 1) -> float:
+    """Sample SD of finite values; 0 when fewer than two samples."""
+    x = np.asarray(values, dtype=float).reshape(-1)
+    x = x[np.isfinite(x)]
+    if x.size < 2:
+        return 0.0
+    return float(np.std(x, ddof=ddof))
+
+
+def mean_pm_std(
+    values: np.ndarray,
+    *,
+    axis: int = 0,
+    ddof: int = 1,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Nan-aware mean ± 1 sample SD along ``axis``.
+
+    Used for every beat-to-beat (or along-sample) gray band: sample SD
+    (``ddof=1``), SD = 0 when fewer than two finite samples. Returns
+    ``(mean, mean - sd, mean + sd)``.
+    """
+    arr = np.asarray(values, dtype=float)
+    if arr.size == 0:
+        empty = np.asarray([], dtype=float)
+        return empty, empty, empty
+    with np.errstate(all="ignore"):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            mean = np.nanmean(arr, axis=axis)
+        n = np.sum(np.isfinite(arr), axis=axis)
+        # Avoid numpy's "dof <= 0" warning when a slice has <2 finite values.
+        sd = np.zeros_like(mean, dtype=float)
+        ok = n > 1
+        if np.any(ok):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                sd_all = np.nanstd(arr, axis=axis, ddof=ddof)
+            sd = np.where(ok & np.isfinite(sd_all), sd_all, 0.0)
+    mean = np.asarray(mean, dtype=float)
+    sd = np.asarray(sd, dtype=float)
+    return mean, mean - sd, mean + sd
+
+
+def coerce_beat_spectra(
+    values: np.ndarray | None,
+    *,
+    n_modes: int = SPECTRUM_N_MODES,
+) -> np.ndarray:
+    """Return ``(n_beats, n_modes)`` per-beat singular values, or empty."""
+    arr = np.asarray([] if values is None else values, dtype=float)
+    if arr.size == 0 or arr.ndim != 2 or arr.shape[1] < 2:
+        return np.zeros((0, n_modes), dtype=float)
+    if arr.shape[1] < n_modes:
+        out = np.full((arr.shape[0], n_modes), np.nan, dtype=float)
+        out[:, : arr.shape[1]] = arr
+        return out
+    return np.asarray(arr[:, :n_modes], dtype=float)
+
+
+def is_usable_beat_spectra(values: np.ndarray | None) -> bool:
+    """True if ``values`` is a 2-D spectrum with at least one finite entry."""
+    arr = np.asarray([] if values is None else values, dtype=float)
+    return arr.ndim == 2 and arr.shape[1] >= 2 and bool(np.any(np.isfinite(arr)))
+
+
+def beat_mean_pm_std_spatial_median(
+    block: np.ndarray,
+    valid: np.ndarray,
+    *,
+    ddof: int = 1,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Typical-location beat-to-beat mean ± 1 SD.
+
+    For each spatial location, take the sample mean and SD **across beats**,
+    then the spatial median of those curves. Std is never pooled over
+    ``(k,r)``, so the band is beat-to-beat rather than spatial. ``block`` is
+    ``(n_t, n_beats, ...)`` or ``(n_beats, ...)``; ``valid`` is
+    ``(n_beats, ...)``.
+    """
+    arr = np.asarray(block, dtype=float)
+    mask = np.asarray(valid, dtype=bool)
+    if arr.ndim == mask.ndim:
+        arr = arr[None, ...]
+    n_t = int(arr.shape[0])
+    if mask.shape != arr.shape[1:]:
+        empty = np.full(n_t, np.nan, dtype=float)
+        return empty, empty, empty
+    masked = np.where(mask[None, ...], arr, np.nan)
+    mean_loc, lo_loc, _hi_loc = mean_pm_std(masked, axis=1, ddof=ddof)
+    std_loc = np.asarray(mean_loc, dtype=float) - np.asarray(lo_loc, dtype=float)
+    ok = np.sum(mask, axis=0) > 1
+    ok_t = np.broadcast_to(ok, mean_loc.shape)
+    mean_loc = np.where(ok_t, mean_loc, np.nan)
+    std_loc = np.where(ok_t, std_loc, np.nan)
+
+    def _median_space(values: np.ndarray) -> np.ndarray:
+        """Median over flattened spatial axes, keeping the time axis."""
+        flat = np.asarray(values, dtype=float).reshape(n_t, -1)
+        with np.errstate(all="ignore"):
+            return np.nanmedian(flat, axis=1)
+
+    mean = _median_space(mean_loc)
+    sd = _median_space(std_loc)
+    sd = np.where(np.isfinite(sd), sd, 0.0)
+    mean = np.where(np.isfinite(mean), mean, np.nan)
+    return mean, mean - sd, mean + sd
 
 
 # =====================================================================
@@ -125,7 +225,12 @@ def find_eyeflow_lowrank_group(h5file: h5py.File) -> h5py.Group | None:
 
 
 def find_lowrank_metrics_group(h5file: h5py.File) -> h5py.Group | None:
-    """Prefer AngioEye-packed group; fall back to EyeFlow Metrics group."""
+    """Locate packed low-rank metrics in an open HDF5 file.
+
+    Prefers the AngioEye ingest copy under ``/AngioEye/Processing/...``, then
+    falls back to EyeFlow's ``Processing/Metrics/lowrank_waveform_decomposition``.
+    Same loaders then work on ``*_EF.h5`` (pipeline run) and ``*_AE.h5`` (cohort).
+    """
     angio = find_pipeline_group(h5file, PIPELINE_NAME)
     if angio is not None:
         return angio
@@ -166,6 +271,7 @@ def find_lowrank_result_h5s(root: Path | str) -> list[Path]:
         results.append(path)
 
     def _rank(path: Path) -> tuple[int, str]:
+        """Sort key: ``*_AE.h5`` first, then ZIP result H5s, then others."""
         stem = path.stem
         if stem.endswith("_AE"):
             return (0, str(path).lower())
@@ -225,6 +331,7 @@ def acquisition_fig_stem(
 
 
 def _group_dataset_map(group: h5py.Group) -> dict[str, np.ndarray]:
+    """Copy immediate datasets in ``group`` to a name → array dict (no recursion)."""
     out: dict[str, np.ndarray] = {}
     for key, obj in group.items():
         if isinstance(obj, h5py.Dataset):
@@ -233,6 +340,7 @@ def _group_dataset_map(group: h5py.Group) -> dict[str, np.ndarray]:
 
 
 def _scalar_from_group(group: h5py.Group, name: str, default: float = float("nan")) -> float:
+    """Read one numeric dataset (nested path ok) as a Python float."""
     try:
         obj = group[name]
     except KeyError:
@@ -248,8 +356,12 @@ def load_vessel_data_from_result_h5(
     vessel: str,
     *,
     signal: str = COHORT_SIGNAL,
-) -> dict | None:
-    """Rebuild the in-memory vessel bundle used by cohort tables from a result H5."""
+    ) -> dict | None:
+    """Load one vessel's packed endpoints from HDF5 for cohort tables / Fig. 4.
+
+    EyeFlow already wrote A1, λ_m, per-beat arrays, etc. into the file; this
+    pipeline never recomputes them, so the H5 is the only source.
+    """
     h5_path = Path(h5_path)
     with h5py.File(h5_path, "r") as h5file:
         root = find_lowrank_metrics_group(h5file)
@@ -283,13 +395,8 @@ def load_vessel_data_from_result_h5(
                 acq[key] = float(flat[0]) if flat.size else float("nan")
         if isinstance(decomposition, h5py.Group):
             for key in (
-                "alpha",
-                "G1",
                 "effective_rank",
                 "participation_ratio",
-                "eta1",
-                "eta2",
-                "eta12",
                 "spectrum_mode_count_M",
             ):
                 if key in decomposition:
@@ -312,6 +419,9 @@ def load_vessel_data_from_result_h5(
 
         per_beat_svd = (
             _group_dataset_map(per_beat_g) if isinstance(per_beat_g, h5py.Group) else {}
+        )
+        per_beat_svd["singular_values_b"] = coerce_beat_spectra(
+            per_beat_svd.get("singular_values_b")
         )
 
         singular_values = np.asarray([], dtype=float)
@@ -345,6 +455,10 @@ def load_vessel_data_from_result_h5(
         elif "TPR_b" in beatwise:
             period_b = np.full(
                 np.asarray(beatwise["TPR_b"]).shape[0], beat_period_mean
+            )
+        elif "TPR_b_pb" in per_beat_svd:
+            period_b = np.full(
+                np.asarray(per_beat_svd["TPR_b_pb"]).shape[0], beat_period_mean
             )
         else:
             period_b = np.asarray([], dtype=float)
@@ -388,7 +502,7 @@ def load_acquisition_from_result_h5(
         return None
     result: dict[str, dict | None] = {}
     any_ok = False
-    for vessel in _enabled_vessels(veins_flag):
+    for vessel in enabled_vessels(veins_flag):
         data = load_vessel_data_from_result_h5(h5_path, vessel, signal=signal)
         result[vessel] = data
         if data is not None:
@@ -439,16 +553,6 @@ def metrics_from_lowrank_group(
     return metrics, resolved
 
 
-def _beat_period_path_from_metrics(metrics: dict) -> str:
-    for source_name in SOURCE_NAMES:
-        key = f"{source_name}/config/input_dataset_path"
-        if key not in metrics:
-            continue
-        # Prefer an explicit beat-period path if present nearby; else default.
-        break
-    return T_INPUT
-
-
 # =====================================================================
 # ProcessResult
 # =====================================================================
@@ -459,13 +563,15 @@ def build_ingest_attrs(
     input_beat_period_path: str,
     *,
     veins_flag: bool = False,
+    svd_method: str = DEFAULT_SVD_METHOD,
 ) -> dict:
     """Pipeline-group attributes stored on the AngioEye Processing group."""
+    method = normalize_svd_method(svd_method)
     return {
         "pipeline_family": "low_rank_waveform_decomposition",
-        "svd_method": "ingested from EyeFlow Metrics/lowrank_waveform_decomposition",
+        "svd_method": method,
         "aggregation": "median over (k,r), then median over b",
-        "vessels": list(_enabled_vessels(veins_flag)),
+        "vessels": list(enabled_vessels(veins_flag)),
         "veins_flag": bool(veins_flag),
         "representations": representations,
         "primary_endpoints": ["A1", "rho1", "A2", "rho2"],
@@ -475,7 +581,12 @@ def build_ingest_attrs(
     }
 
 
-def ingest_lowrank_from_h5(h5file, *, veins_flag: bool = False) -> ProcessResult:
+def ingest_lowrank_from_h5(
+    h5file,
+    *,
+    veins_flag: bool = False,
+    svd_method: str = DEFAULT_SVD_METHOD,
+) -> ProcessResult:
     """Flatten packed EyeFlow/AE low-rank metrics into a ProcessResult."""
     root = find_eyeflow_lowrank_group(h5file)
     if root is None:
@@ -496,8 +607,12 @@ def ingest_lowrank_from_h5(h5file, *, veins_flag: bool = False) -> ProcessResult
             "source has qc/input_available=1 "
             f"(veins_flag={bool(veins_flag)})."
         )
-    t_path = _beat_period_path_from_metrics(metrics)
-    attrs = build_ingest_attrs(resolved, t_path, veins_flag=bool(veins_flag))
+    attrs = build_ingest_attrs(
+        resolved,
+        T_INPUT,
+        veins_flag=bool(veins_flag),
+        svd_method=svd_method,
+    )
     return ProcessResult(metrics=metrics, attrs=attrs)
 
 
@@ -506,8 +621,9 @@ def write_acquisition_figures(
     source_h5_path: Path | str,
     output_h5_path: Path | str,
     veins_flag: bool = False,
+    svd_method: str = DEFAULT_SVD_METHOD,
 ) -> list[Path]:
-    """Write Figs 2--4 beside the result H5 from packed metrics + EF velocity."""
+    """Write Figs 2--4 beside the result H5 from packed EyeFlow low-rank metrics."""
     source_h5_path = Path(source_h5_path)
     output_h5_path = Path(output_h5_path)
     bundle = load_acquisition_from_result_h5(
@@ -519,12 +635,13 @@ def write_acquisition_figures(
         return []
     png_dir = companion_png_dir_for_result(output_h5_path)
     stem = acquisition_fig_stem(output_h5_path, source_h5_path)
-    return LowRankAquisitionFigures.plot_all(
+    return LowRankWaveformAcquisitionFigures.plot_all(
         source_h5_path,
         bundle,
         png_dir,
         file_stem=stem,
         signal="raw",
+        svd_method=svd_method,
     )
 
 
@@ -535,10 +652,12 @@ def write_acquisition_figures(
 
 @registerPipeline(name="lowrank_waveform_decomposition")
 class LowRankWaveformIngest(ProcessPipeline):
-    """Ingest EyeFlow-packed low-rank metrics and write Figs 2--4.
+    """Ingest EyeFlow-packed low-rank metrics and write Figs 2-4.
 
     Registry name stays ``lowrank_waveform_decomposition``. SVD lives in
-    EyeFlow; cohort products live in postprocess.utils.lowrank_waveform.
+    EyeFlow (Joint SVD / Per-beat SVD options, same as Veins). Cohort
+    figures live in postprocess.lowrank_waveform_cohort; ``lowrank_cohort.h5``
+    is written by scripts.lowrank_cohort_stats.
     """
 
     description = (
@@ -549,9 +668,15 @@ class LowRankWaveformIngest(ProcessPipeline):
     )
 
     veins_flag = False
+    svd_method = DEFAULT_SVD_METHOD
 
     def run(self, h5file) -> ProcessResult:
-        return ingest_lowrank_from_h5(h5file, veins_flag=bool(self.veins_flag))
+        """Copy EyeFlow-packed low-rank metrics into an AngioEye ProcessResult."""
+        return ingest_lowrank_from_h5(
+            h5file,
+            veins_flag=bool(self.veins_flag),
+            svd_method=self.svd_method,
+        )
 
     def write_companions(
         self,
@@ -560,73 +685,125 @@ class LowRankWaveformIngest(ProcessPipeline):
         source_h5_path: Path | str,
         output_h5_path: Path | str,
     ) -> list[Path]:
+        """Write Figs 2--4 next to the result H5 from the source EyeFlow file."""
         del result
         return write_acquisition_figures(
             source_h5_path=source_h5_path,
             output_h5_path=output_h5_path,
             veins_flag=bool(self.veins_flag),
+            svd_method=self.svd_method,
         )
 
 
-class LowRankWaveformAcquisitionFigures:
-    """Per-acquisition arterial figures (article Figs. 2--4). Written by the
-    pipeline as AE PNG companions under
-    ``{stem}_AE/png/`` Written as AE PNG companions by the ingest pipeline.
-    Fig. 2 is the cardiac velocity waveform only (3:1), with spatial ``(k,r)``
-    std whiskers."""
+def _dataset_array(group: h5py.Group | None, name: str) -> np.ndarray | None:
+    """Read dataset ``name`` from ``group``, or None if missing."""
+    if group is None or name not in group:
+        return None
+    return np.asarray(group[name], dtype=float)
 
-    FRMS_MAP_CANDIDATES = (
-        "EyeFlow/Processing/FrequencyMaps/fRMS_avg/value",
-        "Processing/FrequencyMaps/fRMS_avg/value",
-    )
-    GLOBAL_VELOCITY_CANDIDATES = {
-        "artery": (
-            "EyeFlow/Processing/Velocity/global/Artery/Raw/value",
-            "Processing/Velocity/global/Artery/Raw/value",
-        ),
-        "vein": (
-            "EyeFlow/Processing/Velocity/global/Vein/Raw/value",
-            "Processing/Velocity/global/Vein/Raw/value",
-        ),
+
+def _mode_recon(u: np.ndarray | None, scores: np.ndarray | None) -> np.ndarray | None:
+    """Outer product ``u(t) * score(b,k,r)`` → ``(n_t, n_beats, k, r)``."""
+    if u is None or scores is None or u.size == 0 or scores.size == 0:
+        return None
+    u = np.asarray(u, dtype=float).reshape(-1)
+    scores = np.asarray(scores, dtype=float)
+    return u.reshape((u.shape[0],) + (1,) * scores.ndim) * scores[None, ...]
+
+
+def load_packed_waveform(
+    h5_path: Path | str,
+    vessel: str,
+    signal: str = COHORT_SIGNAL,
+) -> dict | None:
+    """Reconstruct beat-aligned waveforms from packed EyeFlow low-rank outputs.
+
+    Uses ``decomposition/``, ``baseline/mu_bkr``, ``residuals/r*_t_bkr``, and
+    ``inputs/valid_column_mask_bkr``. Does not read Velocity* groups.
+    ``v = μ + r1 + a1 u1`` (or ``μ + r2 + a1 u1 + a2 u2`` if r1 is missing).
+    """
+    with h5py.File(h5_path, "r") as h5:
+        root = find_lowrank_metrics_group(h5)
+        if root is None:
+            return None
+        source = root.get(f"{vessel}/{signal}")
+        if not isinstance(source, h5py.Group):
+            return None
+        if int(_scalar_from_group(source, "qc/svd_available", 0)) != 1:
+            return None
+
+        decomp = source.get("decomposition")
+        baseline = source.get("baseline")
+        inputs = source.get("inputs")
+        residuals = source.get("residuals")
+        beat_period = source.get("beat_period")
+        if not isinstance(decomp, h5py.Group):
+            return None
+
+        u1 = _dataset_array(decomp, "u_mode1")
+        u2 = _dataset_array(decomp, "u_mode2")
+        s1 = _dataset_array(decomp, "scores_mode1_bkr")
+        s2 = _dataset_array(decomp, "scores_mode2_bkr")
+        mu = _dataset_array(
+            baseline if isinstance(baseline, h5py.Group) else None, "mu_bkr"
+        )
+        valid = None
+        if isinstance(inputs, h5py.Group) and "valid_column_mask_bkr" in inputs:
+            valid = np.asarray(inputs["valid_column_mask_bkr"], dtype=bool)
+        r1 = _dataset_array(
+            residuals if isinstance(residuals, h5py.Group) else None, "r1_t_bkr"
+        )
+        r2 = _dataset_array(
+            residuals if isinstance(residuals, h5py.Group) else None, "r2_t_bkr"
+        )
+        period = (
+            _scalar_from_group(beat_period, "mean")
+            if isinstance(beat_period, h5py.Group)
+            else float("nan")
+        )
+
+    a1u1 = _mode_recon(u1, s1)
+    a2u2 = _mode_recon(u2, s2)
+    if a1u1 is None or mu is None or valid is None:
+        return None
+    spatial = a1u1.shape[1:]
+    if mu.shape != spatial or valid.shape != spatial or not np.any(valid):
+        return None
+    if r1 is not None and r1.shape == a1u1.shape:
+        w = r1 + a1u1
+    elif r2 is not None and a2u2 is not None and r2.shape == a1u1.shape:
+        w = r2 + a1u1 + a2u2
+    else:
+        return None
+    if a2u2 is None or a2u2.shape != a1u1.shape:
+        a2u2 = np.full(a1u1.shape, np.nan, dtype=float)
+    return {
+        "v": w + mu[None, ...],
+        "mu": mu,
+        "w": w,
+        "a1u1": a1u1,
+        "a2u2": a2u2,
+        "valid": valid.astype(bool),
+        "n_t": int(a1u1.shape[0]),
+        "beat_period_mean": float(period),
     }
-    SEGMENT_VELOCITY_CANDIDATES = {
-        "artery": (
-            "EyeFlow/Processing/Velocity/segments/Artery/Raw/value",
-            "Processing/Velocity/segments/Artery/Raw/value",
-        ),
-        "vein": (
-            "EyeFlow/Processing/Velocity/segments/Vein/Raw/value",
-            "Processing/Velocity/segments/Vein/Raw/value",
-        ),
-    }
-    # Fig. 2 waveform panel: width:height = 3:1
+
+
+class LowRankWaveformAcquisitionFigures:
+    """Per-acquisition arterial Figs. 2--4 from packed EyeFlow low-rank metrics."""
+
     FIG2_ASPECT = 3.0
     FIG2_HEIGHT = 2.8
-    # Whiskers every ~100 ms when dt is available; else every 15 samples.
     FIG2_WHISKER_INTERVAL_S = 0.1
-    # H5 velocity is already in the project unit (mm/s); do not rescale for display.
-    FIG2_VELOCITY_TO_MM_S = 1.0
-    FIG2_X_PAD_FRAC = 0.02  # left/right pad as a fraction of the time span
-    # Fig. 3 uses a slightly larger pad so the inset stays obvious on square panels.
-    FIG3_X_PAD_FRAC = 0.05
+    FIG2_X_PAD_FRAC = 0.02
+    FIG3_X_PAD_FRAC = 0.02
     FIG2_TICK_SIZE = 12
     FIG2_LABEL_SIZE = 14
     PANEL_SIZE = 2.5
 
     @staticmethod
-    def output_dir_for(
-        output_dir: Path | str, h5_path: Path | str, input_root: Path | str
-    ) -> Path:
-        """Legacy helper: ``output_dir/h5/<relative>/``.
-
-        Prefer :func:`companion_png_dir_for_result` for the canonical
-        ``{stem}_AE/png/`` layout.
-        """
-        relative_parent = relative_hdf5_parent(h5_path, input_root)
-        return h5_output_parent(output_dir, relative_parent)
-
-    @staticmethod
     def _style_axes(ax, *, tick_size: int = 9, label_size: int = 10) -> None:
+        """Turn off grid, show spines, set tick/label sizes."""
         ax.grid(False)
         for spine in ax.spines.values():
             spine.set_visible(True)
@@ -641,51 +818,50 @@ class LowRankWaveformAcquisitionFigures:
         vessel_bundle: dict[str, dict | None],
         out_dir: Path,
         *,
-        patient_id: str | None = None,
         signal: str = "raw",
         file_stem: str | None = None,
+        svd_method: str = DEFAULT_SVD_METHOD,
     ) -> list[Path]:
-        """Write Figs. 2--4 into ``out_dir``.
+        """Write Figs. 2--4 into ``out_dir`` from packed low-rank metrics.
 
-        ``out_dir`` should be the AE companion PNG folder (``{stem}_AE/png/``).
+        Fig. 3 needs joint modes, so it is skipped for ``per_beat``.
         """
         h5_path = Path(h5_path)
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         stem = file_stem or h5_path.stem
+        method = normalize_svd_method(svd_method)
         written: list[Path] = []
-        written.append(
-            cls.plot_frequency_velocity(
-                h5_path,
-                out_dir / prefixed_filename(f"{stem}_fig2_frequency_velocity.png", patient_id),
-            )
+        fig2 = cls.plot_frequency_velocity(
+            h5_path,
+            out_dir / f"{stem}_fig2_frequency_velocity.png",
+            signal=signal,
         )
-        written.append(
-            cls.plot_waveform_decomposition(
+        if fig2 is not None:
+            written.append(fig2)
+        if method == "joint":
+            fig3 = cls.plot_waveform_decomposition(
                 h5_path,
-                out_dir / prefixed_filename(f"{stem}_fig3_waveform_decomposition.png", patient_id),
+                out_dir / f"{stem}_fig3_waveform_decomposition.png",
                 signal=signal,
             )
-        )
+            if fig3 is not None:
+                written.append(fig3)
         written.append(
             cls.plot_energy_spectrum(
                 vessel_bundle,
-                out_dir / prefixed_filename(f"{stem}_fig4_energy_spectrum.png", patient_id),
+                out_dir / f"{stem}_fig4_energy_spectrum.png",
+                svd_method=method,
+            )
+        )
+        written.append(
+            cls.plot_energy_spectrum_cumulative(
+                vessel_bundle,
+                out_dir / f"{stem}_fig4_energy_spectrum_cumulative.png",
+                svd_method=method,
             )
         )
         return written
-
-    @staticmethod
-    def _velocity_dt_seconds(h5: h5py.File) -> float:
-        """Sample interval of the Doppler velocity time series (seconds)."""
-        dt = float(h5.attrs.get("dt_seconds", np.nan)) if h5.attrs else float("nan")
-        if np.isfinite(dt) and dt > 0:
-            return dt
-        batch = float(h5.attrs.get("batch_stride", np.nan)) if h5.attrs else float("nan")
-        fs = float(h5.attrs.get("sampling_freq", np.nan)) if h5.attrs else float("nan")
-        if np.isfinite(batch) and np.isfinite(fs) and fs > 0 and batch > 0:
-            return batch / fs
-        return float("nan")
 
     @classmethod
     def _segment_spatial_mean_std(
@@ -696,25 +872,19 @@ class LowRankWaveformAcquisitionFigures:
         if arr.ndim < 2:
             flat = arr.reshape(-1)
             return flat, np.zeros_like(flat)
-        # Keep time on axis 0; flatten all spatial axes together.
         spatial = arr.reshape(arr.shape[0], -1)
-        with np.errstate(all="ignore"):
-            mean = np.nanmean(spatial, axis=1)
-            std = np.nanstd(spatial, axis=1, ddof=1)
-        std = np.where(np.isfinite(std), std, 0.0)
-        return mean, std
+        mean, lo, _hi = mean_pm_std(spatial, axis=1)
+        return mean, mean - lo
 
     @classmethod
-    def plot_frequency_velocity(cls, h5_path: Path | str, out_path: Path) -> Path:
-        """Fig. 2: arterial cardiac velocity waveform only (3:1), time in s.
-
-        Plots the spatial mean over vessel locations ``(k, r)`` with whiskers
-        showing the spatial standard deviation. Falls back to the global
-        velocity trace when segment data are unavailable. Velocity is shown in
-        mm/s (see ``FIG2_VELOCITY_TO_MM_S``); time in seconds.
-        """
-        from matplotlib.ticker import FuncFormatter, MultipleLocator
-
+    def plot_frequency_velocity(
+        cls,
+        h5_path: Path | str,
+        out_path: Path,
+        *,
+        signal: str = "raw",
+    ) -> Path | None:
+        """Fig. 2: reconstructed arterial velocity, beats concatenated in time."""
         h5_path = Path(h5_path)
         out_path = Path(out_path)
         vessels = list(FIGURE_VESSELS)
@@ -732,87 +902,75 @@ class LowRankWaveformAcquisitionFigures:
                 return "0"
             return f"{x:.2g}"
 
-        with h5py.File(h5_path, "r") as h5:
-            dt_s = cls._velocity_dt_seconds(h5)
-            for row_idx, vessel in enumerate(vessels):
-                ax = axes[row_idx, 0]
-                seg_path = find_first_existing_path(
-                    h5, list(cls.SEGMENT_VELOCITY_CANDIDATES.get(vessel, ()))
-                )
-                glob_path = find_first_existing_path(
-                    h5, list(cls.GLOBAL_VELOCITY_CANDIDATES.get(vessel, ()))
-                )
+        any_data = False
+        for row_idx, vessel in enumerate(vessels):
+            ax = axes[row_idx, 0]
+            packed = load_packed_waveform(h5_path, vessel, signal=signal)
+            mean = std = None
+            dt_s = float("nan")
+            if packed is not None:
+                v = np.asarray(packed["v"], dtype=float)
+                # (n_t, n_beats, k, r) → concatenate beats along time.
+                n_t = int(packed["n_t"])
+                n_beats = int(v.shape[1])
+                v_cat = np.transpose(v, (1, 0) + tuple(range(2, v.ndim)))
+                v_cat = v_cat.reshape((n_beats * n_t,) + v.shape[2:])
+                mean, std = cls._segment_spatial_mean_std(v_cat)
+                period = float(packed["beat_period_mean"])
+                if np.isfinite(period) and period > 0 and n_t > 0:
+                    dt_s = period / n_t
 
-                mean = std = None
-                if seg_path is not None:
-                    mean, std = cls._segment_spatial_mean_std(
-                        np.asarray(h5[seg_path], dtype=float)
-                    )
-                elif glob_path is not None:
-                    mean = np.asarray(h5[glob_path], dtype=float).reshape(-1)
-                    std = np.zeros_like(mean)
-
-                if mean is not None and mean.size:
-                    # Scale stored velocity to mm/s for axis labels/ticks.
-                    scale = float(cls.FIG2_VELOCITY_TO_MM_S)
-                    mean = mean * scale
-                    if std is not None:
-                        std = std * scale
-
-                    n = int(mean.size)
-                    if np.isfinite(dt_s) and dt_s > 0:
-                        t_s = np.arange(n, dtype=float) * dt_s
-                        xlabel = "Time (s)"
-                        stride = max(1, int(round(cls.FIG2_WHISKER_INTERVAL_S / dt_s)))
-                    else:
-                        t_s = np.arange(n, dtype=float)
-                        xlabel = "Sample index"
-                        stride = 15
-
-                    ax.plot(t_s, mean, color="black", linewidth=1.1, zorder=3)
-                    if std is not None and np.any(std > 0):
-                        idx = np.arange(0, n, stride, dtype=int)
-                        ax.errorbar(
-                            t_s[idx],
-                            mean[idx],
-                            yerr=std[idx],
-                            fmt="none",
-                            ecolor="black",
-                            elinewidth=0.8,
-                            capsize=2.5,
-                            capthick=0.8,
-                            zorder=2,
-                        )
-                    # Left/right padding (fraction of span), same idea as fig. 3 margins.
-                    t0, t1 = float(t_s[0]), float(t_s[-1])
-                    pad = cls.FIG2_X_PAD_FRAC * (t1 - t0 if t1 > t0 else 1.0)
-                    ax.set_xlim(t0 - pad, t1 + pad)
-                    if np.isfinite(dt_s) and dt_s > 0:
-                        ax.xaxis.set_major_locator(MultipleLocator(0.5))
-                    ax.set_xlabel(xlabel, fontsize=cls.FIG2_LABEL_SIZE)
+            if mean is not None and mean.size:
+                any_data = True
+                n = int(mean.size)
+                if np.isfinite(dt_s) and dt_s > 0:
+                    t_s = np.arange(n, dtype=float) * dt_s
+                    xlabel = "Time (s)"
+                    stride = max(1, int(round(cls.FIG2_WHISKER_INTERVAL_S / dt_s)))
                 else:
-                    ax.set_xlabel("Time (s)", fontsize=cls.FIG2_LABEL_SIZE)
+                    t_s = np.arange(n, dtype=float)
+                    xlabel = "Sample index"
+                    stride = 15
 
-                ax.axhline(0, color="#555555", linewidth=0.6, linestyle=":")
-                ax.set_ylabel("Velocity (mm/s)", fontsize=cls.FIG2_LABEL_SIZE)
-                ax.yaxis.set_major_formatter(FuncFormatter(_two_sig))
-                ax.set_box_aspect(1.0 / cls.FIG2_ASPECT)
-                cls._style_axes(
-                    ax, tick_size=cls.FIG2_TICK_SIZE, label_size=cls.FIG2_LABEL_SIZE
-                )
+                ax.plot(t_s, mean, color="black", linewidth=1.1, zorder=3)
+                if std is not None and np.any(std > 0):
+                    idx = np.arange(0, n, stride, dtype=int)
+                    ax.errorbar(
+                        t_s[idx],
+                        mean[idx],
+                        yerr=std[idx],
+                        fmt="none",
+                        ecolor="black",
+                        elinewidth=0.8,
+                        capsize=2.5,
+                        capthick=0.8,
+                        zorder=2,
+                    )
+                t0, t1 = float(t_s[0]), float(t_s[-1])
+                pad = cls.FIG2_X_PAD_FRAC * (t1 - t0 if t1 > t0 else 1.0)
+                ax.set_xlim(t0 - pad, t1 + pad)
+                if np.isfinite(dt_s) and dt_s > 0:
+                    ax.xaxis.set_major_locator(MultipleLocator(0.5))
+                ax.set_xlabel(xlabel, fontsize=cls.FIG2_LABEL_SIZE)
+            else:
+                ax.set_xlabel("Time (s)", fontsize=cls.FIG2_LABEL_SIZE)
 
+            ax.axhline(0, color="#555555", linewidth=0.6, linestyle=":")
+            ax.set_ylabel("Velocity (mm/s)", fontsize=cls.FIG2_LABEL_SIZE)
+            ax.yaxis.set_major_formatter(FuncFormatter(_two_sig))
+            ax.set_box_aspect(1.0 / cls.FIG2_ASPECT)
+            cls._style_axes(
+                ax, tick_size=cls.FIG2_TICK_SIZE, label_size=cls.FIG2_LABEL_SIZE
+            )
+
+        if not any_data:
+            plt.close(fig)
+            return None
         fig.tight_layout()
         out_path.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(out_path, dpi=150, bbox_inches="tight")
         plt.close(fig)
         return out_path
-
-    @staticmethod
-    def _median_iqr_curve(matrix: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        med = np.nanmedian(matrix, axis=1)
-        q25 = np.nanpercentile(matrix, 25, axis=1)
-        q75 = np.nanpercentile(matrix, 75, axis=1)
-        return med, q25, q75
 
     @classmethod
     def _waveform_summary_for_vessel(
@@ -820,131 +978,57 @@ class LowRankWaveformAcquisitionFigures:
         h5_path: Path,
         vessel: str,
         signal: str,
-    ) -> dict[str, np.ndarray] | None:
-        """Build Fig. 3 curves from EF velocity + packed u/score modes."""
-        source_key = f"{vessel}/{signal}"
-        with h5py.File(h5_path, "r") as h5:
-            schema = _resolve_vessel_sources(h5, veins_flag=False)
-            if schema is None:
-                return None
-            candidates, _t_path = schema
-            dataset_path = candidates.get(source_key)
-            if dataset_path is None or dataset_path not in h5:
-                return None
-            v_block = np.asarray(h5[dataset_path], dtype=float)
-
-            root = find_lowrank_metrics_group(h5)
-            if root is None:
-                return None
-            source = root.get(source_key)
-            if not isinstance(source, h5py.Group):
-                return None
-            if int(_scalar_from_group(source, "qc/svd_available", 0)) != 1:
-                return None
-
-            decomp = source["decomposition"] if "decomposition" in source else None
-            baseline = source["baseline"] if "baseline" in source else None
-            inputs = source["inputs"] if "inputs" in source else None
-            if not isinstance(decomp, h5py.Group):
-                return None
-
-            u1 = (
-                np.asarray(decomp["u_mode1"], dtype=float)
-                if "u_mode1" in decomp
-                else np.asarray([], dtype=float)
-            )
-            u2 = (
-                np.asarray(decomp["u_mode2"], dtype=float)
-                if "u_mode2" in decomp
-                else np.asarray([], dtype=float)
-            )
-            s1 = (
-                np.asarray(decomp["scores_mode1_bkr"], dtype=float)
-                if "scores_mode1_bkr" in decomp
-                else np.asarray([], dtype=float)
-            )
-            s2 = (
-                np.asarray(decomp["scores_mode2_bkr"], dtype=float)
-                if "scores_mode2_bkr" in decomp
-                else np.asarray([], dtype=float)
-            )
-            mu_bkr = (
-                np.asarray(baseline["mu_bkr"], dtype=float)
-                if isinstance(baseline, h5py.Group) and "mu_bkr" in baseline
-                else None
-            )
-            valid = (
-                np.asarray(inputs["valid_column_mask_bkr"], dtype=bool)
-                if isinstance(inputs, h5py.Group)
-                and "valid_column_mask_bkr" in inputs
-                else None
-            )
-
-        if v_block.ndim < 2 or u1.size == 0:
+    ) -> dict[str, dict[str, np.ndarray]] | None:
+        """Build Fig. 3 curves: typical-location beat-to-beat mean ± SD."""
+        packed = load_packed_waveform(h5_path, vessel, signal=signal)
+        if packed is None:
             return None
-        n_t = v_block.shape[0]
-        if u1.shape[0] != n_t:
+        n_t = int(packed["n_t"])
+        valid_mask = packed["valid"]
+
+        def _band(block: np.ndarray) -> dict[str, np.ndarray]:
+            mean, lo, hi = beat_mean_pm_std_spatial_median(block, valid_mask)
+            if mean.size == 1:
+                mean = np.full(n_t, float(mean[0]), dtype=float)
+                lo = np.full(n_t, float(lo[0]), dtype=float)
+                hi = np.full(n_t, float(hi[0]), dtype=float)
+            return {"mean": mean, "lo": lo, "hi": hi}
+
+        v_band = _band(packed["v"])
+        if not np.any(np.isfinite(v_band["mean"])):
             return None
-
-        # Align spatial axes: velocity (t,b,k,r) vs packed (b,k,r).
-        spatial = v_block.shape[1:]
-        if mu_bkr is not None and mu_bkr.shape == spatial:
-            mu = mu_bkr.reshape(1, -1)
-        else:
-            with np.errstate(all="ignore"):
-                mu = np.nanmean(v_block, axis=0, keepdims=True).reshape(1, -1)
-
-        v_cols = v_block.reshape(n_t, -1)
-        x_cols = v_cols - mu
-        if valid is not None and valid.shape == spatial:
-            valid_flat = valid.reshape(-1).astype(bool)
-        else:
-            valid_flat = np.any(np.isfinite(v_cols), axis=0)
-        if not np.any(valid_flat):
-            return None
-
-        v_cols = v_cols[:, valid_flat]
-        x_cols = x_cols[:, valid_flat]
-        mu_cols = mu[:, valid_flat]
-
-        def _mode_recon(u: np.ndarray, scores: np.ndarray) -> np.ndarray:
-            if u.size == 0 or scores.size == 0:
-                return np.full_like(x_cols, np.nan)
-            flat = scores.reshape(-1)
-            if flat.shape[0] != valid_flat.shape[0]:
-                return np.full_like(x_cols, np.nan)
-            return np.outer(u, flat[valid_flat])
-
         return {
             "t": np.linspace(0, 1, n_t, endpoint=False),
-            "v": v_cols,
-            "mu": mu_cols,
-            "x": x_cols,
-            "a1u1": _mode_recon(u1, s1),
-            "a2u2": _mode_recon(u2, s2),
+            "v": v_band,
+            "mu": _band(packed["mu"]),
+            "x": _band(packed["w"]),
+            "a1u1": _band(packed["a1u1"]),
+            "a2u2": _band(packed["a2u2"]),
         }
 
-    @classmethod
-    def _row_ylim_first_two(cls, summary: dict[str, np.ndarray]) -> tuple[float, float]:
+    @staticmethod
+    def _row_ylim_first_two(summary: dict) -> tuple[float, float]:
+        """Shared y-limits for Fig. 3 panels ``v`` and ``μ``, including 0."""
         bounds: list[float] = []
-        med, q25, q75 = cls._median_iqr_curve(summary["v"])
-        bounds += [float(np.nanmin(q25)), float(np.nanmax(q75))]
-        mu_vals = summary["mu"].reshape(-1)
-        med_mu = float(np.nanmedian(mu_vals))
-        sd_mu = float(np.nanstd(mu_vals, ddof=1)) if mu_vals.size > 1 else 0.0
-        bounds += [med_mu - sd_mu, med_mu + sd_mu]
+        for key in ("v", "mu"):
+            band = summary[key]
+            bounds += [float(np.nanmin(band["lo"])), float(np.nanmax(band["hi"]))]
         lo, hi = min(bounds), max(bounds)
         lo, hi = min(lo, 0.0), max(hi, 0.0)
         pad = 0.08 * (hi - lo if hi > lo else 1.0)
         return lo - pad, hi + pad
 
-    @classmethod
-    def _row_ylim_last_three(cls, summary: dict[str, np.ndarray]) -> tuple[float, float]:
+    @staticmethod
+    def _row_ylim_last_three(summary: dict) -> tuple[float, float]:
+        """Symmetric y-limits about 0 for Fig. 3 panels ``w``, ``a1u1``, ``a2u2``."""
         extents: list[float] = []
         for key in ("x", "a1u1", "a2u2"):
-            _med, q25, q75 = cls._median_iqr_curve(summary[key])
+            band = summary[key]
             extents.append(
-                max(abs(float(np.nanmin(q25))), abs(float(np.nanmax(q75))))
+                max(
+                    abs(float(np.nanmin(band["lo"]))),
+                    abs(float(np.nanmax(band["hi"]))),
+                )
             )
         extent = max(extents) if extents else 1.0
         extent = extent if extent > 0 else 1.0
@@ -958,8 +1042,8 @@ class LowRankWaveformAcquisitionFigures:
         out_path: Path,
         *,
         signal: str = "raw",
-    ) -> Path:
-        """Fig. 3: arterial v, mu, w, a1u1, a2u2."""
+    ) -> Path | None:
+        """Fig. 3: arterial v, mu, w, a1u1, a2u2 from packed modes/residuals."""
         h5_path = Path(h5_path)
         out_path = Path(out_path)
         rows: list[dict[str, np.ndarray] | None] = []
@@ -969,11 +1053,13 @@ class LowRankWaveformAcquisitionFigures:
                     h5_path, vessel, signal=signal
                 )
             )
+        if all(row is None for row in rows):
+            return None
 
         panel_defs = [
-            ("v", r"Beat-aligned velocity $v$"),
+            ("v", r"Beat-aligned velocity" "\n" r"$v$"),
             ("mu", r"Baseline level" "\n" r"$\mu$"),
-            ("x", r"Baseline-removed" "\n" r"$v-\mu$"),
+            ("x", r"Centered waveform" "\n" r"$w = v - \mu$"),
             ("a1u1", r"Mode-1 recon." "\n" r"$a_1u_1$"),
             ("a2u2", r"Mode-2 recon." "\n" r"$a_2u_2$"),
         ]
@@ -989,7 +1075,6 @@ class LowRankWaveformAcquisitionFigures:
             layout="constrained",
         )
         axes = np.atleast_2d(axes)
-        # Space between axis label and tick labels (the scale).
         label_pad = 8.0
         for row_idx, summary in enumerate(rows):
             if summary is None:
@@ -999,27 +1084,16 @@ class LowRankWaveformAcquisitionFigures:
             t = summary["t"]
             t0, t1 = float(t[0]), float(t[-1])
             x_pad = cls.FIG3_X_PAD_FRAC * (t1 - t0 if t1 > t0 else 1.0)
-            # Match Fig. 2 / H5 unit (mm/s); scale factor is 1.0 today.
-            scale = float(cls.FIG2_VELOCITY_TO_MM_S)
-            ylim_12 = tuple(scale * y for y in cls._row_ylim_first_two(summary))
-            ylim_345 = tuple(scale * y for y in cls._row_ylim_last_three(summary))
+            ylim_12 = cls._row_ylim_first_two(summary)
+            ylim_345 = cls._row_ylim_last_three(summary)
             for col_idx, (key, title) in enumerate(panel_defs):
                 ax = axes[row_idx, col_idx]
-                if key == "mu":
-                    mu_vals = summary[key].reshape(-1) * scale
-                    med = float(np.nanmedian(mu_vals))
-                    sd = float(np.nanstd(mu_vals, ddof=1)) if mu_vals.size > 1 else 0.0
-                    # Draw over ``t`` (not full-width axhline) so left/right
-                    # padding matches the waveform panels.
-                    ax.plot(t, np.full_like(t, med), color="black", linewidth=1.8)
-                    ax.fill_between(
-                        t, med - sd, med + sd, color="black", alpha=0.12, linewidth=0
-                    )
-                else:
-                    med, q25, q75 = cls._median_iqr_curve(summary[key] * scale)
-                    ax.plot(t, med, color="black", linewidth=1.8)
-                    ax.fill_between(t, q25, q75, color="black", alpha=0.12, linewidth=0)
-                # Zero guide over data only — full-width axhline hides x-padding.
+                band = summary[key]
+                mean = np.asarray(band["mean"], dtype=float)
+                lo = np.asarray(band["lo"], dtype=float)
+                hi = np.asarray(band["hi"], dtype=float)
+                ax.plot(t, mean, color="black", linewidth=1.8)
+                ax.fill_between(t, lo, hi, color="black", alpha=0.12, linewidth=0)
                 ax.plot(
                     t,
                     np.zeros_like(t),
@@ -1029,13 +1103,13 @@ class LowRankWaveformAcquisitionFigures:
                 )
                 y_lo, y_hi = ylim_345 if key in zero_cols else ylim_12
                 ax.set_ylim(y_lo, y_hi)
-                # Same left/right data pad as Fig. 2 on every panel.
                 ax.set_xlim(t0 - x_pad, t1 + x_pad)
                 if row_idx == 0:
                     ax.set_title(title, fontsize=11, pad=6)
                 if col_idx == 0:
-                    # Same quantity/unit as Fig. 2 and H5 ``unit`` attrs.
                     ax.set_ylabel("Velocity (mm/s)", fontsize=10, labelpad=label_pad)
+                elif col_idx != 2:
+                    ax.tick_params(labelleft=False)
                 if row_idx == n_rows - 1 and col_idx == n_cols // 2:
                     ax.set_xlabel(
                         "Fraction of cardiac cycle",
@@ -1044,20 +1118,128 @@ class LowRankWaveformAcquisitionFigures:
                     )
                 cls._style_axes(ax, tick_size=9, label_size=10)
                 ax.set_box_aspect(1)
-        fig.get_layout_engine().set(w_pad=0.02, h_pad=0.02, wspace=0.08, hspace=0.05)
+        fig.get_layout_engine().set(w_pad=0.0, h_pad=0.0, wspace=0.02, hspace=0.02)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(out_path, dpi=150, bbox_inches="tight", pad_inches=0.05)
+        fig.savefig(out_path, dpi=150, bbox_inches="tight", pad_inches=0.02)
         plt.close(fig)
         return out_path
+
+    @staticmethod
+    def _joint_spectrum(data: dict | None) -> np.ndarray:
+        """Packed joint-SVD singular values λ_m, or empty."""
+        if data is None:
+            return np.asarray([], dtype=float)
+        return np.asarray(data.get("singular_values", []), dtype=float)
+
+    @staticmethod
+    def _beat_spectra(data: dict | None) -> np.ndarray:
+        """Packed per-beat singular values ``(n_beats, n_modes)``."""
+        if data is None:
+            return np.zeros((0, SPECTRUM_N_MODES), dtype=float)
+        pb = data.get("per_beat_svd") or {}
+        return coerce_beat_spectra(pb.get("singular_values_b"))
+
+    @classmethod
+    def _draw_spectrum_curve(cls, ax, x: np.ndarray, y: np.ndarray) -> None:
+        """Draw one black line-and-circle singular-value curve."""
+        ax.plot(
+            x,
+            y,
+            color="black",
+            linestyle="-",
+            marker="o",
+            markersize=5,
+            markerfacecolor="white",
+            markeredgecolor="black",
+            markeredgewidth=1.2,
+            linewidth=1.5,
+        )
+
+    @classmethod
+    def _draw_spectrum_mean_std(
+        cls,
+        ax,
+        spectra: np.ndarray,
+        *,
+        cumulative: bool,
+    ) -> None:
+        """Plot mean ± SD of per-beat spectra; optionally as a running sum."""
+        vals = np.asarray(spectra, dtype=float)
+        if vals.ndim != 2 or vals.size == 0:
+            return
+        if cumulative:
+            vals = np.nancumsum(vals, axis=1)
+        n_modes = int(vals.shape[1])
+        x = np.arange(1, n_modes + 1)
+        mean, lo, hi = mean_pm_std(vals, axis=0)
+        if not cumulative:
+            lo = np.maximum(lo, np.where(mean > 0, mean * 1e-6, 1e-12))
+        cls._draw_spectrum_curve(ax, x, mean)
+        ax.fill_between(x, lo, hi, color="black", alpha=0.12, linewidth=0)
+
+    @classmethod
+    def _style_spectrum_panel(
+        cls, ax, *, n_keep: int, ylabel: str, log_y: bool
+    ) -> None:
+        """Mode-index x-axis, optional log y, 2:1 panel aspect."""
+        modes = np.arange(1, n_keep + 1)
+        ax.set_xticks(modes)
+        ax.set_xticklabels([str(m) for m in modes])
+        ax.set_xlim(0.5, n_keep + 0.5)
+        if log_y:
+            ax.set_yscale("log")
+            ax.yaxis.set_minor_formatter(NullFormatter())
+        ax.set_ylabel(ylabel, fontsize=cls.FIG2_LABEL_SIZE)
+        ax.set_xlabel(r"$m$", fontsize=cls.FIG2_LABEL_SIZE)
+        ax.set_box_aspect(0.5)
+        cls._style_axes(
+            ax, tick_size=cls.FIG2_TICK_SIZE, label_size=cls.FIG2_LABEL_SIZE
+        )
 
     @classmethod
     def plot_energy_spectrum(
         cls,
         vessel_bundle: dict[str, dict | None],
         out_path: Path,
+        *,
+        svd_method: str = DEFAULT_SVD_METHOD,
     ) -> Path:
-        """Fig. 4: arterial singular values $\\lambda_m$ vs mode index $m$."""
+        """Fig. 4: arterial singular values vs mode index."""
+        return cls._save_energy_spectrum_figure(
+            vessel_bundle,
+            out_path,
+            cumulative=False,
+            svd_method=svd_method,
+        )
+
+    @classmethod
+    def plot_energy_spectrum_cumulative(
+        cls,
+        vessel_bundle: dict[str, dict | None],
+        out_path: Path,
+        *,
+        svd_method: str = DEFAULT_SVD_METHOD,
+    ) -> Path:
+        """Standalone cumulative-sum panel (same 2:1 aspect as Fig. 4)."""
+        return cls._save_energy_spectrum_figure(
+            vessel_bundle,
+            out_path,
+            cumulative=True,
+            svd_method=svd_method,
+        )
+
+    @classmethod
+    def _save_energy_spectrum_figure(
+        cls,
+        vessel_bundle: dict[str, dict | None],
+        out_path: Path,
+        *,
+        cumulative: bool,
+        svd_method: str = DEFAULT_SVD_METHOD,
+    ) -> Path:
+        """Write Fig. 4 (or its cumulative sibling) from packed singular values."""
         out_path = Path(out_path)
+        method = normalize_svd_method(svd_method)
         vessels = [
             v for v in FIGURE_VESSELS if vessel_bundle.get(v) is not None
         ] or list(FIGURE_VESSELS)
@@ -1069,47 +1251,28 @@ class LowRankWaveformAcquisitionFigures:
             figsize=(2.0 * fig_h, fig_h * len(vessels)),
             squeeze=False,
         )
-        for row_idx, vessel in enumerate(vessels):
-            ax = axes[row_idx, 0]
-            data = vessel_bundle.get(vessel)
-            spectrum = np.asarray([], dtype=float)
-            if data is not None:
-                spectrum = np.asarray(
-                    data.get("singular_values", []), dtype=float
-                )
-                if spectrum.size == 0:
-                    spectrum = np.asarray(
-                        data.get("energy_fraction", []), dtype=float
+        ylabel = r"$\sum_{i=1}^{m}\lambda_i$" if cumulative else r"$\lambda_m$"
+        for vessel_idx, vessel in enumerate(vessels):
+            ax = axes[vessel_idx, 0]
+            if method == "per_beat":
+                spectra = cls._beat_spectra(vessel_bundle.get(vessel))
+                if is_usable_beat_spectra(spectra):
+                    cls._draw_spectrum_mean_std(
+                        ax, spectra[:, :n_keep], cumulative=cumulative
                     )
-            n_modes = int(min(n_keep, spectrum.size))
-            modes = np.arange(1, n_keep + 1)
-            if n_modes > 0:
-                ax.plot(
-                    np.arange(1, n_modes + 1),
-                    spectrum[:n_modes],
-                    color="black",
-                    linestyle="-",
-                    marker="o",
-                    markersize=5,
-                    markerfacecolor="white",
-                    markeredgecolor="black",
-                    markeredgewidth=1.2,
-                    linewidth=1.5,
-                )
-            ax.set_xticks(modes)
-            ax.set_xticklabels([str(m) for m in modes])
-            ax.set_xlim(0.5, n_keep + 0.5)
-            ax.set_yscale("log")
-            ax.yaxis.set_minor_formatter(NullFormatter())
-            ax.set_ylabel(r"$\lambda_m$", fontsize=cls.FIG2_LABEL_SIZE)
-            ax.set_xlabel(r"$m$", fontsize=cls.FIG2_LABEL_SIZE)
-            ax.set_box_aspect(0.5)
-            cls._style_axes(
-                ax, tick_size=cls.FIG2_TICK_SIZE, label_size=cls.FIG2_LABEL_SIZE
+            else:
+                spectrum = cls._joint_spectrum(vessel_bundle.get(vessel))
+                n_modes = int(min(n_keep, spectrum.size))
+                if n_modes:
+                    y = spectrum[:n_modes]
+                    if cumulative:
+                        y = np.cumsum(y)
+                    cls._draw_spectrum_curve(ax, np.arange(1, n_modes + 1), y)
+            cls._style_spectrum_panel(
+                ax, n_keep=n_keep, ylabel=ylabel, log_y=not cumulative
             )
         fig.tight_layout()
         out_path.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(out_path, dpi=150, bbox_inches="tight")
         plt.close(fig)
         return out_path
-
