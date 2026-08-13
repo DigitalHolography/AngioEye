@@ -4,10 +4,11 @@ EyeFlow owns SVD / endpoints and writes them under
 ``Processing/Metrics/lowrank_waveform_decomposition/`` in ``*_EF.h5``.
 This module does **not** import EyeFlow or recompute decomposition: it
 ingests that group into the AngioEye result H5 and writes Figs 2--4.
-Select ``veins_flag`` and ``svd_method`` (``joint`` or ``per_beat``) the
-same way EyeFlow exposes Veins / Joint SVD / Per-beat SVD options.
-Cohort Figs 5--7 live in ``postprocess.lowrank_waveform_cohort``.
-``lowrank_cohort.h5`` is written by ``scripts.lowrank_cohort_stats``.
+Joint SVD and per-beat SVD are always ingested together; ``veins_flag``
+selects whether venous products are included for both. Fig. 2 has no SVD.
+Figs 3--4 are written for joint SVD and again with a ``_pb`` suffix for
+per-beat SVD. Cohort Figs 4--7 and ``lowrank_cohort.h5`` live in
+``postprocess.lowrank_waveform_cohort``.
 """
 
 from __future__ import annotations
@@ -60,6 +61,11 @@ SOURCE_NAMES = (
 )
 
 SPECTRUM_N_MODES = 12
+FIG3_VARIABILITY_METHODS = (
+    "beat_location",
+    "beat",
+    "pooled_within_location",
+)
 
 
 def enabled_vessels(veins_flag: bool) -> tuple[str, ...]:
@@ -169,47 +175,163 @@ def is_usable_beat_spectra(values: np.ndarray | None) -> bool:
     return arr.ndim == 2 and arr.shape[1] >= 2 and bool(np.any(np.isfinite(arr)))
 
 
-def beat_mean_pm_std_spatial_median(
+def normalize_figure3_variability_method(value: str | None) -> str:
+    """Return the Figure 3 gray-band variability method name."""
+    text = str("beat_location" if value is None else value).strip().lower()
+    text = text.replace("-", "_").replace(" ", "_")
+    aliases = {
+        "beat_location": "beat_location",
+        "beat_location_sd": "beat_location",
+        "beat_location_waveforms": "beat_location",
+        "beatlocation": "beat_location",
+        "all_valid": "beat_location",
+        "all_valid_columns": "beat_location",
+        "beat": "beat",
+        "beat_sd": "beat",
+        "beat_to_beat": "beat",
+        "beat_to_beat_sd": "beat",
+        "pooled_within_location": "pooled_within_location",
+        "within_location": "pooled_within_location",
+        "within_location_sd": "pooled_within_location",
+        "pooled": "pooled_within_location",
+        "pooled_within_location_beat_sd": "pooled_within_location",
+    }
+    if text not in aliases:
+        raise ValueError(
+            f"Unknown Figure 3 variability method {value!r}. Expected one of "
+            f"{FIG3_VARIABILITY_METHODS}."
+        )
+    return aliases[text]
+
+
+def _prepare_figure3_panel_block(
     block: np.ndarray,
     valid: np.ndarray,
-    *,
-    ddof: int = 1,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Typical-location beat-to-beat mean ± 1 SD.
-
-    For each spatial location, take the sample mean and SD **across beats**,
-    then the spatial median of those curves. Std is never pooled over
-    ``(k,r)``, so the band is beat-to-beat rather than spatial. ``block`` is
-    ``(n_t, n_beats, ...)`` or ``(n_beats, ...)``; ``valid`` is
-    ``(n_beats, ...)``.
-    """
+) -> tuple[np.ndarray, np.ndarray, int]:
+    """Return ``(n_t, n_beats, n_locations)`` values and a ``(B, L)`` mask."""
     arr = np.asarray(block, dtype=float)
     mask = np.asarray(valid, dtype=bool)
     if arr.ndim == mask.ndim:
         arr = arr[None, ...]
     n_t = int(arr.shape[0])
     if mask.shape != arr.shape[1:]:
+        return np.full((n_t, 0, 0), np.nan, dtype=float), np.zeros(
+            (0, 0), dtype=bool
+        ), n_t
+    n_beats = int(mask.shape[0])
+    return arr.reshape(n_t, n_beats, -1), mask.reshape(n_beats, -1), n_t
+
+
+def figure3_beat_location_mean_pm_std(
+    block: np.ndarray,
+    valid: np.ndarray,
+    *,
+    ddof: int = 1,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Valid beat-location mean ± 1 SD for one Figure 3 panel.
+
+    At each cardiac phase, collapse all valid columns ``j = (b, k, r)`` from
+    the relevant panel. This keeps the variability across the valid
+    beat-location waveform population visible in the gray band. ``block`` is
+    ``(n_t, n_beats, ...)`` or ``(n_beats, ...)``; ``valid`` is
+    ``(n_beats, ...)``. Panels without a time axis, such as ``mu``, return a
+    single value that the caller broadcasts over the plotted time axis.
+    """
+    arr, mask, n_t = _prepare_figure3_panel_block(block, valid)
+    if arr.shape[1] == 0:
+        empty = np.full(n_t, np.nan, dtype=float)
+        return empty, empty, empty
+    flat = np.where(mask[None, ...], arr, np.nan).reshape(n_t, -1)
+    return mean_pm_std(flat, axis=1, ddof=ddof)
+
+
+def figure3_beat_mean_pm_std(
+    block: np.ndarray,
+    valid: np.ndarray,
+    *,
+    ddof: int = 1,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Literal beat-to-beat mean ± 1 SD using a common spatial location set.
+
+    For each beat, first build one curve by taking the spatial median over
+    locations valid in every beat. Then compute mean ± sample SD across those
+    beat curves. This estimates variability of the typical waveform from beat
+    to beat and excludes persistent location differences.
+    """
+    arr, mask, n_t = _prepare_figure3_panel_block(block, valid)
+    if arr.shape[1] == 0:
+        empty = np.full(n_t, np.nan, dtype=float)
+        return empty, empty, empty
+    common_locations = np.all(mask, axis=0)
+    if not np.any(common_locations):
+        empty = np.full(n_t, np.nan, dtype=float)
+        return empty, empty, empty
+    with np.errstate(all="ignore"):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            beat_curves = np.nanmedian(arr[:, :, common_locations], axis=2)
+    return mean_pm_std(beat_curves, axis=1, ddof=ddof)
+
+
+def figure3_pooled_within_location_mean_pm_std(
+    block: np.ndarray,
+    valid: np.ndarray,
+    *,
+    ddof: int = 1,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Pointwise mean ± pooled within-location beat SD.
+
+    The black curve is the pointwise mean across all valid beat-location
+    columns. The gray-band width pools squared deviations around each
+    location's own beat mean, so persistent vessel-location offsets are not
+    counted as beat variability.
+    """
+    arr, mask, n_t = _prepare_figure3_panel_block(block, valid)
+    if arr.shape[1] == 0:
         empty = np.full(n_t, np.nan, dtype=float)
         return empty, empty, empty
     masked = np.where(mask[None, ...], arr, np.nan)
-    mean_loc, lo_loc, _hi_loc = mean_pm_std(masked, axis=1, ddof=ddof)
-    std_loc = np.asarray(mean_loc, dtype=float) - np.asarray(lo_loc, dtype=float)
-    ok = np.sum(mask, axis=0) > 1
-    ok_t = np.broadcast_to(ok, mean_loc.shape)
-    mean_loc = np.where(ok_t, mean_loc, np.nan)
-    std_loc = np.where(ok_t, std_loc, np.nan)
-
-    def _median_space(values: np.ndarray) -> np.ndarray:
-        """Median over flattened spatial axes, keeping the time axis."""
-        flat = np.asarray(values, dtype=float).reshape(n_t, -1)
-        with np.errstate(all="ignore"):
-            return np.nanmedian(flat, axis=1)
-
-    mean = _median_space(mean_loc)
-    sd = _median_space(std_loc)
-    sd = np.where(np.isfinite(sd), sd, 0.0)
-    mean = np.where(np.isfinite(mean), mean, np.nan)
+    flat = masked.reshape(n_t, -1)
+    with np.errstate(all="ignore"):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            mean = np.nanmean(flat, axis=1)
+            loc_mean = np.nanmean(masked, axis=1)
+    n_loc = np.sum(np.isfinite(masked), axis=1)
+    deviations = masked - loc_mean[:, None, :]
+    numerator = np.nansum(deviations * deviations, axis=(1, 2))
+    denominator = np.sum(np.maximum(n_loc - ddof, 0), axis=1)
+    sd = np.zeros(n_t, dtype=float)
+    ok = denominator > 0
+    sd[ok] = np.sqrt(numerator[ok] / denominator[ok])
+    mean = np.asarray(mean, dtype=float)
     return mean, mean - sd, mean + sd
+
+
+def beat_mean_pm_std_spatial_median(
+    block: np.ndarray,
+    valid: np.ndarray,
+    *,
+    ddof: int = 1,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Backward-compatible alias for the Figure 3 beat-location SD band."""
+    return figure3_beat_location_mean_pm_std(block, valid, ddof=ddof)
+
+
+def figure3_panel_mean_pm_std(
+    block: np.ndarray,
+    valid: np.ndarray,
+    *,
+    method: str | None = "beat_location",
+    ddof: int = 1,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Dispatch to one of the explicit Figure 3 gray-band definitions."""
+    normalized = normalize_figure3_variability_method(method)
+    if normalized == "beat_location":
+        return figure3_beat_location_mean_pm_std(block, valid, ddof=ddof)
+    if normalized == "beat":
+        return figure3_beat_mean_pm_std(block, valid, ddof=ddof)
+    return figure3_pooled_within_location_mean_pm_std(block, valid, ddof=ddof)
 
 
 # =====================================================================
@@ -420,6 +542,11 @@ def load_vessel_data_from_result_h5(
         per_beat_svd = (
             _group_dataset_map(per_beat_g) if isinstance(per_beat_g, h5py.Group) else {}
         )
+        per_beat_svd = {
+            key: value
+            for key, value in per_beat_svd.items()
+            if not key.startswith("u_mode") and not key.startswith("scores_mode")
+        }
         per_beat_svd["singular_values_b"] = coerce_beat_spectra(
             per_beat_svd.get("singular_values_b")
         )
@@ -563,14 +690,12 @@ def build_ingest_attrs(
     input_beat_period_path: str,
     *,
     veins_flag: bool = False,
-    svd_method: str = DEFAULT_SVD_METHOD,
 ) -> dict:
     """Pipeline-group attributes stored on the AngioEye Processing group."""
-    method = normalize_svd_method(svd_method)
     return {
         "pipeline_family": "low_rank_waveform_decomposition",
-        "svd_method": method,
-        "aggregation": "median over (k,r), then median over b",
+        "svd_method": "joint and per-beat",
+        "aggregation": "median over valid (beat, branch, radius) columns",
         "vessels": list(enabled_vessels(veins_flag)),
         "veins_flag": bool(veins_flag),
         "representations": representations,
@@ -585,7 +710,6 @@ def ingest_lowrank_from_h5(
     h5file,
     *,
     veins_flag: bool = False,
-    svd_method: str = DEFAULT_SVD_METHOD,
 ) -> ProcessResult:
     """Flatten packed EyeFlow/AE low-rank metrics into a ProcessResult."""
     root = find_eyeflow_lowrank_group(h5file)
@@ -611,7 +735,6 @@ def ingest_lowrank_from_h5(
         resolved,
         T_INPUT,
         veins_flag=bool(veins_flag),
-        svd_method=svd_method,
     )
     return ProcessResult(metrics=metrics, attrs=attrs)
 
@@ -621,9 +744,12 @@ def write_acquisition_figures(
     source_h5_path: Path | str,
     output_h5_path: Path | str,
     veins_flag: bool = False,
-    svd_method: str = DEFAULT_SVD_METHOD,
 ) -> list[Path]:
-    """Write Figs 2--4 beside the result H5 from packed EyeFlow low-rank metrics."""
+    """Write Figs 2--4 beside the result H5 from packed EyeFlow low-rank metrics.
+
+    Figs 3--4 are also written with a ``_pb`` suffix when ``per_beat/``
+    contains beat-local modes or singular values.
+    """
     source_h5_path = Path(source_h5_path)
     output_h5_path = Path(output_h5_path)
     bundle = load_acquisition_from_result_h5(
@@ -641,7 +767,7 @@ def write_acquisition_figures(
         png_dir,
         file_stem=stem,
         signal="raw",
-        svd_method=svd_method,
+        veins_flag=bool(veins_flag),
     )
 
 
@@ -655,9 +781,9 @@ class LowRankWaveformIngest(ProcessPipeline):
     """Ingest EyeFlow-packed low-rank metrics and write Figs 2-4.
 
     Registry name stays ``lowrank_waveform_decomposition``. SVD lives in
-    EyeFlow (Joint SVD / Per-beat SVD options, same as Veins). Cohort
-    figures live in postprocess.lowrank_waveform_cohort; ``lowrank_cohort.h5``
-    is written by scripts.lowrank_cohort_stats.
+    EyeFlow (joint and per-beat always; Veins selects both). Cohort
+    figures and ``lowrank_cohort.h5`` live in
+    postprocess.lowrank_waveform_cohort.
     """
 
     description = (
@@ -668,14 +794,12 @@ class LowRankWaveformIngest(ProcessPipeline):
     )
 
     veins_flag = False
-    svd_method = DEFAULT_SVD_METHOD
 
     def run(self, h5file) -> ProcessResult:
         """Copy EyeFlow-packed low-rank metrics into an AngioEye ProcessResult."""
         return ingest_lowrank_from_h5(
             h5file,
             veins_flag=bool(self.veins_flag),
-            svd_method=self.svd_method,
         )
 
     def write_companions(
@@ -691,7 +815,6 @@ class LowRankWaveformIngest(ProcessPipeline):
             source_h5_path=source_h5_path,
             output_h5_path=output_h5_path,
             veins_flag=bool(self.veins_flag),
-            svd_method=self.svd_method,
         )
 
 
@@ -711,16 +834,36 @@ def _mode_recon(u: np.ndarray | None, scores: np.ndarray | None) -> np.ndarray |
     return u.reshape((u.shape[0],) + (1,) * scores.ndim) * scores[None, ...]
 
 
+def _mode_recon_per_beat(
+    u_tb: np.ndarray | None, scores_bkr: np.ndarray | None
+) -> np.ndarray | None:
+    """Beat-local ``u(t,b) * score(b,k,r)`` → ``(n_t, n_beats, k, r)``."""
+    if u_tb is None or scores_bkr is None:
+        return None
+    u = np.asarray(u_tb, dtype=float)
+    scores = np.asarray(scores_bkr, dtype=float)
+    if u.size == 0 or scores.size == 0 or u.ndim != 2 or scores.ndim != 3:
+        return None
+    if u.shape[1] != scores.shape[0]:
+        return None
+    return u[:, :, None, None] * scores[None, ...]
+
+
 def load_packed_waveform(
     h5_path: Path | str,
     vessel: str,
     signal: str = COHORT_SIGNAL,
+    *,
+    svd_method: str = DEFAULT_SVD_METHOD,
 ) -> dict | None:
     """Reconstruct beat-aligned waveforms from packed EyeFlow low-rank outputs.
 
     Uses ``decomposition/``, ``baseline/mu_bkr``, ``residuals/r*_t_bkr``, and
     ``inputs/valid_column_mask_bkr``. Does not read Velocity* groups.
     ``v = μ + r1 + a1 u1`` (or ``μ + r2 + a1 u1 + a2 u2`` if r1 is missing).
+    ``v``, ``μ``, and ``w`` always come from that joint reconstruction.
+    ``svd_method="per_beat"`` replaces ``a1u1`` / ``a2u2`` with beat-local
+    ``u_m(t,b) a_m(b,k,r)`` from ``per_beat/``.
     """
     with h5py.File(h5_path, "r") as h5:
         root = find_lowrank_metrics_group(h5)
@@ -737,6 +880,7 @@ def load_packed_waveform(
         inputs = source.get("inputs")
         residuals = source.get("residuals")
         beat_period = source.get("beat_period")
+        per_beat = source.get("per_beat")
         if not isinstance(decomp, h5py.Group):
             return None
 
@@ -761,6 +905,11 @@ def load_packed_waveform(
             if isinstance(beat_period, h5py.Group)
             else float("nan")
         )
+        pb_group = per_beat if isinstance(per_beat, h5py.Group) else None
+        u1_tb = _dataset_array(pb_group, "u_mode1_tb")
+        u2_tb = _dataset_array(pb_group, "u_mode2_tb")
+        s1_bkr = _dataset_array(pb_group, "scores_mode1_bkr")
+        s2_bkr = _dataset_array(pb_group, "scores_mode2_bkr")
 
     a1u1 = _mode_recon(u1, s1)
     a2u2 = _mode_recon(u2, s2)
@@ -777,6 +926,19 @@ def load_packed_waveform(
         return None
     if a2u2 is None or a2u2.shape != a1u1.shape:
         a2u2 = np.full(a1u1.shape, np.nan, dtype=float)
+
+    method = normalize_svd_method(svd_method)
+    if method == "per_beat":
+        a1u1_pb = _mode_recon_per_beat(u1_tb, s1_bkr)
+        a2u2_pb = _mode_recon_per_beat(u2_tb, s2_bkr)
+        if a1u1_pb is None or a1u1_pb.shape != a1u1.shape:
+            return None
+        a1u1 = a1u1_pb
+        if a2u2_pb is None or a2u2_pb.shape != a1u1.shape:
+            a2u2 = np.full(a1u1.shape, np.nan, dtype=float)
+        else:
+            a2u2 = a2u2_pb
+
     return {
         "v": w + mu[None, ...],
         "mu": mu,
@@ -786,6 +948,7 @@ def load_packed_waveform(
         "valid": valid.astype(bool),
         "n_t": int(a1u1.shape[0]),
         "beat_period_mean": float(period),
+        "svd_method": method,
     }
 
 
@@ -820,47 +983,78 @@ class LowRankWaveformAcquisitionFigures:
         *,
         signal: str = "raw",
         file_stem: str | None = None,
-        svd_method: str = DEFAULT_SVD_METHOD,
+        veins_flag: bool = False,
     ) -> list[Path]:
         """Write Figs. 2--4 into ``out_dir`` from packed low-rank metrics.
 
-        Fig. 3 needs joint modes, so it is skipped for ``per_beat``.
+        Fig. 2 has no SVD. Figs 3--4 are written for joint SVD and, when
+        packed, again with a ``_pb`` suffix for per-beat SVD.
+        ``veins_flag`` adds a venous row to every figure.
         """
         h5_path = Path(h5_path)
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         stem = file_stem or h5_path.stem
-        method = normalize_svd_method(svd_method)
+        vessels = enabled_vessels(bool(veins_flag))
         written: list[Path] = []
         fig2 = cls.plot_frequency_velocity(
             h5_path,
             out_dir / f"{stem}_fig2_frequency_velocity.png",
             signal=signal,
+            vessels=vessels,
         )
         if fig2 is not None:
             written.append(fig2)
-        if method == "joint":
-            fig3 = cls.plot_waveform_decomposition(
-                h5_path,
-                out_dir / f"{stem}_fig3_waveform_decomposition.png",
-                signal=signal,
-            )
-            if fig3 is not None:
-                written.append(fig3)
+        fig3 = cls.plot_waveform_decomposition(
+            h5_path,
+            out_dir / f"{stem}_fig3_waveform_decomposition.png",
+            signal=signal,
+            vessels=vessels,
+            svd_method="joint",
+        )
+        if fig3 is not None:
+            written.append(fig3)
+        fig3_pb = cls.plot_waveform_decomposition(
+            h5_path,
+            out_dir / f"{stem}_fig3_waveform_decomposition_pb.png",
+            signal=signal,
+            vessels=vessels,
+            svd_method="per_beat",
+        )
+        if fig3_pb is not None:
+            written.append(fig3_pb)
         written.append(
             cls.plot_energy_spectrum(
                 vessel_bundle,
                 out_dir / f"{stem}_fig4_energy_spectrum.png",
-                svd_method=method,
+                vessels=vessels,
+                svd_method="joint",
             )
         )
         written.append(
             cls.plot_energy_spectrum_cumulative(
                 vessel_bundle,
                 out_dir / f"{stem}_fig4_energy_spectrum_cumulative.png",
-                svd_method=method,
+                vessels=vessels,
+                svd_method="joint",
             )
         )
+        fig4_pb = cls.plot_energy_spectrum(
+            vessel_bundle,
+            out_dir / f"{stem}_fig4_energy_spectrum_pb.png",
+            vessels=vessels,
+            svd_method="per_beat",
+        )
+        if fig4_pb is not None:
+            written.append(fig4_pb)
+        fig4_pb_c = cls.plot_energy_spectrum_cumulative(
+            vessel_bundle,
+            out_dir / f"{stem}_fig4_energy_spectrum_cumulative_pb.png",
+            vessels=vessels,
+            svd_method="per_beat",
+        )
+        if fig4_pb_c is not None:
+            written.append(fig4_pb_c)
         return written
 
     @classmethod
@@ -883,11 +1077,12 @@ class LowRankWaveformAcquisitionFigures:
         out_path: Path,
         *,
         signal: str = "raw",
+        vessels: tuple[str, ...] | None = None,
     ) -> Path | None:
         """Fig. 2: reconstructed arterial velocity, beats concatenated in time."""
         h5_path = Path(h5_path)
         out_path = Path(out_path)
-        vessels = list(FIGURE_VESSELS)
+        vessels = list(vessels or FIGURE_VESSELS)
         n_rows = max(len(vessels), 1)
         fig_w = cls.FIG2_HEIGHT * cls.FIG2_ASPECT
         fig, axes = plt.subplots(
@@ -978,16 +1173,25 @@ class LowRankWaveformAcquisitionFigures:
         h5_path: Path,
         vessel: str,
         signal: str,
+        variability_method: str | None = "beat_location",
+        *,
+        svd_method: str = DEFAULT_SVD_METHOD,
     ) -> dict[str, dict[str, np.ndarray]] | None:
-        """Build Fig. 3 curves: typical-location beat-to-beat mean ± SD."""
-        packed = load_packed_waveform(h5_path, vessel, signal=signal)
+        """Build Fig. 3 curves for one vessel and gray-band definition."""
+        packed = load_packed_waveform(
+            h5_path, vessel, signal=signal, svd_method=svd_method
+        )
         if packed is None:
             return None
         n_t = int(packed["n_t"])
         valid_mask = packed["valid"]
 
         def _band(block: np.ndarray) -> dict[str, np.ndarray]:
-            mean, lo, hi = beat_mean_pm_std_spatial_median(block, valid_mask)
+            mean, lo, hi = figure3_panel_mean_pm_std(
+                block,
+                valid_mask,
+                method=variability_method,
+            )
             if mean.size == 1:
                 mean = np.full(n_t, float(mean[0]), dtype=float)
                 lo = np.full(n_t, float(lo[0]), dtype=float)
@@ -1042,15 +1246,26 @@ class LowRankWaveformAcquisitionFigures:
         out_path: Path,
         *,
         signal: str = "raw",
+        vessels: tuple[str, ...] | None = None,
+        variability_method: str | None = "beat_location",
+        svd_method: str = DEFAULT_SVD_METHOD,
     ) -> Path | None:
-        """Fig. 3: arterial v, mu, w, a1u1, a2u2 from packed modes/residuals."""
+        """Fig. 3: arterial v, mu, w, a1u1, a2u2 from packed modes."""
         h5_path = Path(h5_path)
         out_path = Path(out_path)
+        variability_method = normalize_figure3_variability_method(
+            variability_method
+        )
+        svd_method = normalize_svd_method(svd_method)
         rows: list[dict[str, np.ndarray] | None] = []
-        for vessel in FIGURE_VESSELS:
+        for vessel in vessels or FIGURE_VESSELS:
             rows.append(
                 cls._waveform_summary_for_vessel(
-                    h5_path, vessel, signal=signal
+                    h5_path,
+                    vessel,
+                    signal=signal,
+                    variability_method=variability_method,
+                    svd_method=svd_method,
                 )
             )
         if all(row is None for row in rows):
@@ -1202,13 +1417,15 @@ class LowRankWaveformAcquisitionFigures:
         vessel_bundle: dict[str, dict | None],
         out_path: Path,
         *,
-        svd_method: str = DEFAULT_SVD_METHOD,
-    ) -> Path:
-        """Fig. 4: arterial singular values vs mode index."""
+        vessels: tuple[str, ...] | None = None,
+        svd_method: str = "joint",
+    ) -> Path | None:
+        """Fig. 4: singular values vs mode index for one SVD method."""
         return cls._save_energy_spectrum_figure(
             vessel_bundle,
             out_path,
             cumulative=False,
+            vessels=vessels,
             svd_method=svd_method,
         )
 
@@ -1218,13 +1435,15 @@ class LowRankWaveformAcquisitionFigures:
         vessel_bundle: dict[str, dict | None],
         out_path: Path,
         *,
-        svd_method: str = DEFAULT_SVD_METHOD,
-    ) -> Path:
+        vessels: tuple[str, ...] | None = None,
+        svd_method: str = "joint",
+    ) -> Path | None:
         """Standalone cumulative-sum panel (same 2:1 aspect as Fig. 4)."""
         return cls._save_energy_spectrum_figure(
             vessel_bundle,
             out_path,
             cumulative=True,
+            vessels=vessels,
             svd_method=svd_method,
         )
 
@@ -1235,42 +1454,51 @@ class LowRankWaveformAcquisitionFigures:
         out_path: Path,
         *,
         cumulative: bool,
-        svd_method: str = DEFAULT_SVD_METHOD,
-    ) -> Path:
-        """Write Fig. 4 (or its cumulative sibling) from packed singular values."""
+        vessels: tuple[str, ...] | None = None,
+        svd_method: str = "joint",
+    ) -> Path | None:
+        """Write Fig. 4 from joint or packed per-beat singular values."""
         out_path = Path(out_path)
         method = normalize_svd_method(svd_method)
-        vessels = [
-            v for v in FIGURE_VESSELS if vessel_bundle.get(v) is not None
-        ] or list(FIGURE_VESSELS)
+        wanted = list(vessels or FIGURE_VESSELS)
+        plot_vessels = [
+            v for v in wanted if vessel_bundle.get(v) is not None
+        ] or wanted
         n_keep = SPECTRUM_N_MODES
         fig_h = 3.0
         fig, axes = plt.subplots(
-            len(vessels),
+            len(plot_vessels),
             1,
-            figsize=(2.0 * fig_h, fig_h * len(vessels)),
+            figsize=(2.0 * fig_h, fig_h * len(plot_vessels)),
             squeeze=False,
         )
         ylabel = r"$\sum_{i=1}^{m}\lambda_i$" if cumulative else r"$\lambda_m$"
-        for vessel_idx, vessel in enumerate(vessels):
+        any_drawn = False
+        for vessel_idx, vessel in enumerate(plot_vessels):
             ax = axes[vessel_idx, 0]
+            data = vessel_bundle.get(vessel)
             if method == "per_beat":
-                spectra = cls._beat_spectra(vessel_bundle.get(vessel))
+                spectra = cls._beat_spectra(data)
                 if is_usable_beat_spectra(spectra):
                     cls._draw_spectrum_mean_std(
                         ax, spectra[:, :n_keep], cumulative=cumulative
                     )
+                    any_drawn = True
             else:
-                spectrum = cls._joint_spectrum(vessel_bundle.get(vessel))
+                spectrum = cls._joint_spectrum(data)
                 n_modes = int(min(n_keep, spectrum.size))
                 if n_modes:
                     y = spectrum[:n_modes]
                     if cumulative:
                         y = np.cumsum(y)
                     cls._draw_spectrum_curve(ax, np.arange(1, n_modes + 1), y)
+                    any_drawn = True
             cls._style_spectrum_panel(
                 ax, n_keep=n_keep, ylabel=ylabel, log_y=not cumulative
             )
+        if method == "per_beat" and not any_drawn:
+            plt.close(fig)
+            return None
         fig.tight_layout()
         out_path.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(out_path, dpi=150, bbox_inches="tight")

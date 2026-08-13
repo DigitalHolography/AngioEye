@@ -1,7 +1,10 @@
-"""Cohort low-rank Figs 5--7 from packed result H5s.
+"""Cohort low-rank Figs 4--7 and ``lowrank_cohort.h5`` from packed result H5s.
 
-Statistics tables and ``lowrank_cohort.h5`` are written by
-``scripts.lowrank_cohort_stats``, not this postprocess.
+Joint-SVD Figs 4--7 keep the article acquisition scalars; a parallel
+``*_pb.png`` set uses ``median_b`` of packed per-beat SVD endpoints (ρ is
+``median_b(R)/median_b(R0)``). ``T``, ``μ``, TPR, and MPR stay joint.
+Fig. 4 joint uses packed joint singular values. Stats / confounds live in
+``lowrank_cohort.h5``, built by ``scripts.lowrank_cohort_stats``.
 """
 
 from __future__ import annotations
@@ -26,6 +29,8 @@ from input_output.archive_io import extracted_zip_tree
 
 from pipelines.lowrank_waveform_decomposition import (
     SPECTRUM_N_MODES,
+    aggregate_beatwise,
+    aggregate_rho,
     coerce_beat_spectra,
     enabled_vessels,
     finite_std,
@@ -235,7 +240,7 @@ def _format_delta(delta: float) -> str:
 # =====================================================================
 
 class LowRankWaveformCohortFigures:
-    """Article Figs. 5--7, written once per cohort."""
+    """Article Figs. 4--7, written once per cohort (joint and ``_pb``)."""
 
     PANEL_SIZE = 2.5
     FLICKER_SHADE = "#add8e6"
@@ -270,8 +275,9 @@ class LowRankWaveformCohortFigures:
         *,
         patient_id: str | None = None,
         beats_by_vessel: dict[str, pd.DataFrame] | None = None,
+        points_by_vessel_per_beat: dict[str, pd.DataFrame] | None = None,
     ) -> list[Path]:
-        """Write Figs. 5, 6, 7 and the artery variance-fraction spectrum."""
+        """Write Figs. 4--7 (joint and ``_pb``) for the artery cohort."""
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         grids = (
@@ -288,10 +294,26 @@ class LowRankWaveformCohortFigures:
             )
             for name, panels in grids
         ]
+        pb_points = points_by_vessel_per_beat or {}
+        if _has_per_beat_endpoint_dots(pb_points):
+            pb_grids = (
+                ("fig5_nonsvd_endpoints_pb.png", cls.FIG5_PANELS),
+                ("fig6_lowrank_endpoints_pb.png", cls.FIG6_PANELS),
+                ("fig7_residual_spectrum_endpoints_pb.png", cls.FIG7_PANELS),
+            )
+            written.extend(
+                cls._plot_endpoint_grid(
+                    pb_points,
+                    panels,
+                    out_dir / prefixed_filename(name, patient_id),
+                    group_order,
+                )
+                for name, panels in pb_grids
+            )
         written.append(
             cls._save_spectrum(
                 out_dir / prefixed_filename("fig4_variance_fraction.png", patient_id),
-                beats_by_vessel,
+                points_by_vessel,
                 cumulative=False,
             )
         )
@@ -299,10 +321,30 @@ class LowRankWaveformCohortFigures:
             cls._save_spectrum(
                 out_dir
                 / prefixed_filename("fig4_variance_fraction_cumulative.png", patient_id),
-                beats_by_vessel,
+                points_by_vessel,
                 cumulative=True,
             )
         )
+        beats = beats_by_vessel or {}
+        if _has_spectrum_modes(beats.get("artery", pd.DataFrame())):
+            written.append(
+                cls._save_spectrum(
+                    out_dir
+                    / prefixed_filename("fig4_variance_fraction_pb.png", patient_id),
+                    beats,
+                    cumulative=False,
+                )
+            )
+            written.append(
+                cls._save_spectrum(
+                    out_dir
+                    / prefixed_filename(
+                        "fig4_variance_fraction_cumulative_pb.png", patient_id
+                    ),
+                    beats,
+                    cumulative=True,
+                )
+            )
         return written
 
     @staticmethod
@@ -471,12 +513,9 @@ class LowRankWaveformCohortFigures:
     ) -> Path:
         """Write the per-mode or cumulative λ spectrum PNG."""
         out_path = Path(out_path)
-        beats = (beats_by_vessel or {}).get("artery", pd.DataFrame())
-        mode_cols = [
-            f"mode{i}"
-            for i in range(1, SPECTRUM_N_MODES + 1)
-            if f"mode{i}" in beats.columns
-        ]
+        frames = beats_by_vessel or {}
+        beats = frames.get("artery", pd.DataFrame())
+        mode_cols = _spectrum_mode_cols(beats)
         df = beats if (not beats.empty and mode_cols) else pd.DataFrame()
 
         fig_h = 3.0
@@ -515,6 +554,50 @@ class LowRankWaveformCohortFigures:
 # Collection from packed result H5s
 # =====================================================================
 
+PER_BEAT_POINT_METRICS = (
+    "A1",
+    "A2",
+    "R1",
+    "R2",
+    "rho1",
+    "rho2",
+    "effective_rank",
+    "participation_ratio",
+)
+
+
+def _spectrum_mode_cols(df: pd.DataFrame) -> list[str]:
+    """``mode1``…``modeM`` columns present on ``df``."""
+    if df is None or df.empty:
+        return []
+    return [
+        f"mode{i}"
+        for i in range(1, SPECTRUM_N_MODES + 1)
+        if f"mode{i}" in df.columns
+    ]
+
+
+def _has_spectrum_modes(df: pd.DataFrame) -> bool:
+    """True if ``df`` has a finite packed singular-value entry."""
+    cols = _spectrum_mode_cols(df)
+    if not cols:
+        return False
+    return bool(np.isfinite(df[cols].to_numpy(dtype=float)).any())
+
+
+def _has_per_beat_endpoint_dots(points_by_vessel: dict[str, pd.DataFrame]) -> bool:
+    """True if any vessel has a finite per-beat SVD acquisition endpoint."""
+    for df in points_by_vessel.values():
+        if df is None or df.empty:
+            continue
+        for metric in PER_BEAT_POINT_METRICS:
+            if metric not in df.columns:
+                continue
+            if np.isfinite(df[metric].to_numpy(dtype=float)).any():
+                return True
+    return False
+
+
 @dataclass
 class CohortCollection:
     """Packed-H5 endpoints grouped for figures or ``lowrank_cohort.h5``."""
@@ -526,6 +609,7 @@ class CohortCollection:
     patient_id: str | None
     flicker_protocol: bool
     source_files: list[str]
+    points_by_vessel_per_beat: dict[str, pd.DataFrame]
 
 
 def _finite_at(arr, index: int) -> float:
@@ -589,7 +673,21 @@ def _beat_rows(
             "R1_pb": _beat_get(per_beat_svd, "R1_b_pb", b),
             "A2_pb": _beat_get(per_beat_svd, "A2_b_pb", b),
             "R2_pb": _beat_get(per_beat_svd, "R2_b_pb", b),
+            "rho1_pb": _beat_get(per_beat_svd, "rho1_b_pb", b),
+            "rho2_pb": _beat_get(per_beat_svd, "rho2_b_pb", b),
+            "TPR_pb": _beat_get(per_beat_svd, "TPR_b_pb", b),
+            "mpr_pb": _beat_get(per_beat_svd, "MPR_b_pb", b),
+            "effective_rank_pb": _beat_get(
+                per_beat_svd, "effective_rank_b_pb", b
+            ),
+            "participation_ratio_pb": _beat_get(
+                per_beat_svd, "participation_ratio_b_pb", b
+            ),
         }
+        if not np.isfinite(row["TPR_pb"]):
+            row["TPR_pb"] = _beat_get(per_beat_svd, "R0_b_pb", b)
+        if not np.isfinite(row["mpr_pb"]):
+            row["mpr_pb"] = _beat_get(per_beat_svd, "mpr_b_pb", b)
         if emit_modes:
             for m in range(1, SPECTRUM_N_MODES + 1):
                 if b < singular_b.shape[0] and m <= singular_b.shape[1]:
@@ -657,6 +755,72 @@ def _points_row(
     return row
 
 
+def _first_usable_array(mapping: dict, *keys: str) -> np.ndarray:
+    """First per-beat array among ``keys`` that has a finite value."""
+    for key in keys:
+        if key not in mapping:
+            continue
+        arr = np.asarray(mapping[key], dtype=float)
+        if np.isfinite(arr).any():
+            return arr
+    return np.asarray([], dtype=float)
+
+
+def _median_per_beat(mapping: dict, *keys: str) -> float:
+    """Median of the first usable per-beat array among ``keys``."""
+    return aggregate_beatwise(_first_usable_array(mapping, *keys), "median")
+
+
+def _std_per_beat(mapping: dict, *keys: str) -> float:
+    """Sample SD of the first usable per-beat array among ``keys``."""
+    arr = _first_usable_array(mapping, *keys)
+    if not np.isfinite(arr).any():
+        return float("nan")
+    return finite_std(arr)
+
+
+def _rho_from_per_beat(mapping: dict, mode: str) -> float:
+    """Article ρ = median_b(R) / median_b(R0) from packed per-beat arrays."""
+    return aggregate_rho(
+        _first_usable_array(mapping, f"R{mode}_b_pb"),
+        _first_usable_array(mapping, "TPR_b_pb", "R0_b_pb"),
+        "median",
+    )
+
+
+def _points_row_per_beat(
+    vessel: str,
+    h5_path: Path,
+    sequence: int,
+    epoch_short: str,
+    vessel_data: dict,
+) -> dict:
+    """Acquisition row from packed per-beat SVD endpoints.
+
+    ``T``, ``μ``, TPR, and MPR are not SVD-derived and stay the joint
+    values. Mode amplitudes and residuals use ``median_b``; ρ uses
+    ``median_b(R)/median_b(R0)``. Beat SDs are taken from the same
+    per-beat arrays.
+    """
+    row = _points_row(vessel, h5_path, sequence, epoch_short, vessel_data)
+    pb = vessel_data.get("per_beat_svd") or {}
+    row["A1"] = _median_per_beat(pb, "A1_b_pb")
+    row["A2"] = _median_per_beat(pb, "A2_b_pb")
+    row["R1"] = _median_per_beat(pb, "R1_b_pb")
+    row["R2"] = _median_per_beat(pb, "R2_b_pb")
+    row["rho1"] = _rho_from_per_beat(pb, "1")
+    row["rho2"] = _rho_from_per_beat(pb, "2")
+    row["effective_rank"] = _median_per_beat(pb, "effective_rank_b_pb")
+    row["participation_ratio"] = _median_per_beat(
+        pb, "participation_ratio_b_pb"
+    )
+    row["A1_sd"] = _std_per_beat(pb, "A1_b_pb")
+    row["A2_sd"] = _std_per_beat(pb, "A2_b_pb")
+    row["rho1_sd"] = _std_per_beat(pb, "rho1_b_pb")
+    row["rho2_sd"] = _std_per_beat(pb, "rho2_b_pb")
+    return row
+
+
 def collect_payload(
     input_h5_paths: Iterable[Path],
     input_root: Path,
@@ -673,6 +837,7 @@ def collect_payload(
     vessels = enabled_vessels(bool(veins))
     acqs_by_vessel = {v: {g: [] for g in group_keys} for v in vessels}
     points_rows = {v: [] for v in vessels}
+    points_rows_per_beat = {v: [] for v in vessels}
     beat_rows = {v: [] for v in vessels}
     sequence = {v: {g: 0 for g in group_keys} for v in vessels}
     flat_sequence = {v: 0 for v in vessels}
@@ -699,11 +864,15 @@ def collect_payload(
             points_rows[vessel].append(
                 _points_row(vessel, h5_path, seq, label, vessel_data)
             )
+            points_rows_per_beat[vessel].append(
+                _points_row_per_beat(vessel, h5_path, seq, label, vessel_data)
+            )
             beat_rows[vessel].extend(
                 _beat_rows(vessel, h5_path, seq, label, vessel_data)
             )
 
     points_by_vessel: dict[str, pd.DataFrame] = {}
+    points_by_vessel_per_beat: dict[str, pd.DataFrame] = {}
     beats_by_vessel: dict[str, pd.DataFrame] = {}
     kept_acqs: dict[str, dict[str, list[dict]]] = {}
     for vessel in vessels:
@@ -711,6 +880,8 @@ def collect_payload(
         if not rows:
             continue
         rows.sort(key=lambda r: (_row_sort_key(r["epoch"]), r["acquisition"]))
+        pb_rows = points_rows_per_beat[vessel]
+        pb_rows.sort(key=lambda r: (_row_sort_key(r["epoch"]), r["acquisition"]))
         beats = beat_rows[vessel]
         beats.sort(
             key=lambda r: (
@@ -720,6 +891,7 @@ def collect_payload(
             )
         )
         points_by_vessel[vessel] = pd.DataFrame(rows)
+        points_by_vessel_per_beat[vessel] = pd.DataFrame(pb_rows)
         beats_by_vessel[vessel] = pd.DataFrame(beats)
         kept_acqs[vessel] = acqs_by_vessel[vessel]
 
@@ -734,6 +906,7 @@ def collect_payload(
         patient_id=extract_patient_id(input_root),
         flicker_protocol=is_flicker_triad(group_order),
         source_files=[str(path) for _, path in records],
+        points_by_vessel_per_beat=points_by_vessel_per_beat,
     )
 
 
@@ -769,7 +942,7 @@ def _run_on_paths(
     *,
     veins: bool,
 ) -> tuple[str, list[Path]]:
-    """Collect packed H5s and write Figs 5--7 when 2+ group folders exist."""
+    """Collect packed H5s, write ``lowrank_cohort.h5``, and Figs 5--7 when split."""
     if not h5_paths:
         raise ValueError(
             "No packed AngioEye result H5 files with low-rank metrics were "
@@ -778,6 +951,14 @@ def _run_on_paths(
         )
     collection = collect_payload(h5_paths, cohort_root, veins=veins)
     generated_paths: list[Path] = []
+    from scripts.lowrank_cohort_stats import (
+        LowRankWaveformConfounds,
+        write_stats_h5,
+    )
+
+    generated_paths.append(
+        write_stats_h5(collection, LowRankWaveformConfounds(), Path(output_dir))
+    )
     has_cohort_split = len(collection.group_order) >= 2
     if has_cohort_split and collection.points_by_vessel:
         generated_paths.extend(
@@ -787,6 +968,7 @@ def _run_on_paths(
                 collection.group_order,
                 patient_id=collection.patient_id,
                 beats_by_vessel=collection.beats_by_vessel,
+                points_by_vessel_per_beat=collection.points_by_vessel_per_beat,
             )
         )
 
@@ -805,10 +987,11 @@ def _run_on_paths(
         else "no cohort split (no Figs 5--7)"
     )
     n_rows = sum(len(df) for df in collection.points_by_vessel.values())
+    h5_note = generated_paths[0].name if generated_paths else "no stats h5"
     summary = (
         f"Low-rank waveform run: {n_rows} "
         f"acquisition-vessel row(s) ({', '.join(vessel_summaries)}); "
-        f"{split_note}."
+        f"{split_note}; wrote {h5_note}."
     )
     return summary, generated_paths
 
@@ -820,7 +1003,7 @@ def run(
     veins: bool = True,
     result_h5_paths: Iterable[Path] | None = None,
 ) -> tuple[str, list[Path]]:
-    """Build Figs 5--7 from packed AngioEye result H5s.
+    """Build ``lowrank_cohort.h5`` and Figs 4--7 from packed AngioEye result H5s.
 
     Accepts a cohort folder, a ZIP of that tree, or an explicit
     ``result_h5_paths`` list. Writes under ``output_dir``.
@@ -867,9 +1050,9 @@ def run(
     name="Low-rank waveform cohort figures",
     description=(
         "From AngioEye result H5s produced by lowrank_waveform_decomposition, "
-        "build cohort Figs. 5--7 when 2+ group folders are present. Writes "
-        "under ``cohort-results/``. Statistics / ``lowrank_cohort.h5`` are "
-        "written by ``scripts.lowrank_cohort_stats``."
+        "write ``lowrank_cohort.h5`` (stats, confounds, acquisitions, beats) "
+        "and cohort Figs. 4--7 (joint and _pb) when 2+ group folders are "
+        "present. Writes under ``cohort-results/``."
     ),
     required_deps=[
         "numpy>=1.24",
@@ -881,8 +1064,10 @@ def run(
     required_pipelines=["lowrank_waveform_decomposition"],
 )
 class LowRankWaveformCohortPostprocess(BatchPostprocess):
+    veins_flag = False
+
     def run(self, context: PostprocessContext) -> PostprocessResult:
-        """Registered entry: resolve result H5s from context and write Figs 5--7."""
+        """Registered entry: resolve result H5s and write stats H5 plus Figs 4--7."""
         input_path = Path(context.input_path).expanduser()
         output_dir = cohort_results_dir(context.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -897,7 +1082,7 @@ class LowRankWaveformCohortPostprocess(BatchPostprocess):
         summary, generated_paths = run(
             input_path if input_path.exists() else Path(result_paths[0]).parent,
             output_dir,
-            veins=False,
+            veins=bool(self.veins_flag),
             result_h5_paths=result_paths,
         )
         return PostprocessResult(
