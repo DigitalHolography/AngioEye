@@ -36,7 +36,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib.ticker import FuncFormatter, LogLocator, NullFormatter
-from scipy.stats import kruskal, linregress, mannwhitneyu, spearmanr
+from scipy.stats import kruskal, mannwhitneyu
 
 from input_output import (
     COHORT_RESULTS_DIRNAME,
@@ -652,32 +652,9 @@ COHORT_DICTIONARY = {
         "n_combinations": "Designed size of this endpoint's confound grid, not a missing-data count.",
         "n_significant": "Confound combinations with pooled p < 0.05.",
         "retained": "True when every confound combination has pooled p < 0.05 and one Cliff's delta sign.",
-        "aggregation_retained": "Native values only; median vs mean; both SVD methods.",
-        "beat_period_retained": "Default aggregation (median, or n/a); native vs residualized; both SVD methods.",
-        "spearman_rho": (
-            "Spearman correlation of the headline metric vs beat period T, "
-            "on B1∪B2 only."
-        ),
-        "spearman_p": ("Spearman p-value vs beat period T, on B1∪B2 only."),
-        "r_squared": (
-            "OLS R² of the B1∪B2 fit of endpoint vs beat period T "
-            "(the line used for residualization)."
-        ),
-        "r_squared_flicker": (
-            "R² of the baseline-fitted line α + βT evaluated on flicker points "
-            "only (1 − SS_res/SS_tot). NaN if the baseline fit is missing or "
-            "there are fewer than two finite flicker pairs."
-        ),
-        "slope": "OLS slope of endpoint vs beat period T, fitted on B1∪B2 only.",
-        "intercept": (
-            "OLS intercept of endpoint vs beat period T, fitted on B1∪B2 only."
-        ),
-        "n_regression": (
-            "Number of B1∪B2 acquisitions used in the OLS / Spearman fit."
-        ),
+        "aggregation_retained": "Median vs mean beat aggregation, per-beat SVD rows.",
         "svd_method": "Which SVD representation this confound row used.",
         "beat_aggregation": "How beats were collapsed to one acquisition value.",
-        "beat_period_control": "Whether the metric was residualized against beat period.",
         "cliffs_delta": "Cliff's delta for Flicker vs pooled Baseline in this combination.",
     },
     "values": {
@@ -690,12 +667,6 @@ COHORT_DICTIONARY = {
             "median": "Acquisition value is the median across beats.",
             "mean": "Acquisition value is the mean across beats.",
             "n/a": "No beat-aggregation choice (acquisition scalar).",
-        },
-        "beat_period_control": {
-            "native": "Metric as computed, no period regression.",
-            "residualized": (
-                "Residual after subtracting α + βT, with α, β fitted on B1∪B2 only."
-            ),
         },
         "endpoint": {
             "A1": "Mode-1 amplitude.",
@@ -718,7 +689,6 @@ _INT_COLUMNS = {
     "n_B2",
     "n_combinations",
     "n_significant",
-    "n_regression",
     "acquisition",
     "beat_index",
     "n_valid_columns",
@@ -733,7 +703,6 @@ _INT_COLUMNS = {
 }
 _BOOL_COLUMNS = {
     "aggregation_retained",
-    "beat_period_retained",
     "retained",
 }
 _FLOAT_COLUMNS = {
@@ -890,61 +859,6 @@ class LowRankWaveformStatistics:
         return f"{cls.format_p_scientific(raw)} / {cls.format_p_scientific(holm)}"
 
     @classmethod
-    def beat_period_regression(cls, acquisitions_df: pd.DataFrame) -> dict[str, dict]:
-        """OLS / Spearman of each headline metric vs beat period, fitted on B1∪B2."""
-        out: dict[str, dict] = {}
-        for metric, _endpoint in CANONICAL_ENDPOINTS:
-            empty = {
-                "spearman_rho": float("nan"),
-                "spearman_p": float("nan"),
-                "r_squared": float("nan"),
-                "r_squared_flicker": float("nan"),
-                "slope": float("nan"),
-                "intercept": float("nan"),
-                "n_regression": 0,
-            }
-            if metric not in acquisitions_df.columns:
-                out[metric] = empty
-                continue
-            values = {
-                epoch: acquisitions_df.loc[
-                    acquisitions_df["epoch"] == short, metric
-                ].to_numpy(dtype=float)
-                for epoch, short in EPOCH_SHORT.items()
-            }
-            periods = {
-                epoch: acquisitions_df.loc[
-                    acquisitions_df["epoch"] == short, "beat_period"
-                ].to_numpy(dtype=float)
-                for epoch, short in EPOCH_SHORT.items()
-            }
-            _, fit = LowRankWaveformConfounds.residualize_against_beat_period(
-                values, periods
-            )
-            n = int(fit["n"])
-            rho = p_rho = float("nan")
-            if n >= 3:
-                y = np.concatenate([values["baseline1"], values["baseline2"]])
-                x = np.concatenate([periods["baseline1"], periods["baseline2"]])
-                mask = np.isfinite(x) & np.isfinite(y)
-                try:
-                    spearman = spearmanr(x[mask], y[mask])
-                    rho = float(spearman.statistic)
-                    p_rho = float(spearman.pvalue)
-                except ValueError:
-                    pass
-            out[metric] = {
-                "spearman_rho": rho,
-                "spearman_p": p_rho,
-                "r_squared": float(fit["r_squared"]),
-                "r_squared_flicker": float(fit["r_squared_flicker"]),
-                "slope": float(fit["slope"]),
-                "intercept": float(fit["intercept"]),
-                "n_regression": n,
-            }
-        return out
-
-    @classmethod
     def build_stats_table(
         cls,
         acquisitions_df: pd.DataFrame,
@@ -952,7 +866,6 @@ class LowRankWaveformStatistics:
     ) -> pd.DataFrame:
         """One row per canonical endpoint: medians, tests, retain flags, regression."""
         retain = LowRankWaveformConfounds.retain_flags_by_metric(confounds_df)
-        regression = cls.beat_period_regression(acquisitions_df)
 
         rows: list[dict] = []
         pooled_raw: list[float] = []
@@ -977,7 +890,6 @@ class LowRankWaveformStatistics:
             f_b2 = pair["flicker vs baseline2"]
             b1_b2 = pair["baseline1 vs baseline2"]
             flags = retain.get(metric, {})
-            fit = regression.get(metric, {})
             pooled_raw.append(tests["pooled_p"])
             rows.append(
                 {
@@ -1014,17 +926,7 @@ class LowRankWaveformStatistics:
                     "aggregation_retained": bool(
                         flags.get("aggregation_retained", False)
                     ),
-                    "beat_period_retained": bool(
-                        flags.get("beat_period_retained", False)
-                    ),
                     "retained": bool(flags.get("retained", False)),
-                    "spearman_rho": fit.get("spearman_rho", float("nan")),
-                    "spearman_p": fit.get("spearman_p", float("nan")),
-                    "r_squared": fit.get("r_squared", float("nan")),
-                    "r_squared_flicker": fit.get("r_squared_flicker", float("nan")),
-                    "slope": fit.get("slope", float("nan")),
-                    "intercept": fit.get("intercept", float("nan")),
-                    "n_regression": int(fit.get("n_regression", 0)),
                 }
             )
 
@@ -1064,15 +966,7 @@ class LowRankWaveformStatistics:
             "n_combinations",
             "n_significant",
             "aggregation_retained",
-            "beat_period_retained",
             "retained",
-            "spearman_rho",
-            "spearman_p",
-            "r_squared",
-            "r_squared_flicker",
-            "slope",
-            "intercept",
-            "n_regression",
         ]
         return pd.DataFrame(rows)[column_order]
 
@@ -1289,73 +1183,6 @@ class LowRankWaveformConfounds:
                 return arr
         return np.asarray([], dtype=float)
 
-    @staticmethod
-    def residualize_against_beat_period(
-        epoch_values: dict[str, np.ndarray],
-        epoch_beat_periods: dict[str, np.ndarray],
-    ) -> tuple[dict[str, np.ndarray], dict[str, float]]:
-        """Fit ``d = α + βT`` on B1∪B2, then residualize every epoch with that line.
-
-        Returns residuals and the baseline-only fit (slope, intercept, R², R² on
-        flicker, N). Needs at least 3 finite baseline (value, period) pairs;
-        otherwise returns the inputs and NaN diagnostics.
-        """
-        baseline_epochs = ("baseline1", "baseline2")
-        base_values = np.concatenate(
-            [
-                np.asarray(epoch_values.get(epoch, []), dtype=float)
-                for epoch in baseline_epochs
-            ]
-        )
-        base_periods = np.concatenate(
-            [
-                np.asarray(epoch_beat_periods.get(epoch, []), dtype=float)
-                for epoch in baseline_epochs
-            ]
-        )
-        mask = np.isfinite(base_values) & np.isfinite(base_periods)
-        n = int(np.sum(mask))
-        empty_fit = {
-            "slope": float("nan"),
-            "intercept": float("nan"),
-            "r_squared": float("nan"),
-            "r_squared_flicker": float("nan"),
-            "n": n,
-        }
-        native = {k: np.asarray(v, dtype=float) for k, v in epoch_values.items()}
-        if n < 3:
-            return native, empty_fit
-
-        fit = linregress(base_periods[mask], base_values[mask])
-        slope = float(fit.slope)
-        intercept = float(fit.intercept)
-        r_squared = float(fit.rvalue**2)
-
-        flicker_values = np.asarray(epoch_values.get("flicker", []), dtype=float)
-        flicker_periods = np.asarray(epoch_beat_periods.get("flicker", []), dtype=float)
-        fl_mask = np.isfinite(flicker_values) & np.isfinite(flicker_periods)
-        r_squared_flicker = float("nan")
-        if int(np.sum(fl_mask)) >= 2:
-            y = flicker_values[fl_mask]
-            yhat = intercept + slope * flicker_periods[fl_mask]
-            ss_res = float(np.sum((y - yhat) ** 2))
-            ss_tot = float(np.sum((y - np.mean(y)) ** 2))
-            if ss_tot > 0:
-                r_squared_flicker = 1.0 - ss_res / ss_tot
-
-        out = {}
-        for epoch, values in epoch_values.items():
-            values = np.asarray(values, dtype=float)
-            periods = np.asarray(epoch_beat_periods[epoch], dtype=float)
-            out[epoch] = values - (slope * periods + intercept)
-        return out, {
-            "slope": slope,
-            "intercept": intercept,
-            "r_squared": r_squared,
-            "r_squared_flicker": r_squared_flicker,
-            "n": n,
-        }
-
     def acq_dots(
         self,
         acqs: list[dict],
@@ -1363,52 +1190,58 @@ class LowRankWaveformConfounds:
         svd_method: str | None,
         stat: str,
     ) -> np.ndarray:
-        """One acquisition-level value per acquisition for ``metric``."""
+        """One acquisition-level value per acquisition for ``metric``.
+
+        The joint SVD produces one scalar per acquisition, so its value is
+        read straight from the packed endpoints and matches the headline
+        table. Only the per-beat SVD has a beat-aggregation choice. Older
+        payloads without joint scalars fall back to aggregating the packed
+        beatwise arrays.
+        """
+        if metric not in ENDPOINT_BY_METRIC:
+            raise ValueError(f"Unknown metric: {metric}")
+        beat_stat = stat if stat != "n/a" else "median"
         out = []
         for a in acqs:
             beatwise = a.get("beatwise") or {}
             per_beat = a.get("per_beat_svd") or {}
             acq = a.get("acq") or {}
-            if metric == "R0":
-                if svd_method == "per_beat":
-                    arr = self._first_finite_array(per_beat, "R0")
-                else:
-                    arr = self._first_finite_array(beatwise, "R0_b")
-                out.append(aggregate_beatwise(arr, stat if stat != "n/a" else "median"))
-            elif metric == "MPR":
-                if svd_method == "per_beat":
-                    arr = self._first_finite_array(per_beat, "MPR")
-                else:
-                    arr = self._first_finite_array(beatwise, "MPR_b")
-                out.append(aggregate_beatwise(arr, stat if stat != "n/a" else "median"))
-            elif metric in ("A1", "A2", "R1", "R2"):
-                if svd_method == "per_beat":
-                    arr = self._first_finite_array(per_beat, metric)
-                else:
-                    arr = self._first_finite_array(beatwise, f"{metric}_b")
-                out.append(aggregate_beatwise(arr, stat if stat != "n/a" else "median"))
+            if svd_method != "per_beat":
+                value = float(acq.get(metric, np.nan))
+                if not np.isfinite(value):
+                    value = self._legacy_joint_value(beatwise, metric, beat_stat)
+                out.append(value)
             elif metric in ("rho1", "rho2"):
                 m = metric[-1]
-                if svd_method == "per_beat":
-                    R_b = self._first_finite_array(per_beat, f"R{m}")
-                    tpr_b = self._first_finite_array(per_beat, "R0")
-                else:
-                    R_b = self._first_finite_array(beatwise, f"R{m}_b")
-                    tpr_b = self._first_finite_array(beatwise, "R0_b")
                 out.append(
-                    aggregate_rho(R_b, tpr_b, stat if stat != "n/a" else "median")
-                )
-            elif metric in ("Reff", "PR"):
-                if svd_method == "per_beat":
-                    arr = self._first_finite_array(per_beat, metric)
-                    out.append(
-                        aggregate_beatwise(arr, stat if stat != "n/a" else "median")
+                    aggregate_rho(
+                        self._first_finite_array(per_beat, f"R{m}"),
+                        self._first_finite_array(per_beat, "R0"),
+                        beat_stat,
                     )
-                else:
-                    out.append(float(acq.get(metric, np.nan)))
+                )
             else:
-                raise ValueError(f"Unknown metric: {metric}")
+                out.append(
+                    aggregate_beatwise(
+                        self._first_finite_array(per_beat, metric), beat_stat
+                    )
+                )
         return np.asarray(out, dtype=float)
+
+    def _legacy_joint_value(
+        self, beatwise: dict, metric: str, beat_stat: str
+    ) -> float:
+        """Joint value from packed beatwise arrays, for older payloads."""
+        if metric in ("rho1", "rho2"):
+            m = metric[-1]
+            return aggregate_rho(
+                self._first_finite_array(beatwise, f"R{m}_b"),
+                self._first_finite_array(beatwise, "R0_b"),
+                beat_stat,
+            )
+        return aggregate_beatwise(
+            self._first_finite_array(beatwise, f"{metric}_b"), beat_stat
+        )
 
     def epoch_dots(
         self,
@@ -1423,47 +1256,23 @@ class LowRankWaveformConfounds:
             for epoch in EPOCH_ORDER
         }
 
-    @staticmethod
-    def epoch_beat_periods(
-        acqs_by_epoch: dict[str, list[dict]],
-    ) -> dict[str, np.ndarray]:
-        """Mean beat period per acquisition, the covariate for residualization."""
-        return {
-            epoch: np.array(
-                [a["beat_period_mean"] for a in acqs_by_epoch[epoch]], dtype=float
-            )
-            for epoch in EPOCH_ORDER
-        }
-
     def build_grid(
         self,
         acqs_by_epoch: dict[str, list[dict]],
     ) -> pd.DataFrame:
-        """Sweep metric × SVD × aggregation × period-control into one table."""
-        periods = self.epoch_beat_periods(acqs_by_epoch)
+        """Sweep metric × SVD × beat aggregation into one table."""
         grid_rows: list[dict] = []
 
-        def run_combo(
-            metric: str, svd_method: str | None, stat: str, regressed: bool
-        ) -> dict:
-            """Epoch-group tests for one grid cell, residualizing when asked."""
-            values = self.epoch_dots(acqs_by_epoch, metric, svd_method, stat)
-            if regressed:
-                values, _fit = self.residualize_against_beat_period(values, periods)
-            return LowRankWaveformStatistics.epoch_group_tests(values)
-
-        def add_row(
-            metric: str, svd_method: str | None, stat: str, regressed: bool
-        ) -> None:
+        def add_row(metric: str, svd_method: str | None, stat: str) -> None:
             """Append one flattened grid row."""
-            tests = run_combo(metric, svd_method, stat, regressed)
+            values = self.epoch_dots(acqs_by_epoch, metric, svd_method, stat)
+            tests = LowRankWaveformStatistics.epoch_group_tests(values)
             grid_rows.append(
                 {
                     "endpoint": ENDPOINT_BY_METRIC[metric],
                     "metric": metric,
                     "svd_method": svd_method if svd_method is not None else "n/a",
                     "beat_aggregation": stat,
-                    "beat_period_control": "residualized" if regressed else "native",
                     "kw_p": tests["kw_p"],
                     "pooled_p": tests["pooled_p"],
                     "cliffs_delta": tests["pooled_delta"],
@@ -1473,18 +1282,13 @@ class LowRankWaveformConfounds:
                 }
             )
 
-        for metric in CONFUND_EIGHT:
-            for svd_method in SVD_METHODS:
-                for stat in ("median", "mean"):
-                    for regressed in (False, True):
-                        add_row(metric, svd_method, stat, regressed)
-
-        for metric in CONFUND_SIX:
-            for regressed in (False, True):
-                add_row(metric, "joint", "n/a", regressed)
+        # The joint SVD yields one acquisition scalar, so it has no beat
+        # aggregation axis; emitting it once as "n/a" keeps every grid row a
+        # combination that actually exists.
+        for metric in (*CONFUND_EIGHT, *CONFUND_SIX):
+            add_row(metric, "joint", "n/a")
             for stat in ("median", "mean"):
-                for regressed in (False, True):
-                    add_row(metric, "per_beat", stat, regressed)
+                add_row(metric, "per_beat", stat)
 
         counts = pd.Series([r["metric"] for r in grid_rows]).value_counts()
         for row in grid_rows:
@@ -1495,7 +1299,6 @@ class LowRankWaveformConfounds:
             "metric",
             "svd_method",
             "beat_aggregation",
-            "beat_period_control",
             "n_combinations",
             "kw_p",
             "pooled_p",
@@ -1522,27 +1325,20 @@ class LowRankWaveformConfounds:
 
     @classmethod
     def retain_flags_by_metric(cls, confounds_df: pd.DataFrame) -> dict[str, dict]:
-        """Per-metric combination counts and aggregation / period / overall retain."""
+        """Per-metric combination counts, aggregation retain, and overall retain."""
         out: dict[str, dict] = {}
         if confounds_df is None or confounds_df.empty:
             return out
         for metric, group in confounds_df.groupby("metric", sort=False):
             rows = group.to_dict("records")
             agg_rows = [
-                r
-                for r in rows
-                if r["beat_period_control"] == "native"
-                and r["beat_aggregation"] in ("median", "mean")
-            ]
-            period_rows = [
-                r for r in rows if r["beat_aggregation"] in ("median", "n/a")
+                r for r in rows if r["beat_aggregation"] in ("median", "mean")
             ]
             ps = [float(r["pooled_p"]) for r in rows]
             out[str(metric)] = {
                 "n_combinations": len(rows),
                 "n_significant": int(sum(1 for p in ps if np.isfinite(p) and p < 0.05)),
                 "aggregation_retained": cls._combination_retained(agg_rows),
-                "beat_period_retained": cls._combination_retained(period_rows),
                 "retained": cls._combination_retained(rows),
             }
         return out
@@ -2611,7 +2407,6 @@ def validate_stats_confounds(
     coded = {
         "svd_method": confounds_df["svd_method"],
         "beat_aggregation": confounds_df["beat_aggregation"],
-        "beat_period_control": confounds_df["beat_period_control"],
         "endpoint": pd.concat(
             [stats_df["endpoint"], confounds_df["endpoint"]], ignore_index=True
         ),

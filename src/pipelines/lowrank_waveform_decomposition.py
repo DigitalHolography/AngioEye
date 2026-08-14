@@ -628,6 +628,28 @@ def _misc_group(source: h5py.Group, name: str) -> h5py.Group | None:
     return group if isinstance(group, h5py.Group) else None
 
 
+# Spectrum storage used before EyeFlow moved these products under ``misc``.
+# Only the spectrum keeps a legacy reader: the cohort Fig. 4 needs it to
+# populate its mode columns, and without it an older archive silently
+# reprocesses to all-NaN spectra.
+_LEGACY_SPECTRUM_GROUPS = {
+    "joint": ("fig4_energy_spectrum", {"mean": "lambda"}),
+    "per_beat": (
+        "fig4_energy_spectrum_pb",
+        {"mean": "lambda_mean", "lo": "lambda_lo", "hi": "lambda_hi"},
+    ),
+}
+
+
+def _legacy_figure_group(source: h5py.Group, name: str) -> h5py.Group | None:
+    """Return one pre-``misc`` ``figures/<name>`` group."""
+    figures = source.get("figures")
+    if not isinstance(figures, h5py.Group):
+        return None
+    group = figures.get(name)
+    return group if isinstance(group, h5py.Group) else None
+
+
 def _fig2_payload_from_source(source: h5py.Group) -> dict[str, np.ndarray] | None:
     """Official Fig. 2 payload from ``misc/acquisition_level_velocity``."""
     group = _misc_group(source, EYEFLOW_MISC_ACQUISITION_VELOCITY)
@@ -715,7 +737,17 @@ def _spectrum_payload_from_source(
     mode = _dataset_vector(group, "svd_mode_index")
     mean = _dataset_vector(group, y_name)
     if mode is None or mean is None:
-        return None
+        # Archives packed before the ``misc`` layout keep the spectrum under
+        # ``figures/fig4_energy_spectrum*`` with a ``mode`` index. Reading
+        # both keeps cohort Fig. 4 available when reprocessing older data.
+        legacy_group, legacy_names = _LEGACY_SPECTRUM_GROUPS[method]
+        group = _legacy_figure_group(source, legacy_group)
+        mode = _dataset_vector(group, "mode")
+        mean = _dataset_vector(group, legacy_names["mean"])
+        if mode is None or mean is None:
+            return None
+        lo_name = legacy_names.get("lo", "")
+        hi_name = legacy_names.get("hi", "")
     n = min(mode.size, mean.size)
     if n == 0:
         return None
