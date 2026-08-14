@@ -99,7 +99,7 @@ def run_pipeline_file(
 
     try:
         compute_started_at = time.monotonic()
-        pipeline_runs = _run_pipeline_descriptors(
+        pipeline_runs, signal_datasets = _run_pipeline_descriptors(
             h5_path=h5_path,
             pipelines=pipelines,
             log=log,
@@ -330,7 +330,7 @@ def _run_pipeline_descriptors(
     log: LogCallback | None,
     advance_progress: ProgressCallback | None,
     record_timing: TimingCallback | None,
-) -> list[tuple[str, ProcessResult, object]]:
+) -> tuple[list[tuple[str, ProcessResult, object]], dict[str, object]]:
     pipeline_results: list[tuple[str, ProcessResult, object]] = []
     h5_open_started_at = time.monotonic()
     h5file = h5py.File(h5_path, "r")

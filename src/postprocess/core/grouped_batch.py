@@ -45,27 +45,20 @@ def extract_group_name(
         return "all"
 
     parts = relative.parts
-
     if parts[0].lower() == "h5":
-        if len(parts) == 1:
-            return "all"
-        return parts[1]
-
-    return parts[0]
+        parts = parts[1:]
+    if not parts:
+        return "all"
+    return "/".join(parts[:group_depth])
 
 
 def _extract_member_group_name(member: ZipH5Member, *, group_depth: int = 1) -> str:
-    parts = member.relative_path.parts
-
-    if len(parts) == 1:
+    parts = member.relative_path.parts[:-1]
+    if parts and parts[0].lower() == "h5":
+        parts = parts[1:]
+    if not parts:
         return "all"
-
-    if parts[0].lower() == "h5":
-        if len(parts) == 2:
-            return "all"
-        return parts[1]
-
-    return parts[0]
+    return "/".join(parts[:group_depth])
 
 
 def _grouped_record_for_member(
@@ -169,7 +162,12 @@ def find_control_group_name(groups: Iterable[object]) -> str | None:
         if group is None:
             continue
         group_lower = str(group).lower()
-        if "control" in group_lower or group_lower in {"ctrl", "ctl", "controls", "BL"}:
+        if "control" in group_lower or group_lower in {
+            "ctrl",
+            "ctl",
+            "controls",
+            "bl",
+        }:
             return str(group)
     return None
 
