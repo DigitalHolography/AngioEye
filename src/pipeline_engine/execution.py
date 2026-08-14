@@ -9,9 +9,10 @@ import h5py
 
 from input_output import (
     ANGIOEYE_PROCESSING_ROOT,
+    ae_result_filename,
     create_h5_file,
-    h5_output_parent,
     read_signal_datasets,
+    pipeline_result_parent,
     write_metrics_trees_to_h5,
 )
 from pipelines import (
@@ -98,13 +99,16 @@ def run_pipeline_file(
 
     try:
         compute_started_at = time.monotonic()
-        pipeline_results, signal_datasets = _run_pipeline_descriptors(
+        pipeline_runs, signal_datasets = _run_pipeline_descriptors(
             h5_path=h5_path,
             pipelines=pipelines,
             log=log,
             advance_progress=advance_progress,
             record_timing=record_timing,
         )
+        pipeline_results = [
+            (name, result) for name, result, _pipeline in pipeline_runs
+        ]
         _record_timing(
             record_timing,
             "per-file pipeline compute",
@@ -126,8 +130,36 @@ def run_pipeline_file(
             "per-file output write",
             time.monotonic() - write_started_at,
         )
-        for _, result in pipeline_results:
+        companions_started_at = time.monotonic()
+        for name, result, pipeline in pipeline_runs:
             result.output_h5_path = str(output_path)
+            write_companions = getattr(pipeline, "write_companions", None)
+            if not callable(write_companions):
+                continue
+            try:
+                written = write_companions(
+                    result,
+                    source_h5_path=h5_path,
+                    output_h5_path=output_path,
+                )
+            except Exception as exc:  # noqa: BLE001
+                _log(
+                    log,
+                    f"[WARN] {h5_path.name}: companion write failed for "
+                    f"{name}: {type(exc).__name__}: {exc}",
+                )
+                continue
+            if written:
+                _log(
+                    log,
+                    f"[OK] {h5_path.name}: {name} wrote "
+                    f"{len(written)} companion file(s)",
+                )
+        _record_timing(
+            record_timing,
+            "per-file companion writes",
+            time.monotonic() - companions_started_at,
+        )
         _log(log, f"[OK] {h5_path.name}: combined results -> {output_path}")
         return output_path
     finally:
@@ -191,14 +223,6 @@ def run_postprocesses(
             f"per-postprocess context build [{descriptor_name}]",
             time.monotonic() - context_started_at,
         )
-        log(f"[POST] Running {descriptor.name}...")
-        if skipped_files:
-            skipped_message = (
-                f"{descriptor.name} skipped {len(skipped_files)} file(s) "
-                "without required pipeline data."
-            )
-            failures.append(skipped_message)
-            log(f"[POST WARN] {skipped_message}")
         has_pipeline_requirements = bool(
             getattr(descriptor, "required_pipeline_options", ())
             or getattr(descriptor, "required_pipelines", ())
@@ -207,6 +231,25 @@ def run_postprocesses(
             log(f"[POST SKIP] {descriptor.name}: no compatible input files.")
             advance_progress(1.0)
             continue
+        minimum_input_files = max(
+            1,
+            int(getattr(descriptor, "minimum_input_files", 1)),
+        )
+        if processed_files and len(processed_files) < minimum_input_files:
+            log(
+                f"[POST SKIP] {descriptor.name}: requires at least "
+                f"{minimum_input_files} compatible acquisition(s); received "
+                f"{len(processed_files)}."
+            )
+            advance_progress(1.0)
+            continue
+        log(f"[POST] Running {descriptor.name}...")
+        if skipped_files:
+            skipped_message = (
+                f"{descriptor.name} skipped {len(skipped_files)} file(s) "
+                "without required pipeline data."
+            )
+            log(f"[POST SKIP] {skipped_message}")
         try:
             run_started_at = time.monotonic()
             result = postprocess.run(context)
@@ -255,7 +298,7 @@ def _unique_pipeline_output_path(
     output_filename: str | None,
     reserved_paths: set[Path] | None = None,
 ) -> Path:
-    target_dir = h5_output_parent(output_root, output_relative_parent)
+    target_dir = pipeline_result_parent(output_root, output_relative_parent)
     target_dir.mkdir(parents=True, exist_ok=True)
     reserved = reserved_paths or set()
 
@@ -263,7 +306,7 @@ def _unique_pipeline_output_path(
         base_output_path = target_dir / output_filename
         output_path = base_output_path
     else:
-        base_output_path = target_dir / f"{h5_path.stem}_pipelines_result.h5"
+        base_output_path = target_dir / ae_result_filename(h5_path)
         output_path = base_output_path
 
     suffix = 1
@@ -274,7 +317,8 @@ def _unique_pipeline_output_path(
                 / f"{base_output_path.stem}_{suffix}{base_output_path.suffix}"
             )
         else:
-            output_path = target_dir / f"{h5_path.stem}_{suffix}_pipelines_result.h5"
+            stem = Path(ae_result_filename(h5_path)).stem
+            output_path = target_dir / f"{stem}_{suffix}.h5"
         suffix += 1
     return output_path
 
@@ -286,8 +330,8 @@ def _run_pipeline_descriptors(
     log: LogCallback | None,
     advance_progress: ProgressCallback | None,
     record_timing: TimingCallback | None,
-) -> tuple[list[tuple[str, ProcessResult]], dict[str, object]]:
-    pipeline_results: list[tuple[str, ProcessResult]] = []
+) -> tuple[list[tuple[str, ProcessResult, object]], dict[str, object]]:
+    pipeline_results: list[tuple[str, ProcessResult, object]] = []
     h5_open_started_at = time.monotonic()
     h5file = h5py.File(h5_path, "r")
     _record_timing(
@@ -326,7 +370,7 @@ def _run_pipeline_descriptors(
                 f"per-pipeline compute [{pipeline_name}]",
                 time.monotonic() - pipeline_started_at,
             )
-            pipeline_results.append((pipeline.name, result))
+            pipeline_results.append((pipeline.name, result, pipeline))
             result_pack_started_at = time.monotonic()
             _log(log, f"[OK] {h5_path.name} -> {pipeline.name}")
             _advance(advance_progress)

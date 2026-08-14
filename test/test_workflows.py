@@ -14,13 +14,19 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from input_output import list_h5_members  # noqa: E402
+from pipeline_engine import run_postprocesses  # noqa: E402
 from workflows import (  # noqa: E402
     HoloInputContext,
     RunWorkflowResult,
     WorkflowCallbacks,
+    WorkflowInputSelection,
     WorkflowInputError,
+    WorkflowOutputOptions,
+    WorkflowRequestState,
     WorkflowRunRequest,
+    WorkflowWorkSelection,
     ZipBatchSettings,
+    build_workflow_request,
     dispatch_workflow,
     prepare_run_input,
     prepare_run_inputs,
@@ -61,6 +67,78 @@ def _write_pipeline_group(path: Path, pipeline_name: str, root: str) -> None:
 
 
 class PostprocessRequirementTests(unittest.TestCase):
+    @staticmethod
+    def _input_restricted_postprocess():
+        return type(
+            "Postprocess",
+            (),
+            {
+                "name": "Low-rank cohort",
+                "accepted_input_modes": ("folder", "zip"),
+                "required_pipelines": (),
+            },
+        )()
+
+    @staticmethod
+    def _request_state(input_selection, postprocess):
+        return WorkflowRequestState(
+            input_selection=input_selection,
+            work_selection=WorkflowWorkSelection(
+                pipeline_names=(),
+                pipelines=(),
+                postprocesses=(postprocess,),
+            ),
+            output_options=WorkflowOutputOptions(
+                base_output_value="outputs",
+                zip_outputs=False,
+                zip_name="outputs.zip",
+                persist_source=False,
+            ),
+        )
+
+    def test_folder_zip_only_postprocess_rejects_holo_request(self):
+        postprocess = self._input_restricted_postprocess()
+        state = self._request_state(
+            WorkflowInputSelection(
+                convention="holo",
+                holo_paths=(Path("acquisition.holo"),),
+            ),
+            postprocess,
+        )
+
+        with self.assertRaisesRegex(
+            WorkflowInputError,
+            "accepts only folder or zip input; received holo",
+        ):
+            build_workflow_request(
+                state,
+                zip_output_dir=lambda folder, *_args: folder,
+                output_filename_for_run=lambda *_args: None,
+            )
+
+    def test_folder_zip_only_postprocess_rejects_individual_h5_request(self):
+        postprocess = self._input_restricted_postprocess()
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            input_path = Path(tmp_dir) / "acquisition.h5"
+            input_path.write_text("h5", encoding="utf-8")
+            state = self._request_state(
+                WorkflowInputSelection(
+                    convention="legacy",
+                    data_value=str(input_path),
+                ),
+                postprocess,
+            )
+
+            with self.assertRaisesRegex(
+                WorkflowInputError,
+                "accepts only folder or zip input; received file",
+            ):
+                build_workflow_request(
+                    state,
+                    zip_output_dir=lambda folder, *_args: folder,
+                    output_filename_for_run=lambda *_args: None,
+                )
+
     def test_required_persist_option_is_reported(self):
         postprocess = type(
             "Postprocess",
@@ -261,6 +339,161 @@ class PostprocessRequirementTests(unittest.TestCase):
             errors,
         )
 
+    def test_fully_incompatible_postprocess_is_skipped_without_failure(self):
+        calls: list[str] = []
+        logs: list[str] = []
+        failures: list[str] = []
+        progress: list[float] = []
+
+        class _Postprocess:
+            def run(self, _context):
+                calls.append("run")
+
+        class _Descriptor:
+            name = "Low-rank cohort"
+            required_pipelines = ("lowrank_waveform_decomposition",)
+            required_pipeline_options = ()
+
+            def instantiate(self):
+                return _Postprocess()
+
+        run_postprocesses(
+            postprocesses=(_Descriptor(),),
+            output_dir=Path("outputs"),
+            processed_outputs=(Path("waveform_result.h5"),),
+            input_h5_paths=(Path("input.h5"),),
+            input_path=Path("input.h5"),
+            selected_pipeline_names=("waveform_shape_metrics",),
+            failures=failures,
+            zip_outputs=False,
+            log=logs.append,
+            advance_progress=progress.append,
+            resolve_postprocess_files=lambda *_args: (
+                (),
+                (Path("input.h5"),),
+            ),
+        )
+
+        self.assertEqual([], calls)
+        self.assertEqual([], failures)
+        self.assertEqual([1.0], progress)
+        self.assertIn(
+            "[POST SKIP] Low-rank cohort: no compatible input files.",
+            logs,
+        )
+
+    def test_partly_incompatible_postprocess_skips_without_failure(self):
+        calls: list[tuple[Path, ...]] = []
+        logs: list[str] = []
+        failures: list[str] = []
+
+        class _Postprocess:
+            def run(self, context):
+                calls.append(context.processed_files)
+                return type("Result", (), {"summary": "", "metadata": {}})()
+
+        class _Descriptor:
+            name = "Low-rank cohort"
+            required_pipelines = ("lowrank_waveform_decomposition",)
+            required_pipeline_options = ()
+
+            def instantiate(self):
+                return _Postprocess()
+
+        compatible_path = Path("compatible.h5")
+        skipped_path = Path("incompatible.h5")
+        run_postprocesses(
+            postprocesses=(_Descriptor(),),
+            output_dir=Path("outputs"),
+            processed_outputs=(compatible_path, Path("other_result.h5")),
+            input_h5_paths=(Path("first_input.h5"), skipped_path),
+            input_path=Path("inputs"),
+            selected_pipeline_names=("waveform_shape_metrics",),
+            failures=failures,
+            zip_outputs=False,
+            log=logs.append,
+            advance_progress=lambda _units: None,
+            resolve_postprocess_files=lambda *_args: (
+                (compatible_path,),
+                (skipped_path,),
+            ),
+        )
+
+        self.assertEqual([(compatible_path,)], calls)
+        self.assertEqual([], failures)
+        self.assertIn(
+            "[POST SKIP] Low-rank cohort skipped 1 file(s) without required "
+            "pipeline data.",
+            logs,
+        )
+
+    def test_postprocess_requiring_two_acquisitions_skips_single_input(self):
+        calls: list[str] = []
+        logs: list[str] = []
+        progress: list[float] = []
+
+        class _Postprocess:
+            def run(self, _context):
+                calls.append("run")
+
+        class _Descriptor:
+            name = "Low-rank cohort"
+            required_pipelines = ()
+            required_pipeline_options = ()
+            minimum_input_files = 2
+
+            def instantiate(self):
+                return _Postprocess()
+
+        run_postprocesses(
+            postprocesses=(_Descriptor(),),
+            output_dir=Path("outputs"),
+            processed_outputs=(Path("one_result.h5"),),
+            input_h5_paths=(Path("one_input.h5"),),
+            input_path=Path("one.holo"),
+            selected_pipeline_names=(),
+            failures=[],
+            zip_outputs=False,
+            log=logs.append,
+            advance_progress=progress.append,
+        )
+
+        self.assertEqual([], calls)
+        self.assertEqual([1.0], progress)
+        self.assertIn("requires at least 2 compatible acquisition(s)", logs[0])
+
+    def test_input_path_postprocess_can_run_without_processed_files(self):
+        calls: list[Path] = []
+
+        class _Postprocess:
+            def run(self, context):
+                calls.append(context.input_path)
+                return type("Result", (), {"summary": "", "metadata": {}})()
+
+        class _Descriptor:
+            name = "Input-folder cohort"
+            required_pipelines = ()
+            required_pipeline_options = ()
+            minimum_input_files = 2
+
+            def instantiate(self):
+                return _Postprocess()
+
+        input_path = Path("cohort.zip")
+        run_postprocesses(
+            postprocesses=(_Descriptor(),),
+            output_dir=Path("outputs"),
+            processed_outputs=(),
+            input_h5_paths=(),
+            input_path=input_path,
+            selected_pipeline_names=(),
+            failures=[],
+            zip_outputs=False,
+            log=lambda _message: None,
+            advance_progress=lambda _units: None,
+        )
+
+        self.assertEqual([input_path], calls)
 
 class FilesystemWorkflowTests(unittest.TestCase):
     def _run_workflow(
@@ -513,6 +746,57 @@ class ZipWorkflowOutputTests(unittest.TestCase):
 
 
 class ZipPipelineParallelismTests(unittest.TestCase):
+    def test_filesystem_postprocess_only_run_does_not_create_pipeline_outputs(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            input_paths = [root / "first.h5", root / "second.h5"]
+            for path in input_paths:
+                path.write_text("h5", encoding="utf-8")
+            calls: list[Path] = []
+
+            result = run_filesystem_pipeline_run(
+                inputs=input_paths,
+                data_root=root,
+                pipelines=(),
+                output_dir=root / "outputs",
+                output_filename=None,
+                settings=ZipBatchSettings(batch_size=2, process_workers=1),
+                run_pipeline_file=lambda path, *_args, **_kwargs: calls.append(path),
+                relative_parent=lambda *_args: Path("."),
+                log=lambda _message: None,
+                advance_progress=lambda _units: None,
+            )
+
+        self.assertEqual([], calls)
+        self.assertEqual([], result.processed_outputs)
+        self.assertEqual(input_paths, result.processed_input_paths)
+
+    def test_zip_postprocess_only_run_does_not_create_pipeline_outputs(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            zip_path = root / "cohort.zip"
+            with zipfile.ZipFile(zip_path, "w") as archive:
+                archive.writestr("1_ctrl/first.h5", "h5")
+                archive.writestr("2_path/second.h5", "h5")
+            members = list_h5_members(zip_path)
+            calls: list[Path] = []
+
+            result = run_zip_pipeline_run(
+                zip_path=zip_path,
+                members=members,
+                member_count=len(members),
+                pipelines=(),
+                output_dir=root / "outputs",
+                settings=ZipBatchSettings(batch_size=2, process_workers=1),
+                run_pipeline_file=lambda path, *_args, **_kwargs: calls.append(path),
+                log=lambda _message: None,
+                advance_progress=lambda _units: None,
+            )
+
+        self.assertEqual([], calls)
+        self.assertEqual([], result.processed_outputs)
+        self.assertEqual([], result.processed_input_paths)
+
     def test_run_filesystem_pipeline_run_uses_process_pool_for_picklable_runner(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
