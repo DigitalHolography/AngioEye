@@ -1,8 +1,10 @@
 """Cohort low-rank Figs 4--8 and ``lowrank_cohort.h5`` from EyeFlow H5s.
 
-Joint-SVD Figs 4--8 keep the article acquisition scalars; a parallel
-``*_pb.png`` set uses ``median_b`` of packed per-beat SVD endpoints (ρ is
-``median_b(R)/median_b(R0)``). ``T``, ``μ``, R0, and MPR stay joint.
+Figure names end in ``<basis>_<replication>``: ``joint_acquisition`` figures
+keep the article acquisition scalars; ``pb_acquisition`` figures use
+``median_b`` of packed per-beat SVD endpoints (ρ is
+``median_b(R)/median_b(R0)``); ``pb_beats`` bands pool beat-level variance.
+``T``, ``μ``, R0, and MPR stay joint, so Fig. 6 is basis-free.
 Fig. 4 joint and Fig. 5 ratio plots use packed joint singular values. Stats /
 confounds live in the same ``lowrank_cohort.h5``.
 """
@@ -1640,14 +1642,23 @@ class LowRankWaveformCohortFigures:
         beats_by_vessel: dict[str, pd.DataFrame] | None = None,
         points_by_vessel_per_beat: dict[str, pd.DataFrame] | None = None,
     ) -> list[Path]:
-        """Write Figs. 4--8 (joint and ``_pb``) for the artery cohort."""
+        """Write Figs. 4--8 for the artery cohort.
+
+        Figure names carry a ``<basis>_<replication>`` suffix: ``joint`` or
+        ``pb`` for the SVD basis, then ``acquisition`` or ``beats`` for the
+        axis the gray band (or dot set) spans. Fig. 6 shows non-SVD
+        endpoints, is identical under either basis, and keeps a plain name.
+        """
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         protocol = infer_cohort_protocol(group_order)
         grids = (
             ("fig6_nonsvd_endpoints.png", cls.FIG5_PANELS),
-            ("fig7_lowrank_endpoints.png", cls.FIG6_PANELS),
-            ("fig8_residual_spectrum_endpoints.png", cls.FIG7_PANELS),
+            ("fig7_lowrank_endpoints_joint_acquisition.png", cls.FIG6_PANELS),
+            (
+                "fig8_residual_spectrum_endpoints_joint_acquisition.png",
+                cls.FIG7_PANELS,
+            ),
         )
         written = [
             cls._plot_endpoint_grid(
@@ -1661,9 +1672,11 @@ class LowRankWaveformCohortFigures:
         pb_points = points_by_vessel_per_beat or {}
         if _has_per_beat_endpoint_dots(pb_points):
             pb_grids = (
-                ("fig6_nonsvd_endpoints_pb.png", cls.FIG5_PANELS),
-                ("fig7_lowrank_endpoints_pb.png", cls.FIG6_PANELS),
-                ("fig8_residual_spectrum_endpoints_pb.png", cls.FIG7_PANELS),
+                ("fig7_lowrank_endpoints_pb_acquisition.png", cls.FIG6_PANELS),
+                (
+                    "fig8_residual_spectrum_endpoints_pb_acquisition.png",
+                    cls.FIG7_PANELS,
+                ),
             )
             written.extend(
                 cls._plot_endpoint_grid(
@@ -1678,7 +1691,9 @@ class LowRankWaveformCohortFigures:
             written.append(
                 cls._save_spectrum(
                     out_dir
-                    / prefixed_filename("fig4_variance_fraction.png", patient_id),
+                    / prefixed_filename(
+                        "fig4_variance_fraction_joint_acquisition.png", patient_id
+                    ),
                     points_by_vessel,
                     cumulative=False,
                     group_order=group_order,
@@ -1688,7 +1703,9 @@ class LowRankWaveformCohortFigures:
                 written.append(
                     cls._save_spectrum_ratio(
                         out_dir
-                        / prefixed_filename("fig5_spectrum_ratio.png", patient_id),
+                        / prefixed_filename(
+                            "fig5_spectrum_ratio_joint_acquisition.png", patient_id
+                        ),
                         points_by_vessel,
                         cumulative=False,
                         group_order=group_order,
@@ -1704,7 +1721,9 @@ class LowRankWaveformCohortFigures:
             written.append(
                 cls._save_spectrum(
                     out_dir
-                    / prefixed_filename("fig4_variance_fraction_pb.png", patient_id),
+                    / prefixed_filename(
+                        "fig4_variance_fraction_pb_acquisition.png", patient_id
+                    ),
                     pb_spectrum_source,
                     cumulative=False,
                     group_order=group_order,
@@ -1749,6 +1768,7 @@ class LowRankWaveformCohortFigures:
                         idx + 0.5, color="black", linestyle=":", linewidth=1.5, zorder=1
                     )
 
+        whisker_bounds: list[float] = []
         for x0, group in enumerate(protocol.groups):
             vals = (
                 df.loc[_group_mask(df, group), metric].dropna().to_numpy(dtype=float)
@@ -1760,6 +1780,7 @@ class LowRankWaveformCohortFigures:
             jitter = (_RNG.random(vals.size) - 0.5) * 0.16
             med = float(np.nanmedian(vals))
             sd = finite_std(vals)
+            whisker_bounds.extend((med - sd, med + sd))
             ax.errorbar(
                 [x0],
                 [med],
@@ -1797,8 +1818,13 @@ class LowRankWaveformCohortFigures:
             all_vals = df[metric].to_numpy(dtype=float)
             if np.isfinite(all_vals).any():
                 p, delta = _protocol_contrast_test(df, metric, protocol)
-                y_min = float(np.nanmin(all_vals))
-                y_max = float(np.nanmax(all_vals))
+                bounds = [
+                    float(np.nanmin(all_vals)),
+                    float(np.nanmax(all_vals)),
+                    *(b for b in whisker_bounds if np.isfinite(b)),
+                ]
+                y_min = min(bounds)
+                y_max = max(bounds)
                 pad = 0.08 * (y_max - y_min if y_max > y_min else 1.0)
                 ax.text(
                     0.03,

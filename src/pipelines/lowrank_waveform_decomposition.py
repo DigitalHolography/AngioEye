@@ -1337,8 +1337,8 @@ class LowRankWaveformAcquisitionFigures:
     ) -> list[Path]:
         """Write Figs. 2--4 into ``out_dir`` from packed low-rank metrics.
 
-        Fig. 2 has no SVD. Fig. 3 is written for joint SVD and again with a
-        ``_pb`` suffix for per-beat SVD. Fig. 4 is the joint energy spectrum.
+        Fig. 2 has no SVD. Figs. 3--4 are written for joint SVD and again
+        with a ``_pb`` suffix for per-beat SVD.
         ``veins_flag`` adds a venous row to every figure.
         """
         h5_path = Path(h5_path)
@@ -1383,6 +1383,16 @@ class LowRankWaveformAcquisitionFigures:
         )
         if fig4 is not None:
             written.append(fig4)
+        fig4_pb = cls.plot_energy_spectrum(
+            vessel_bundle,
+            out_dir / f"{stem}_fig4_energy_spectrum_pb.png",
+            vessels=vessels,
+            svd_method="per_beat",
+            h5_path=h5_path,
+            signal=signal,
+        )
+        if fig4_pb is not None:
+            written.append(fig4_pb)
         return written
 
     @staticmethod
