@@ -1684,17 +1684,6 @@ class LowRankWaveformCohortFigures:
                     group_order=group_order,
                 )
             )
-            written.append(
-                cls._save_spectrum(
-                    out_dir
-                    / prefixed_filename(
-                        "fig4_variance_fraction_cumulative.png", patient_id
-                    ),
-                    points_by_vessel,
-                    cumulative=True,
-                    group_order=group_order,
-                )
-            )
             if protocol.contrast_available:
                 written.append(
                     cls._save_spectrum_ratio(
@@ -1702,17 +1691,6 @@ class LowRankWaveformCohortFigures:
                         / prefixed_filename("fig5_spectrum_ratio.png", patient_id),
                         points_by_vessel,
                         cumulative=False,
-                        group_order=group_order,
-                    )
-                )
-                written.append(
-                    cls._save_spectrum_ratio(
-                        out_dir
-                        / prefixed_filename(
-                            "fig5_spectrum_ratio_cumulative.png", patient_id
-                        ),
-                        points_by_vessel,
-                        cumulative=True,
                         group_order=group_order,
                     )
                 )
@@ -1729,17 +1707,6 @@ class LowRankWaveformCohortFigures:
                     / prefixed_filename("fig4_variance_fraction_pb.png", patient_id),
                     pb_spectrum_source,
                     cumulative=False,
-                    group_order=group_order,
-                )
-            )
-            written.append(
-                cls._save_spectrum(
-                    out_dir
-                    / prefixed_filename(
-                        "fig4_variance_fraction_cumulative_pb.png", patient_id
-                    ),
-                    pb_spectrum_source,
-                    cumulative=True,
                     group_order=group_order,
                 )
             )

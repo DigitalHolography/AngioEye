@@ -7,7 +7,8 @@ ingests that group into the AngioEye result H5 and writes Figs 2--4.
 Joint SVD and per-beat SVD are always ingested together; ``veins_flag``
 selects whether venous products are included for both. Fig. 2 has no SVD.
 Fig. 3 is written for joint SVD and again with a ``_pb`` suffix for
-per-beat SVD; Fig. 4 is the joint energy spectrum. Cohort Figs 4--8 and
+per-beat SVD; Fig. 4 is the joint per-mode energy spectrum (``artery/raw``
+only; no cumulative panel). Cohort Figs 4--8 and
 ``lowrank_cohort.h5`` live in ``postprocess.lowrank_waveform_cohort``.
 """
 
@@ -1606,33 +1607,20 @@ class LowRankWaveformAcquisitionFigures:
         }
 
     @staticmethod
-    def _row_ylim_first_two(summary: dict) -> tuple[float, float]:
-        """Shared y-limits for Fig. 3 panels ``v`` and ``μ``, including 0."""
-        bounds: list[float] = []
-        for key in ("v", "mu"):
-            band = summary[key]
-            bounds += [float(np.nanmin(band["lo"])), float(np.nanmax(band["hi"]))]
-        lo, hi = min(bounds), max(bounds)
-        lo, hi = min(lo, 0.0), max(hi, 0.0)
+    def _panel_ylim(summary: dict, key: str) -> tuple[float, float]:
+        """Per-panel y-limits; centered panels are symmetric about 0."""
+        band = summary[key]
+        lo_b = float(np.nanmin(band["lo"]))
+        hi_b = float(np.nanmax(band["hi"]))
+        if key in {"x", "a1u1", "a2u2"}:
+            extent = max(abs(lo_b), abs(hi_b), 1e-12) * 1.08
+            return -extent, extent
+        if key == "mu":
+            pad = 0.12 * (hi_b - lo_b if hi_b > lo_b else max(abs(hi_b), 1.0))
+            return lo_b - pad, hi_b + pad
+        lo, hi = min(lo_b, 0.0), max(hi_b, 0.0)
         pad = 0.08 * (hi - lo if hi > lo else 1.0)
         return lo - pad, hi + pad
-
-    @staticmethod
-    def _row_ylim_last_three(summary: dict) -> tuple[float, float]:
-        """Symmetric y-limits about 0 for Fig. 3 panels ``w``, ``a1u1``, ``a2u2``."""
-        extents: list[float] = []
-        for key in ("x", "a1u1", "a2u2"):
-            band = summary[key]
-            extents.append(
-                max(
-                    abs(float(np.nanmin(band["lo"]))),
-                    abs(float(np.nanmax(band["hi"]))),
-                )
-            )
-        extent = max(extents) if extents else 1.0
-        extent = extent if extent > 0 else 1.0
-        extent *= 1.12
-        return -extent, extent
 
     @classmethod
     def plot_waveform_decomposition(
@@ -1692,8 +1680,6 @@ class LowRankWaveformAcquisitionFigures:
             t = summary["t"]
             t0, t1 = float(t[0]), float(t[-1])
             x_pad = cls.FIG3_X_PAD_FRAC * (t1 - t0 if t1 > t0 else 1.0)
-            ylim_12 = cls._row_ylim_first_two(summary)
-            ylim_345 = cls._row_ylim_last_three(summary)
             for col_idx, (key, title) in enumerate(panel_defs):
                 ax = axes[row_idx, col_idx]
                 band = summary[key]
@@ -1702,14 +1688,15 @@ class LowRankWaveformAcquisitionFigures:
                 hi = np.asarray(band["hi"], dtype=float)
                 ax.plot(t, mean, color="black", linewidth=1.8)
                 ax.fill_between(t, lo, hi, color="black", alpha=0.12, linewidth=0)
-                ax.plot(
-                    t,
-                    np.zeros_like(t),
-                    color="black",
-                    linewidth=1.0,
-                    linestyle=":",
-                )
-                y_lo, y_hi = ylim_345 if key in zero_cols else ylim_12
+                if key in zero_cols:
+                    ax.plot(
+                        t,
+                        np.zeros_like(t),
+                        color="black",
+                        linewidth=1.0,
+                        linestyle=":",
+                    )
+                y_lo, y_hi = cls._panel_ylim(summary, key)
                 ax.set_ylim(y_lo, y_hi)
                 ax.set_xlim(t0 - x_pad, t1 + x_pad)
                 if row_idx == 0:
@@ -1726,7 +1713,7 @@ class LowRankWaveformAcquisitionFigures:
                     )
                 cls._style_axes(ax, tick_size=9, label_size=10)
                 ax.set_box_aspect(1)
-        fig.get_layout_engine().set(w_pad=0.25, h_pad=0.0, wspace=0.08, hspace=0.02)
+        fig.get_layout_engine().set(w_pad=0.08, h_pad=0.0, wspace=0.02, hspace=0.02)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(out_path, dpi=150, bbox_inches="tight", pad_inches=0.02)
         plt.close(fig)
