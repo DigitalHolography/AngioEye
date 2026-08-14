@@ -95,6 +95,27 @@ ENDPOINT_METRICS = (
     "PR",
 )
 FIG3_PANEL_KEYS = ("v", "mu", "x", "a1u1", "a2u2")
+# EyeFlow ``misc/`` group names for Fig. 3 panels. Internal payload keys
+# stay ``v`` / ``mu`` / ``x`` / ``a1u1`` / ``a2u2``.
+FIG3_PANEL_EYEFLOW_GROUPS = {
+    "v": "segment_velocity",
+    "mu": "temporal_baseline",
+    "x": "centered_velocity",
+    "a1u1": "svd_mode1",
+    "a2u2": "svd_mode2",
+}
+# EyeFlow ``misc/`` datasets for the gray band. Internal keys stay
+# ``mean`` / ``lo`` / ``hi``.
+FIG3_BAND_EYEFLOW_DATASETS = {
+    "mean": "cross_column_mean",
+    "lo": "cross_column_lo",
+    "hi": "cross_column_hi",
+}
+EYEFLOW_MISC_ACQUISITION_VELOCITY = "acquisition_level_velocity"
+EYEFLOW_MISC_WAVEFORM_JOINT = "waveform_components_joint"
+EYEFLOW_MISC_WAVEFORM_PER_BEAT = "waveform_components_per_beat"
+EYEFLOW_MISC_SPECTRUM_JOINT = "svd_spectrum_joint"
+EYEFLOW_MISC_SPECTRUM_PER_BEAT = "svd_spectrum_joint_per_beat"
 FIG3_VARIABILITY_METHODS = (
     "beat_location",
     "beat",
@@ -598,21 +619,21 @@ def _read_endpoint_values(group: h5py.Group | None) -> dict[str, np.ndarray]:
     return out
 
 
-def _figure_group(source: h5py.Group, name: str) -> h5py.Group | None:
-    """Return one official ``figures/<name>`` group."""
-    figures = source.get("figures")
-    if not isinstance(figures, h5py.Group):
+def _misc_group(source: h5py.Group, name: str) -> h5py.Group | None:
+    """Return one official ``misc/<name>`` group."""
+    misc = source.get("misc")
+    if not isinstance(misc, h5py.Group):
         return None
-    group = figures.get(name)
+    group = misc.get(name)
     return group if isinstance(group, h5py.Group) else None
 
 
 def _fig2_payload_from_source(source: h5py.Group) -> dict[str, np.ndarray] | None:
-    """Official Fig. 2 payload from ``figures/fig2_frequency_velocity``."""
-    group = _figure_group(source, "fig2_frequency_velocity")
-    t = _dataset_vector(group, "t")
-    mean = _dataset_vector(group, "mean")
-    std = _dataset_vector(group, "std")
+    """Official Fig. 2 payload from ``misc/acquisition_level_velocity``."""
+    group = _misc_group(source, EYEFLOW_MISC_ACQUISITION_VELOCITY)
+    t = _dataset_vector(group, "cardiac_phase")
+    mean = _dataset_vector(group, "velocity_cross_column_mean")
+    std = _dataset_vector(group, "velocity_cross_column_std")
     if t is None or mean is None or std is None:
         return None
     n = min(t.size, mean.size, std.size)
@@ -624,31 +645,33 @@ def _fig2_payload_from_source(source: h5py.Group) -> dict[str, np.ndarray] | Non
 def _fig3_payload_from_source(
     source: h5py.Group, method: str, *, beats_band: bool = False
 ) -> dict | None:
-    """Official Fig. 3 payload from joint or per-beat figure storage.
+    """Official Fig. 3 payload from joint or per-beat ``misc`` waveform groups.
 
-    ``beats_band`` selects the ``*_beats`` group whose gray band spans
-    beats rather than all beat-location columns.
+    ``beats_band`` used to select a dedicated ``*_beats`` EyeFlow group.
+    That group is no longer packed, so this returns None and callers may
+    fall back to reconstructing the band from packed modes.
     """
-    name = (
-        "fig3_waveform_decomposition_pb"
-        if normalize_svd_method(method) == "per_beat"
-        else "fig3_waveform_decomposition"
-    )
     if beats_band:
-        name += "_beats"
-    group = _figure_group(source, name)
-    t = _dataset_vector(group, "t")
+        return None
+    name = (
+        EYEFLOW_MISC_WAVEFORM_PER_BEAT
+        if normalize_svd_method(method) == "per_beat"
+        else EYEFLOW_MISC_WAVEFORM_JOINT
+    )
+    group = _misc_group(source, name)
+    t = _dataset_vector(group, "cardiac_phase")
     if t is None:
         return None
     out: dict[str, dict[str, np.ndarray] | np.ndarray] = {"t": t}
     n = int(t.size)
     for panel in FIG3_PANEL_KEYS:
-        panel_group = group.get(panel) if isinstance(group, h5py.Group) else None
+        panel_name = FIG3_PANEL_EYEFLOW_GROUPS[panel]
+        panel_group = group.get(panel_name) if isinstance(group, h5py.Group) else None
         if not isinstance(panel_group, h5py.Group):
             return None
         band: dict[str, np.ndarray] = {}
-        for stat in ("mean", "lo", "hi"):
-            arr = _dataset_vector(panel_group, stat)
+        for stat, ds_name in FIG3_BAND_EYEFLOW_DATASETS.items():
+            arr = _dataset_vector(panel_group, ds_name)
             if arr is None:
                 return None
             band[stat] = arr
@@ -660,7 +683,7 @@ def _fig3_payload_from_source(
     for panel in FIG3_PANEL_KEYS:
         out[panel] = {
             stat: np.asarray(out[panel][stat], dtype=float)[:n]
-            for stat in ("mean", "lo", "hi")
+            for stat in FIG3_BAND_EYEFLOW_DATASETS
         }
     return out
 
@@ -671,26 +694,25 @@ def _spectrum_payload_from_source(
     method: str,
     cumulative: bool,
 ) -> dict[str, np.ndarray] | None:
-    """Official Fig. 4 payload from joint/per-beat spectrum figure storage."""
+    """Official Fig. 4 payload from joint/per-beat ``misc`` spectrum groups.
+
+    Cumulative spectra are no longer packed by EyeFlow.
+    """
+    if cumulative:
+        return None
     method = normalize_svd_method(method)
     if method == "per_beat":
-        group_name = (
-            "fig4_energy_spectrum_cumulative_pb"
-            if cumulative
-            else "fig4_energy_spectrum_pb"
-        )
-        y_name = "lambda_cumulative_mean" if cumulative else "lambda_mean"
-        lo_name = "lambda_cumulative_lo" if cumulative else "lambda_lo"
-        hi_name = "lambda_cumulative_hi" if cumulative else "lambda_hi"
+        group_name = EYEFLOW_MISC_SPECTRUM_PER_BEAT
+        y_name = "lambda_mean"
+        lo_name = "lambda_lo"
+        hi_name = "lambda_hi"
     else:
-        group_name = (
-            "fig4_energy_spectrum_cumulative" if cumulative else "fig4_energy_spectrum"
-        )
-        y_name = "lambda_cumulative" if cumulative else "lambda"
+        group_name = EYEFLOW_MISC_SPECTRUM_JOINT
+        y_name = "lambda"
         lo_name = hi_name = ""
 
-    group = _figure_group(source, group_name)
-    mode = _dataset_vector(group, "mode")
+    group = _misc_group(source, group_name)
+    mode = _dataset_vector(group, "svd_mode_index")
     mean = _dataset_vector(group, y_name)
     if mode is None or mean is None:
         return None
@@ -789,7 +811,7 @@ def _source_has_metric_payload(metrics: dict, source_name: str) -> bool:
     prefixes = (
         f"{source_name}/endpoints/joint/",
         f"{source_name}/endpoints/per_beat/",
-        f"{source_name}/figures/",
+        f"{source_name}/misc/",
         f"{source_name}/decomposition/singular_values",
         f"{source_name}/decomposition/singular_energy_fraction",
     )
@@ -818,15 +840,15 @@ def _group_flag_or_payload(
 
 
 def _source_group_has_metric_payload(source: h5py.Group) -> bool:
-    """True when a source group has official endpoints, figures, or spectra."""
+    """True when a source group has official endpoints, misc, or spectra."""
     endpoints = source.get("endpoints")
     if isinstance(endpoints, h5py.Group):
         for method in SVD_METHODS:
             if _group_has_datasets(endpoints.get(method)):
                 return True
-    figures = source.get("figures")
-    if isinstance(figures, h5py.Group):
-        for obj in figures.values():
+    misc = source.get("misc")
+    if isinstance(misc, h5py.Group):
+        for obj in misc.values():
             if isinstance(obj, h5py.Group):
                 if _group_has_datasets(obj):
                     return True
@@ -1399,7 +1421,7 @@ class LowRankWaveformAcquisitionFigures:
 
     Fig. 2 is the full-acquisition cardiac velocity (spatial mean over
     ``(k, r)`` with 0.1 s std whiskers). It does not use EyeFlow's packed
-    one-cycle ``figures/fig2_frequency_velocity`` summary.
+    one-cycle ``misc/acquisition_level_velocity`` summary.
     """
 
     VESSEL_VELOCITY_NODES = {"artery": "Artery", "vein": "Vein"}
