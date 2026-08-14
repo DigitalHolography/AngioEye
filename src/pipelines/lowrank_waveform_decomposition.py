@@ -203,6 +203,14 @@ def safe_figure(name: str, plotter, /, **kwargs) -> Path | None:
     return None
 
 
+# Figures that current EyeFlow output cannot supply, so their absence is
+# expected rather than a fault. Every packed waveform product is collapsed
+# across beat-location columns before it is written, leaving no beat axis to
+# build a beats-level band from. These are still attempted, so each appears
+# automatically if EyeFlow ever packs a beat-resolved waveform group.
+OPTIONAL_FIGURES = frozenset({"fig3_waveform_decomposition_per_beat_beats"})
+
+
 def report_missing_figures(
     source: str,
     expected: list[str],
@@ -210,18 +218,21 @@ def report_missing_figures(
     *,
     source_label: str = "",
 ) -> list[str]:
-    """Warn once naming the figures a source did not produce.
+    """Warn once naming the figures a source unexpectedly did not produce.
 
     A figure is skipped whenever its packed payload is absent, which is a
     normal outcome for some sources but indistinguishable from a bug when
     the run stays silent. Naming the gaps makes an incomplete output set
     self-explaining instead of something to reverse-engineer from folders.
+    Variants in ``OPTIONAL_FIGURES`` are known to be unavailable and stay
+    quiet, so the warning only ever reports a real surprise.
     """
     produced = {path.stem for path in written}
     missing = [
         name
         for name in expected
-        if not any(stem.endswith(name) for stem in produced)
+        if name not in OPTIONAL_FIGURES
+        and not any(stem.endswith(name) for stem in produced)
     ]
     if missing:
         where = f"{source_label} {source}".strip()
