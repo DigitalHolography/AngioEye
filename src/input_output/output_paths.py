@@ -7,8 +7,17 @@ from .hdf5_schema import is_hdf5_path
 H5_OUTPUT_DIRNAME = "h5"
 PNG_OUTPUT_DIRNAME = "png"
 PNGS_OUTPUT_DIRNAME = "pngs"
+EPS_OUTPUT_DIRNAME = "eps"
 HTML_OUTPUT_DIRNAME = "html"
 COHORT_RESULTS_DIRNAME = "cohort-results"
+# Folder-name mirrors used when deriving an EPS companion path from a PNG path.
+# ``pngs`` (epoch layout) still maps to sibling ``eps``, not ``epss``.
+_PNG_FOLDER_TO_EPS = {
+    PNG_OUTPUT_DIRNAME: EPS_OUTPUT_DIRNAME,
+    PNGS_OUTPUT_DIRNAME: EPS_OUTPUT_DIRNAME,
+    "export_png": "export_eps",
+    "export_png_html": "export_eps_html",
+}
 APP_SUFFIXES = ("HD", "DV", "EF", "AE")
 _APP_STEM_SUFFIXES = tuple(f"_{suffix}" for suffix in APP_SUFFIXES)
 # Epoch folders are ``1_label``, ``2_label``, … Patient-id ZIP wraps such as
@@ -126,6 +135,37 @@ def png_output_dir(output_root: str | Path) -> Path:
     return Path(output_root) / PNG_OUTPUT_DIRNAME
 
 
+def eps_output_dir(output_root: str | Path) -> Path:
+    """Return the standard directory for generated EPS companion outputs."""
+    return Path(output_root) / EPS_OUTPUT_DIRNAME
+
+
+def eps_path_for_png(png_path: str | Path) -> Path:
+    """Mirror a PNG path into the sibling EPS tree.
+
+    Replaces the PNG product folder in the path (``png``, ``pngs``,
+    ``export_png``, ``export_png_html``, or a ``*_png`` directory) with the
+    matching EPS folder and swaps the suffix to ``.eps``. When no such folder
+    is present, the EPS file is written beside the PNG (same parent).
+    """
+    png_path = Path(png_path)
+    parts = list(png_path.parts)
+    for index, part in enumerate(parts[:-1]):
+        key = part.lower()
+        replacement = _PNG_FOLDER_TO_EPS.get(key)
+        if replacement is None and key.endswith("_png"):
+            replacement = f"{part[:-4]}_eps"
+        if replacement is None:
+            continue
+        mirrored_parts = list(parts)
+        mirrored_parts[index] = replacement
+        mirrored = Path(mirrored_parts[0])
+        for piece in mirrored_parts[1:]:
+            mirrored /= piece
+        return mirrored.with_suffix(".eps")
+    return png_path.with_suffix(".eps")
+
+
 def html_output_dir(output_root: str | Path) -> Path:
     """Return the standard directory for generated HTML companion outputs."""
     return Path(output_root) / HTML_OUTPUT_DIRNAME
@@ -183,6 +223,8 @@ def companion_output_dir(
         return h5_output_dir(app_dir)
     if query == PNG_OUTPUT_DIRNAME:
         return png_output_dir(app_dir)
+    if query == EPS_OUTPUT_DIRNAME:
+        return eps_output_dir(app_dir)
     if query == HTML_OUTPUT_DIRNAME:
         return html_output_dir(app_dir)
     return app_dir / query

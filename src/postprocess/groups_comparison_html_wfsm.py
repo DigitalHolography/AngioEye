@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from input_output.archive_io import (
     extract_file_from_zip,
@@ -25,7 +25,7 @@ from .core.base import (
 
     In addition, an interactive HTML dashboard named **Waveform Shape Metrics Group Comparison** is generated. The dashboard gathers all generated visualizations into a single interface, making it easy to browse, compare, and inspect waveform metrics across groups.
 
-    All comparison plots are exported in PNG format, and the HTML dashboard is saved alongside them in the output directory.
+    All comparison plots are exported in PNG and EPS formats, and the HTML dashboard is saved alongside them in the output directory.
     --------------------------------------------
     WARNING 
 
@@ -60,12 +60,17 @@ class GroupsComparisonHTMLPostprocess(BatchPostprocess):
                 )
             groups_comparison_html.save_dashboard(
                 str(temp_zip),
-                export_png_dir=temp_root / "group comparison (HTML) - Waveform Shape Metrics",
+                export_png_dir=temp_root / "export_png_html",
             )
 
             png_paths = extract_folder_from_zip(
                 zip_path=temp_zip,
-                member_prefix="group comparison (HTML) - Waveform Shape Metrics/",
+                member_prefix="export_png_html/",
+                output_dir=output_dir,
+            )
+            eps_paths = extract_folder_from_zip(
+                zip_path=temp_zip,
+                member_prefix="export_eps_html/",
                 output_dir=output_dir,
             )
             dashboard_path = extract_file_from_zip(
@@ -74,7 +79,13 @@ class GroupsComparisonHTMLPostprocess(BatchPostprocess):
                 output_dir=output_dir,
             )
 
-        created_paths = [str(dashboard_path), *[str(path) for path in png_paths]]
-        summary = f"Generated dashboard and {len(png_paths)} PNG illustration(s)."
+        created_paths = [
+            str(dashboard_path),
+            *[str(path) for path in png_paths],
+            *[str(path) for path in eps_paths],
+        ]
+        summary = (
+            f"Generated dashboard and {len(png_paths)} PNG / "
+            f"{len(eps_paths)} EPS illustration(s)."
+        )
         return PostprocessResult(summary=summary, generated_paths=created_paths)
-

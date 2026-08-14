@@ -1,4 +1,4 @@
-﻿import os
+import os
 import shutil
 import tempfile
 import zipfile
@@ -21,6 +21,7 @@ import matplotlib.pyplot as plt
 from input_output.archive_io import (
     reset_output_dir,
 )
+from input_output.figure_export import save_figure
 from input_output.hdf5_io import find_eyeflow_dataset, find_first_existing_path
 from input_output.hdf5_schema import find_pipeline_group, pipeline_path_candidates
 from input_output.output_paths import (
@@ -364,7 +365,7 @@ def _branch_label_map_to_base64(
     fig, ax = plt.subplots(figsize=(4, 4))
     ax.imshow(np.flip(data.T,axis=0),cmap="viridis")  
     ax.axis("off")
-    fig.savefig(image_path, bbox_inches="tight")
+    save_figure(fig, image_path, bbox_inches="tight")
     plt.close(fig)
 
     return image_file_to_base64(image_path)
@@ -876,7 +877,7 @@ def _array_image_to_base64(data, image_dir, filename, *, cmap):
     fig, ax = plt.subplots(figsize=(4, 4))
     ax.imshow(data.T, cmap=cmap)
     ax.axis("off")
-    fig.savefig(image_path, bbox_inches="tight")
+    save_figure(fig, image_path, bbox_inches="tight")
     plt.close(fig)
     return image_file_to_base64(image_path)
 
@@ -890,7 +891,7 @@ def _signal_image_to_base64(data, image_dir, filename, *, color, title):
     ax.set_xlabel("Sample")
     ax.set_ylabel("Velocity")
     ax.grid(True)
-    fig.savefig(image_path, bbox_inches="tight")
+    save_figure(fig, image_path, bbox_inches="tight")
     plt.close(fig)
     return image_file_to_base64(image_path)
 

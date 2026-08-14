@@ -4,6 +4,7 @@ import numpy as np
 from math_utils import nanmax, nanmin, nanpercentile
 
 from input_output import png_output_dir
+from input_output.figure_export import save_figure
 from input_output.hdf5_schema import safe_h5_key
 from postprocess.core.grouped_batch import build_group_order
 
@@ -174,7 +175,7 @@ def _plot_score_violin_by_cohort(
         f"composite_scoring_{safe_h5_key(representation)}_"
         f"{safe_h5_key(score_name)}_violin_by_cohort.png"
     )
-    fig.savefig(output_path, dpi=180)
+    save_figure(fig, output_path, dpi=180)
     plt.close(fig)
     return str(output_path)
 
@@ -238,6 +239,6 @@ def _plot_was_c_histogram(
         f"composite_scoring_{safe_h5_key(representation)}_"
         "was_c_histogram_by_cohort.png"
     )
-    fig.savefig(output_path, dpi=180)
+    save_figure(fig, output_path, dpi=180)
     plt.close(fig)
     return str(output_path)

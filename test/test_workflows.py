@@ -692,6 +692,22 @@ class FilesystemWorkflowTests(unittest.TestCase):
 
 
 class ZipWorkflowOutputTests(unittest.TestCase):
+    def test_reset_zip_workflow_output_dir_clears_nested_temp_trees(self) -> None:
+        from workflows.runs import reset_zip_workflow_output_dir
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_dir = Path(tmp_dir) / "260803_Flicker_EF_angioeye"
+            leftover = output_dir / "tmp9gja_fsm" / "1_BL1" / "pngs" / "artery"
+            leftover.mkdir(parents=True)
+            (leftover / "fig.png").write_bytes(b"png")
+            (output_dir / "tmp9gja_fsm" / "1_BL1" / ".DS_Store").write_bytes(b"ds")
+            (output_dir / "stale.txt").write_text("old", encoding="utf-8")
+
+            reset_zip_workflow_output_dir(output_dir)
+
+            self.assertTrue(output_dir.is_dir())
+            self.assertEqual(list(output_dir.iterdir()), [])
+
     def test_zip_workflow_removes_stale_output_tree_before_writing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)

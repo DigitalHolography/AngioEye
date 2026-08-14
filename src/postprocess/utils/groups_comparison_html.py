@@ -1,7 +1,8 @@
-﻿import os
+import os
 import tempfile
 import zipfile
 from collections import defaultdict
+from pathlib import Path
 import shutil
 import h5py
 import matplotlib
@@ -20,6 +21,7 @@ from input_output.archive_io import (
     replace_folder_in_zip,
     reset_output_dir,
 )
+from input_output.figure_export import save_figure
 from ..core.grouped_batch import (
     find_control_group_name,
 )
@@ -266,7 +268,7 @@ def plot_group_statistics(df, metric, vessel, out_path):
     ax.set_ylabel(LATEX_FORMULAS[metric], fontsize=14)
 
     plt.tight_layout()
-    fig.savefig(out_path, bbox_inches="tight")
+    save_figure(fig, out_path, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -291,11 +293,12 @@ def export_group_statistics_figures(all_results, out_dir, formats=("png")):
             if df.empty:
                 continue
 
-            for fmt in formats:
-                out_path = os.path.join(
-                    out_dir, f"{metric_key}_bandlimited_{vessel}.{fmt}"
-                )
-                plot_group_statistics(df, metric_key, vessel, out_path)
+            # PNG path only; save_figure mirrors into export_eps_html/.
+            _ = formats
+            out_path = os.path.join(
+                out_dir, f"{metric_key}_bandlimited_{vessel}.png"
+            )
+            plot_group_statistics(df, metric_key, vessel, out_path)
 
 
 def choose_zip():
@@ -719,20 +722,28 @@ def add_file_to_zip(zip_path: str, file_path: str, arc_name: str):
 
     os.replace(temp_zip, zip_path)
 
-def save_dashboard(zip_path, export_png_dir="group comparison (HTML) - Waveform Shape Metrics"):
+def save_dashboard(zip_path, export_png_dir="export_png_html"):
     all_results = analyze_zip(zip_path)
+    export_png_dir = Path(export_png_dir)
+    export_eps_dir = (
+        export_png_dir.with_name("export_eps_html")
+        if export_png_dir.name == "export_png_html"
+        else export_png_dir.parent / "export_eps_html"
+    )
+
     reset_output_dir(export_png_dir)
+    reset_output_dir(export_eps_dir)
 
     export_group_statistics_figures(
         all_results,
-        out_dir=export_png_dir,
+        out_dir=str(export_png_dir),
         formats=("png",),
     )
 
     temp_html_dir = tempfile.mkdtemp()
 
     generate_html_gallery(
-        image_dir=export_png_dir,
+        image_dir=str(export_png_dir),
         html_dir=temp_html_dir,
         html_name="waveform_shape_metrics_group_comparison.html",
     )
@@ -742,7 +753,13 @@ def save_dashboard(zip_path, export_png_dir="group comparison (HTML) - Waveform 
         "waveform_shape_metrics_group_comparison.html"
     )
 
-    replace_folder_in_zip(zip_path, export_png_dir, arc_folder="group comparison (HTML) - Waveform Shape Metrics")
+    replace_folder_in_zip(
+        zip_path, str(export_png_dir), arc_folder="export_png_html"
+    )
+    if any(path.is_file() for path in export_eps_dir.rglob("*")):
+        replace_folder_in_zip(
+            zip_path, str(export_eps_dir), arc_folder="export_eps_html"
+        )
 
     add_file_to_zip(
         zip_path,
@@ -750,9 +767,12 @@ def save_dashboard(zip_path, export_png_dir="group comparison (HTML) - Waveform 
         arc_name="waveform_shape_metrics_group_comparison.html",
     )
 
-    if os.path.isdir(export_png_dir):
+    if export_png_dir.is_dir():
         shutil.rmtree(export_png_dir)
-    
+
+    if export_eps_dir.is_dir():
+        shutil.rmtree(export_eps_dir)
+
     if os.path.isdir(temp_html_dir):
         shutil.rmtree(temp_html_dir)
     

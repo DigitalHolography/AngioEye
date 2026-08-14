@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import errno
+import os
 import shutil
+import stat
 import threading
 import time
 from functools import cache, partial
@@ -18,7 +21,12 @@ from batch_engine import (
     run_task_batch,
     run_threaded_batches_in_process_pool,
 )
-from input_output import PNG_OUTPUT_DIRNAME, ZipH5Member, create_zip_from_tree
+from input_output import (
+    EPS_OUTPUT_DIRNAME,
+    PNG_OUTPUT_DIRNAME,
+    ZipH5Member,
+    create_zip_from_tree,
+)
 from pipelines import load_pipeline_catalog
 
 from ._holo import HoloInputContext, output_filename
@@ -91,7 +99,7 @@ class RunPostprocesses(Protocol):
 ZipProgressCallback = Callable[[int, int, Path], None]
 ZipOutputDir = Callable[[Path, Path | None, ZipProgressCallback | None], Path]
 IdleCallback = Callable[[], None]
-ZIP_COMPANION_OUTPUT_FOLDERS = (PNG_OUTPUT_DIRNAME,)
+ZIP_COMPANION_OUTPUT_FOLDERS = (PNG_OUTPUT_DIRNAME, EPS_OUTPUT_DIRNAME)
 
 
 def zip_output_dir(
@@ -171,6 +179,68 @@ def _prepare_workflow_workspace(
     )
 
 
+def _rmtree_robust(path: Path, *, attempts: int = 5) -> None:
+    """Remove a directory tree, tolerating macOS ENOTEMPTY races.
+
+    Finder/Spotlight can recreate sidecar files (e.g. ``.DS_Store``) between
+    child deletion and ``rmdir``, which surfaces as ``OSError: [Errno 66]
+    Directory not empty``. Retry with a short backoff and clear stragglers.
+    """
+    path = Path(path)
+    if not path.exists():
+        return
+
+    def _onexc(func: Callable[..., Any], victim: str | os.PathLike[str], exc: BaseException) -> None:
+        if isinstance(exc, FileNotFoundError):
+            return
+        if isinstance(exc, PermissionError):
+            try:
+                os.chmod(victim, stat.S_IWUSR | stat.S_IRUSR | stat.S_IXUSR)
+                func(victim)
+                return
+            except FileNotFoundError:
+                return
+        if isinstance(exc, OSError) and exc.errno in {errno.ENOTEMPTY, errno.EEXIST}:
+            leftover = Path(victim)
+            if leftover.is_dir() and not leftover.is_symlink():
+                for child in list(leftover.iterdir()):
+                    if child.is_symlink() or not child.is_dir():
+                        try:
+                            child.unlink()
+                        except FileNotFoundError:
+                            pass
+                    else:
+                        shutil.rmtree(child, onexc=_onexc)
+                try:
+                    leftover.rmdir()
+                    return
+                except FileNotFoundError:
+                    return
+                except OSError:
+                    pass
+        raise exc
+
+    last_error: BaseException | None = None
+    for attempt in range(attempts):
+        if not path.exists():
+            return
+        try:
+            shutil.rmtree(path, onexc=_onexc)
+            return
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            last_error = exc
+            if exc.errno not in {errno.ENOTEMPTY, errno.EEXIST}:
+                raise
+            time.sleep(0.05 * (attempt + 1))
+    if path.exists():
+        # Last resort: do not block the workflow on a stubborn temp tree.
+        shutil.rmtree(path, ignore_errors=True)
+    if path.exists() and last_error is not None:
+        raise last_error
+
+
 def reset_zip_workflow_output_dir(
     output_dir: Path,
     *,
@@ -196,7 +266,7 @@ def reset_zip_workflow_output_dir(
         if path.resolve() in protected:
             return
         if path.is_symlink() or not path.is_dir():
-            path.unlink()
+            path.unlink(missing_ok=True)
             return
         if any(
             protected_path == path.resolve()
@@ -206,9 +276,9 @@ def reset_zip_workflow_output_dir(
             for child in path.iterdir():
                 remove_entry(child)
             return
-        shutil.rmtree(path)
+        _rmtree_robust(path)
 
-    for child in output_dir.iterdir():
+    for child in list(output_dir.iterdir()):
         remove_entry(child)
 
 

@@ -311,6 +311,7 @@ def common_hiddenimports():
     hiddenimports += collect_submodules("scipy")
     hiddenimports += collect_submodules("tkinterdnd2")
     hiddenimports += ["matplotlib.backends.backend_ps"]
+    hiddenimports += ["matplotlib.backends.backend_cairo"]
     return hiddenimports
 
 

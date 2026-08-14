@@ -1,7 +1,8 @@
 """Cohort low-rank Figs. 4--7 and ``lowrank_cohort.h5`` from EyeFlow H5s.
 
 Figures are written per vessel and signal source into
-``<png dir>/<vessel>/<signal>/``. SVD figure names end in
+``<png dir>/<vessel>/<signal>/``, with a mirrored ``<eps dir>/`` tree
+beside each PNG folder. SVD figure names end in
 ``<basis>_<observation level>``: ``joint_acq`` keeps the article
 acquisition scalars from one acquisition-wide basis; ``per_beat_acq``
 uses ``median_b`` of packed per-beat SVD endpoints (ρ is
@@ -47,6 +48,7 @@ from input_output import (
     png_output_dir,
 )
 from input_output.archive_io import extracted_zip_tree
+from input_output.figure_export import save_figure
 from input_output.hdf5_io import (
     UTF8_STRING_DTYPE,
     open_h5,
@@ -1699,8 +1701,7 @@ class LowRankWaveformCohortFigures:
             if col_idx == 0:
                 ax.set_ylabel("Value", fontsize=11)
         fig.tight_layout(w_pad=1.0, h_pad=1.0)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(out_path, dpi=150, bbox_inches="tight")
+        save_figure(fig, out_path, dpi=150, bbox_inches="tight")
         plt.close(fig)
         return out_path
 
@@ -1885,8 +1886,7 @@ class LowRankWaveformCohortFigures:
         ax.set_box_aspect(0.5)
         cls._style_axes(ax, tick_size=_FIG_TICK_SIZE)
         fig.tight_layout()
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(out_path, dpi=150, bbox_inches="tight")
+        save_figure(fig, out_path, dpi=150, bbox_inches="tight")
         plt.close(fig)
         return out_path
 
@@ -2761,7 +2761,8 @@ def run(
         "From EyeFlow H5s arranged in consecutively numbered group folders, "
         "write ``lowrank_cohort.h5`` (stats, confounds, acquisitions, beats) "
         "under ``cohort-results/h5`` and cohort Figs. 4--8 (joint and _pb) "
-        "under ``cohort-results/png``. This manual postprocess requires one or "
+        "under ``cohort-results/png`` (with mirrored ``cohort-results/eps``). "
+        "This manual postprocess requires one or "
         "more folders such as ``1_ctrl`` or ``1_ctrl`` / ``2_path``. Any "
         "positive number of groups is supported."
     ),

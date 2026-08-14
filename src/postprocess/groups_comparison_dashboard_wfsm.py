@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from input_output.archive_io import (
     extract_folder_from_zip,
@@ -99,13 +99,21 @@ class GraphicsDashboardPostprocess(BatchPostprocess):
 
             png_paths = extract_folder_from_zip(
                 zip_path=temp_zip,
-                member_prefix="group comparison (Dashboard) - Waveform Shape Metrics/",
+                member_prefix="export_png/",
+                output_dir=output_dir,
+            )
+            eps_paths = extract_folder_from_zip(
+                zip_path=temp_zip,
+                member_prefix="export_eps/",
                 output_dir=output_dir,
             )
 
-        created_paths = [            
-            *[str(path) for path in png_paths]
+        created_paths = [
+            *[str(path) for path in png_paths],
+            *[str(path) for path in eps_paths],
         ]
-        summary = f" Generated dashboard {len(png_paths)} PNG illustration(s)."
+        summary = (
+            f" Generated dashboard {len(png_paths)} PNG and "
+            f"{len(eps_paths)} EPS illustration(s)."
+        )
         return PostprocessResult(summary=summary, generated_paths=created_paths)
-

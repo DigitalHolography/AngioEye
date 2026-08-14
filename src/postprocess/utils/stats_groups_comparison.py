@@ -18,6 +18,7 @@ from input_output.archive_io import (
     replace_folder_in_zip,
     reset_output_dir,
 )
+from input_output.figure_export import save_figure
 from ..core.grouped_batch import (
     find_control_group_name,
     iter_grouped_h5_files,
@@ -291,7 +292,7 @@ def plot_group_statistics(df, metric, vessel, out_path):
     ax.set_ylabel(LATEX_FORMULAS[metric], fontsize=14)
 
     plt.tight_layout()
-    fig.savefig(out_path, bbox_inches="tight")
+    save_figure(fig, out_path, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -316,11 +317,13 @@ def export_group_statistics_figures(all_results, out_dir, formats=("png", "eps")
             if df.empty:
                 continue
 
-            for fmt in formats:
-                out_path = os.path.join(
-                    out_dir, f"{metric_key}_bandlimited_{vessel}.{fmt}"
-                )
-                plot_group_statistics(df, metric_key, vessel, out_path)
+            # PNG path only; save_figure mirrors into the sibling EPS tree.
+            # ``formats`` is kept for callers but EPS is produced automatically.
+            _ = formats
+            out_path = os.path.join(
+                out_dir, f"{metric_key}_bandlimited_{vessel}.png"
+            )
+            plot_group_statistics(df, metric_key, vessel, out_path)
 
 
 def choose_zip():
@@ -339,12 +342,6 @@ def save_dashboard_outputs(
         all_results,
         out_dir=export_png_dir,
         formats=("png",),
-    )
-
-    export_group_statistics_figures(
-        all_results,
-        out_dir=export_eps_dir,
-        formats=("eps",),
     )
     generated = [
         path

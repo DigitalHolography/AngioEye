@@ -1,4 +1,4 @@
-﻿import shutil
+import shutil
 from collections import defaultdict
 from pathlib import Path
 from tkinter import Tk, filedialog
@@ -17,6 +17,10 @@ from input_output.archive_io import (
     extracted_zip_tree,
     replace_folder_in_zip,
     reset_output_dir,
+)
+from input_output.figure_export import (
+    POSTSCRIPT_BACKEND_MODULE,
+    save_figure,
 )
 from input_output.hdf5_io import find_first_existing_path, read_array
 from input_output.hdf5_schema import pipeline_path_candidates
@@ -38,7 +42,6 @@ PIPELINE_BASE_CANDIDATES_WINDKESSEL = pipeline_path_candidates(
 
 METHODS_WINDKESSEL = ["arx", "freq", "time_integral"]
 METRICS_WINDKESSEL = ["tau", "Deltat"]
-POSTSCRIPT_BACKEND_MODULE = "matplotlib.backends.backend_ps"
 
 METHOD_MARKERS_WINDKESSEL = {
     "arx": "D",
@@ -305,7 +308,7 @@ def plot_windkessel_metric_for_method(df, metric, method, out_path):
     ax.tick_params(axis="y", labelsize=14)
 
     plt.tight_layout()
-    fig.savefig(out_path, bbox_inches="tight")
+    save_figure(fig, out_path, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -321,7 +324,8 @@ def export_windkessel_figures(zip_path, out_dir, format="png"):
 
     for metric in METRICS_WINDKESSEL:
         for method in METHODS_WINDKESSEL:
-            filename = f"windkessel_{metric}_{method}.{format}"
+            # Always write the PNG path; save_figure mirrors into export_eps/.
+            filename = f"windkessel_{metric}_{method}.png"
             out_path = out_dir / filename
 
             plot_windkessel_metric_for_method(
@@ -1190,12 +1194,8 @@ def export_selected_metric(
                             c = j % 2
                             ax_empty = fig.add_subplot(right[r, c])
                             ax_empty.axis("off")
-                    if format == "png":
-                        png_path = out_dir / f"{metric}_{current_mode}_{vessel}.png"
-                        fig.savefig(png_path, bbox_inches="tight")
-                    if format == "eps":
-                        eps_path = out_dir / f"{metric}_{current_mode}_{vessel}.eps"
-                        fig.savefig(eps_path, bbox_inches="tight")
+                    png_path = out_dir / f"{metric}_{current_mode}_{vessel}.png"
+                    save_figure(fig, png_path, bbox_inches="tight")
 
                     plt.close(fig)
 
@@ -1320,32 +1320,21 @@ def analyze_zip(zip_path):
 
 
 def save_dashboard(all_results, zip_path, single_group):
+    # Single PNG pass; save_figure mirrors EPS companions into export_eps/.
+    png_dir = Path("export_png")
+    eps_dir = Path("export_eps")
 
-    out_dir = Path("group comparison (Dashboard) - Waveform Shape Metrics")
+    reset_output_dir(png_dir)
+    reset_output_dir(eps_dir)
 
-    png_dir = out_dir / "PNG"
-    eps_dir = out_dir / "EPS"
-
-    reset_output_dir(out_dir)
-
-    # --- Windkessel PNG ---
+    # --- Windkessel ---
     export_windkessel_figures(
         zip_path,
         png_dir,
         format="png"
     )
 
-    # --- Windkessel EPS ---
-    eps_supported = _run_optional_eps_export(
-        lambda: export_windkessel_figures(
-            zip_path,
-            eps_dir,
-            format="eps"
-        ),
-        eps_dir,
-    )
-
-    # --- Metrics PNG ---
+    # --- Metrics illustrations ---
     export_selected_metric(
         all_results,
         zip_path,
@@ -1355,28 +1344,16 @@ def save_dashboard(all_results, zip_path, single_group):
         mode="bandlimited"
     )
 
-    # --- Metrics EPS ---
-    if eps_supported:
-        eps_supported = _run_optional_eps_export(
-            lambda: export_selected_metric(
-                all_results,
-                zip_path,
-                eps_dir,
-                "eps",
-                show_group_illustrations=True,
-                mode="bandlimited"
-            ),
-            eps_dir,
-        )
+    replace_folder_in_zip(zip_path, png_dir, arc_folder="export_png")
 
-    replace_folder_in_zip(
-        zip_path,
-        out_dir,
-        arc_folder="group comparison (Dashboard) - Waveform Shape Metrics"
-    )
+    if eps_dir.is_dir() and any(path.is_file() for path in eps_dir.rglob("*")):
+        replace_folder_in_zip(zip_path, eps_dir, arc_folder="export_eps")
 
-    if out_dir.is_dir():
-        shutil.rmtree(out_dir)
+    if png_dir.is_dir():
+        shutil.rmtree(png_dir)
+
+    if eps_dir.is_dir():
+        shutil.rmtree(eps_dir)
 
 
 if __name__ == "__main__":

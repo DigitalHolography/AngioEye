@@ -6,7 +6,8 @@ This module does **not** import EyeFlow or recompute decomposition: it
 ingests that group into the AngioEye result H5 and writes Figs 2--4.
 Joint SVD and per-beat SVD are always ingested together. Figures are
 written per vessel and signal source into ``<png dir>/<vessel>/<signal>/``
-for every source EyeFlow packed (artery/vein x bandlimited/raw).
+for every source EyeFlow packed (artery/vein x bandlimited/raw), with a
+mirrored ``<eps dir>/`` tree beside each PNG folder.
 
 Fig. 2 has no SVD. Figs. 3--4 carry a ``<basis>_<observation level>``
 suffix -- ``joint_acq``, ``per_beat_acq``, ``per_beat_beats`` -- where the
@@ -37,6 +38,7 @@ from matplotlib.ticker import (
     NullFormatter,
 )
 
+from input_output.figure_export import save_figure
 from input_output.hdf5_io import find_first_existing_path
 from input_output.hdf5_schema import find_pipeline_group
 from input_output.inputs import find_hdf5_inputs
@@ -1795,8 +1797,7 @@ class LowRankWaveformAcquisitionFigures:
             plt.close(fig)
             return None
         fig.tight_layout()
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(out_path, dpi=150, bbox_inches="tight")
+        save_figure(fig, out_path, dpi=150, bbox_inches="tight")
         plt.close(fig)
         return out_path
 
@@ -1974,8 +1975,9 @@ class LowRankWaveformAcquisitionFigures:
                 cls._style_axes(ax, tick_size=9, label_size=10)
                 ax.set_box_aspect(1)
         fig.get_layout_engine().set(w_pad=0.02, h_pad=0.0, wspace=0.01, hspace=0.02)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(out_path, dpi=150, bbox_inches="tight", pad_inches=0.02)
+        save_figure(
+            fig, out_path, dpi=150, bbox_inches="tight", pad_inches=0.02
+        )
         plt.close(fig)
         return out_path
 
@@ -2166,7 +2168,6 @@ class LowRankWaveformAcquisitionFigures:
             plt.close(fig)
             return None
         fig.tight_layout()
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(out_path, dpi=150, bbox_inches="tight")
+        save_figure(fig, out_path, dpi=150, bbox_inches="tight")
         plt.close(fig)
         return out_path
