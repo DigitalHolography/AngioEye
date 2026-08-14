@@ -69,6 +69,7 @@ from pipelines.lowrank_waveform_decomposition import (
     is_usable_beat_spectra,
     load_acquisition_from_result_h5,
     mean_pm_std,
+    safe_figure,
 )
 
 from .core.base import (
@@ -1699,32 +1700,40 @@ class LowRankWaveformCohortFigures:
         def _out(name: str) -> Path:
             return out_dir / prefixed_filename(name, patient_id)
 
-        written.append(
-            cls._plot_endpoint_grid(
-                points, cls.FIG5_PANELS, _out("fig5_nonsvd_endpoints.png"), group_order
-            )
+        def _keep(name: str, plotter, /, **kwargs) -> None:
+            """Draw one figure; never let its failure hide the others."""
+            path = safe_figure(name, plotter, **kwargs)
+            if path is not None:
+                written.append(path)
+
+        _keep(
+            "fig5_nonsvd_endpoints",
+            cls._plot_endpoint_grid,
+            df=points,
+            panels=cls.FIG5_PANELS,
+            out_path=_out("fig5_nonsvd_endpoints.png"),
+            group_order=group_order,
         )
         endpoint_sets = (
             ("fig6_lowrank_endpoints", cls.FIG6_PANELS),
             ("fig7_residual_spectrum_endpoints", cls.FIG7_PANELS),
         )
         sources = (
-            ("joint_acq", points, "full"),
-            ("per_beat_acq", pb_points, "full"),
-            ("per_beat_beats", beat_level, "effect_only"),
+            ("joint_acq", points),
+            ("per_beat_acq", pb_points),
+            ("per_beat_beats", beat_level),
         )
         for stem, panels in endpoint_sets:
-            for suffix, frame, annotate in sources:
+            for suffix, frame in sources:
                 if not _has_endpoint_dots(frame, panels):
                     continue
-                written.append(
-                    cls._plot_endpoint_grid(
-                        frame,
-                        panels,
-                        _out(f"{stem}_{suffix}.png"),
-                        group_order,
-                        annotate=annotate,
-                    )
+                _keep(
+                    f"{stem}_{suffix}",
+                    cls._plot_endpoint_grid,
+                    df=frame,
+                    panels=panels,
+                    out_path=_out(f"{stem}_{suffix}.png"),
+                    group_order=group_order,
                 )
 
         spectra = (
@@ -1738,14 +1747,14 @@ class LowRankWaveformCohortFigures:
                     continue
             elif not _has_spectrum_modes(frame):
                 continue
-            written.append(
-                cls._save_spectrum(
-                    _out(f"fig4_variance_fraction_{suffix}.png"),
-                    frame,
-                    cumulative=False,
-                    group_order=group_order,
-                    band=band,
-                )
+            _keep(
+                f"fig4_variance_fraction_{suffix}",
+                cls._save_spectrum,
+                out_path=_out(f"fig4_variance_fraction_{suffix}.png"),
+                frame=frame,
+                cumulative=False,
+                group_order=group_order,
+                band=band,
             )
         return written
 
@@ -1762,14 +1771,12 @@ class LowRankWaveformCohortFigures:
         df: pd.DataFrame,
         metric: str,
         group_order: list[str],
-        *,
-        annotate: str = "full",
     ) -> None:
         """One endpoint panel: jittered dots, median±SD, pooled p/δ label.
 
-        ``annotate="effect_only"`` prints Cliff's delta without a p value,
-        for grids whose dots are beats: beats from one acquisition are not
-        independent, so a beat-level p value would be pseudo-replicated.
+        Beat-level grids annotate the same way. Their p value describes the
+        plotted beat distributions, which are not independent observations,
+        so it is a display statistic; Table I stays acquisition-level.
         """
         protocol = infer_cohort_protocol(group_order)
         display_labels = list(protocol.group_labels)
@@ -1834,11 +1841,7 @@ class LowRankWaveformCohortFigures:
             all_vals = df[metric].to_numpy(dtype=float)
             if np.isfinite(all_vals).any():
                 p, delta = _protocol_contrast_test(df, metric, protocol)
-                label = (
-                    _format_delta(delta)
-                    if annotate == "effect_only"
-                    else f"{_format_p(p)}\n{_format_delta(delta)}"
-                )
+                label = f"{_format_p(p)}\n{_format_delta(delta)}"
                 bounds = [
                     float(np.nanmin(all_vals)),
                     float(np.nanmax(all_vals)),
@@ -1872,8 +1875,6 @@ class LowRankWaveformCohortFigures:
         panels: tuple[tuple[str, str], ...],
         out_path: Path,
         group_order: list[str],
-        *,
-        annotate: str = "full",
     ) -> Path:
         """Write a 1×N PNG of endpoint panels for one vessel/signal source."""
         out_path = Path(out_path)
@@ -1887,7 +1888,7 @@ class LowRankWaveformCohortFigures:
         )
         for col_idx, (metric, title) in enumerate(panels):
             ax = axes[0, col_idx]
-            cls._draw_epoch_panel(ax, df, metric, group_order, annotate=annotate)
+            cls._draw_epoch_panel(ax, df, metric, group_order)
             ax.set_box_aspect(1)
             ax.set_title(title, fontsize=11)
             if col_idx == 0:

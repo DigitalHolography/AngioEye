@@ -139,6 +139,42 @@ def aggregate_rho(R_b: np.ndarray, R0_b: np.ndarray, stat: str) -> float:
     return float(r / (t + 1e-12))
 
 
+def safe_figure(name: str, plotter, /, **kwargs) -> Path | None:
+    """Run one figure call, converting a failure into a warning.
+
+    A batch run covers many acquisitions, vessels, and signals. Without
+    isolation, one unplottable source (an absent mode, an empty velocity
+    trace) raises and silently costs every later figure of that
+    acquisition, which looks like whole vessels or epochs going missing.
+    Any open figure is closed so a partial draw cannot leak.
+    """
+    try:
+        return plotter(**kwargs)
+    except Exception as exc:  # one bad source must not stop the batch
+        plt.close("all")
+        warnings.warn(
+            f"low-rank figure {name!r} could not be drawn: "
+            f"{type(exc).__name__}: {exc}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return None
+
+
+def _finite_min(values: np.ndarray) -> float:
+    """Smallest finite value, or NaN when there is none."""
+    x = np.asarray(values, dtype=float).reshape(-1)
+    x = x[np.isfinite(x)]
+    return float(x.min()) if x.size else float("nan")
+
+
+def _finite_max(values: np.ndarray) -> float:
+    """Largest finite value, or NaN when there is none."""
+    x = np.asarray(values, dtype=float).reshape(-1)
+    x = x[np.isfinite(x)]
+    return float(x.max()) if x.size else float("nan")
+
+
 def finite_std(values: np.ndarray, *, ddof: int = 1) -> float:
     """Sample SD of finite values; 0 when fewer than two samples."""
     x = np.asarray(values, dtype=float).reshape(-1)
@@ -1106,9 +1142,19 @@ def write_acquisition_figures(
     written: list[Path] = []
     for vessel in ALL_VESSELS:
         for signal in SIGNALS:
-            data = load_vessel_data_from_result_h5(
-                source_h5_path, vessel, signal=signal
-            )
+            try:
+                data = load_vessel_data_from_result_h5(
+                    source_h5_path, vessel, signal=signal
+                )
+            except Exception as exc:  # keep the other sources plottable
+                warnings.warn(
+                    f"low-rank metrics for {vessel}/{signal} could not be "
+                    f"read from {source_h5_path.name}: "
+                    f"{type(exc).__name__}: {exc}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                continue
             if data is None:
                 continue
             written.extend(
@@ -1388,17 +1434,19 @@ class LowRankWaveformAcquisitionFigures:
         vessels = tuple(vessels or enabled_vessels(bool(veins_flag)))
         written: list[Path] = []
 
-        def _keep(path: Path | None) -> None:
+        def _keep(name: str, plotter, /, **kwargs) -> None:
+            """Draw one figure; never let its failure hide the others."""
+            path = safe_figure(name, plotter, **kwargs)
             if path is not None:
                 written.append(path)
 
         _keep(
-            cls.plot_frequency_velocity(
-                h5_path,
-                out_dir / f"{stem}_fig2_frequency_velocity.png",
-                signal=signal,
-                vessels=vessels,
-            )
+            "fig2_frequency_velocity",
+            cls.plot_frequency_velocity,
+            h5_path=h5_path,
+            out_path=out_dir / f"{stem}_fig2_frequency_velocity.png",
+            signal=signal,
+            vessels=vessels,
         )
         fig3_variants = (
             ("joint_acq", "joint", "beat_location"),
@@ -1407,14 +1455,16 @@ class LowRankWaveformAcquisitionFigures:
         )
         for suffix, method, variability in fig3_variants:
             _keep(
-                cls.plot_waveform_decomposition(
-                    h5_path,
-                    out_dir / f"{stem}_fig3_waveform_decomposition_{suffix}.png",
-                    signal=signal,
-                    vessels=vessels,
-                    svd_method=method,
-                    variability_method=variability,
-                )
+                f"fig3_waveform_decomposition_{suffix}",
+                cls.plot_waveform_decomposition,
+                h5_path=h5_path,
+                out_path=(
+                    out_dir / f"{stem}_fig3_waveform_decomposition_{suffix}.png"
+                ),
+                signal=signal,
+                vessels=vessels,
+                svd_method=method,
+                variability_method=variability,
             )
         fig4_variants = (
             ("joint_acq", "joint", True),
@@ -1423,15 +1473,15 @@ class LowRankWaveformAcquisitionFigures:
         )
         for suffix, method, band in fig4_variants:
             _keep(
-                cls.plot_energy_spectrum(
-                    vessel_bundle,
-                    out_dir / f"{stem}_fig4_energy_spectrum_{suffix}.png",
-                    vessels=vessels,
-                    svd_method=method,
-                    h5_path=h5_path,
-                    signal=signal,
-                    band=band,
-                )
+                f"fig4_energy_spectrum_{suffix}",
+                cls.plot_energy_spectrum,
+                vessel_bundle=vessel_bundle,
+                out_path=out_dir / f"{stem}_fig4_energy_spectrum_{suffix}.png",
+                vessels=vessels,
+                svd_method=method,
+                h5_path=h5_path,
+                signal=signal,
+                band=band,
             )
         return written
 
@@ -1590,8 +1640,10 @@ class LowRankWaveformAcquisitionFigures:
                             capthick=0.8,
                             zorder=2,
                         )
-                    t0, t1 = float(t_s[0]), float(t_s[-1])
-                    pad = cls.FIG2_X_PAD_FRAC * (t1 - t0 if t1 > t0 else 1.0)
+                    t0, t1 = _finite_min(t_s), _finite_max(t_s)
+                    if not (np.isfinite(t0) and np.isfinite(t1) and t1 > t0):
+                        t0, t1 = 0.0, 1.0
+                    pad = cls.FIG2_X_PAD_FRAC * (t1 - t0)
                     ax.set_xlim(t0 - pad, t1 + pad)
                     if np.isfinite(dt_s) and dt_s > 0:
                         ax.xaxis.set_major_locator(MultipleLocator(0.5))
@@ -1672,10 +1724,17 @@ class LowRankWaveformAcquisitionFigures:
 
     @staticmethod
     def _panel_ylim(summary: dict, key: str) -> tuple[float, float]:
-        """Per-panel y-limits; centered panels are symmetric about 0."""
+        """Per-panel y-limits; centered panels are symmetric about 0.
+
+        Panels with no finite sample (an absent mode, or a source with too
+        few valid columns) fall back to a unit range: Matplotlib rejects
+        NaN/Inf limits, and one such panel must not abort the figure.
+        """
         band = summary[key]
-        lo_b = float(np.nanmin(band["lo"]))
-        hi_b = float(np.nanmax(band["hi"]))
+        lo_b = _finite_min(band["lo"])
+        hi_b = _finite_max(band["hi"])
+        if not (np.isfinite(lo_b) and np.isfinite(hi_b)):
+            return -1.0, 1.0
         if key in {"x", "a1u1", "a2u2"}:
             extent = max(abs(lo_b), abs(hi_b), 1e-12) * 1.08
             return -extent, extent
@@ -1742,8 +1801,10 @@ class LowRankWaveformAcquisitionFigures:
                     axes[row_idx, col_idx].set_visible(False)
                 continue
             t = summary["t"]
-            t0, t1 = float(t[0]), float(t[-1])
-            x_pad = cls.FIG3_X_PAD_FRAC * (t1 - t0 if t1 > t0 else 1.0)
+            t0, t1 = _finite_min(t), _finite_max(t)
+            if not (np.isfinite(t0) and np.isfinite(t1) and t1 > t0):
+                t0, t1 = 0.0, 1.0
+            x_pad = cls.FIG3_X_PAD_FRAC * (t1 - t0)
             for col_idx, (key, title) in enumerate(panel_defs):
                 ax = axes[row_idx, col_idx]
                 band = summary[key]
