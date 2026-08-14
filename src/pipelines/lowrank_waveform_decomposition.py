@@ -4,12 +4,17 @@ EyeFlow owns SVD / endpoints and writes them under
 ``Processing/Metrics/lowrank_waveform_decomposition/`` in ``*_EF.h5``.
 This module does **not** import EyeFlow or recompute decomposition: it
 ingests that group into the AngioEye result H5 and writes Figs 2--4.
-Joint SVD and per-beat SVD are always ingested together; ``veins_flag``
-selects whether venous products are included for both. Fig. 2 has no SVD.
-Fig. 3 is written for joint SVD and again with a ``_pb`` suffix for
-per-beat SVD; Fig. 4 is the joint per-mode energy spectrum (``artery/raw``
-only; no cumulative panel). Cohort Figs 4--8 and
-``lowrank_cohort.h5`` live in ``postprocess.lowrank_waveform_cohort``.
+Joint SVD and per-beat SVD are always ingested together. Figures are
+written per vessel and signal source into ``<png dir>/<vessel>/<signal>/``
+for every source EyeFlow packed (artery/vein x bandlimited/raw).
+
+Fig. 2 has no SVD. Figs. 3--4 carry a ``<basis>_<observation level>``
+suffix -- ``joint_acq``, ``per_beat_acq``, ``per_beat_beats`` -- where the
+basis is how the temporal modes were fit and the observation level is what
+one summarized value represents. ``joint_beat`` is not canonical: a joint
+basis is fit across the whole acquisition, so it has no beat-level row.
+Cohort Figs. 4--7 and ``lowrank_cohort.h5`` live in
+``postprocess.lowrank_waveform_cohort``.
 """
 
 from __future__ import annotations
@@ -45,11 +50,20 @@ from .core.base import (
 T_INPUT = "Processing/VelocityPerBeat/BeatPeriodSeconds/value"
 
 FIGURE_VESSELS = ("artery",)
+ALL_VESSELS = ("artery", "vein")
 PIPELINE_NAME = "lowrank_waveform_decomposition"
 
 COHORT_SIGNAL = "raw"
+SIGNALS = ("bandlimited", "raw")
 SVD_METHODS = ("joint", "per_beat")
 DEFAULT_SVD_METHOD = "joint"
+
+# EyeFlow velocity node name for each low-rank signal source.
+VELOCITY_SIGNAL_NODES = {"raw": "Raw", "bandlimited": "BandLimited"}
+
+# Figure suffix = <SVD basis>_<observation level>. ``joint_beat`` is not
+# canonical: a joint basis is fit per acquisition, so it has no beat rows.
+FIGURE_VARIANTS = ("joint_acq", "per_beat_acq", "per_beat_beats")
 
 EYEFLOW_LOWRANK_GROUP_CANDIDATES = (
     "Processing/Metrics/lowrank_waveform_decomposition",
@@ -534,13 +548,21 @@ def _fig2_payload_from_source(source: h5py.Group) -> dict[str, np.ndarray] | Non
     return {"t": t[:n], "mean": mean[:n], "std": std[:n]}
 
 
-def _fig3_payload_from_source(source: h5py.Group, method: str) -> dict | None:
-    """Official Fig. 3 payload from joint or per-beat figure storage."""
+def _fig3_payload_from_source(
+    source: h5py.Group, method: str, *, beats_band: bool = False
+) -> dict | None:
+    """Official Fig. 3 payload from joint or per-beat figure storage.
+
+    ``beats_band`` selects the ``*_beats`` group whose gray band spans
+    beats rather than all beat-location columns.
+    """
     name = (
         "fig3_waveform_decomposition_pb"
         if normalize_svd_method(method) == "per_beat"
         else "fig3_waveform_decomposition"
     )
+    if beats_band:
+        name += "_beats"
     group = _figure_group(source, name)
     t = _dataset_vector(group, "t")
     if t is None:
@@ -655,6 +677,7 @@ def load_figure3_payload(
     signal: str = COHORT_SIGNAL,
     *,
     svd_method: str = DEFAULT_SVD_METHOD,
+    beats_band: bool = False,
 ) -> dict | None:
     """Load official EyeFlow Fig. 3 storage for one vessel/SVD method."""
     method = normalize_svd_method(svd_method)
@@ -662,7 +685,9 @@ def load_figure3_payload(
         h5_path,
         vessel,
         signal,
-        lambda source: _fig3_payload_from_source(source, method),
+        lambda source: _fig3_payload_from_source(
+            source, method, beats_band=beats_band
+        ),
     )
 
 
@@ -1066,28 +1091,37 @@ def write_acquisition_figures(
 ) -> list[Path]:
     """Write Figs 2--4 beside the result H5 from packed EyeFlow low-rank metrics.
 
-    Figs 3--4 are also written with a ``_pb`` suffix when ``per_beat/``
-    contains beat-local modes or singular values.
+    One figure set per vessel and signal source, written to
+    ``<png dir>/<vessel>/<signal>/``. Figures follow the packed metrics
+    rather than ``veins_flag``: every source EyeFlow wrote is plotted, so
+    venous figures appear whenever venous metrics exist.
     """
+    del veins_flag  # figures follow the packed sources, not the ingest flag
     source_h5_path = Path(source_h5_path)
     output_h5_path = Path(output_h5_path)
-    bundle = load_acquisition_from_result_h5(
-        source_h5_path,
-        veins_flag=bool(veins_flag),
-        signal="raw",
-    )
-    if bundle is None:
+    if not result_h5_has_lowrank(source_h5_path):
         return []
     png_dir = companion_png_dir_for_result(output_h5_path)
     stem = acquisition_fig_stem(output_h5_path, source_h5_path)
-    return LowRankWaveformAcquisitionFigures.plot_all(
-        source_h5_path,
-        bundle,
-        png_dir,
-        file_stem=stem,
-        signal="raw",
-        veins_flag=bool(veins_flag),
-    )
+    written: list[Path] = []
+    for vessel in ALL_VESSELS:
+        for signal in SIGNALS:
+            data = load_vessel_data_from_result_h5(
+                source_h5_path, vessel, signal=signal
+            )
+            if data is None:
+                continue
+            written.extend(
+                LowRankWaveformAcquisitionFigures.plot_all(
+                    source_h5_path,
+                    {vessel: data},
+                    png_dir / vessel / signal,
+                    file_stem=stem,
+                    signal=signal,
+                    vessels=(vessel,),
+                )
+            )
+    return written
 
 
 # =====================================================================
@@ -1112,7 +1146,9 @@ class LowRankWaveformIngest(ProcessPipeline):
         "already run lowrank_waveform_decomposition on the input."
     )
 
-    veins_flag = False
+    # EyeFlow now packs arterial and venous sources for every acquisition,
+    # so both are ingested and plotted by default.
+    veins_flag = True
 
     def run(self, h5file) -> ProcessResult:
         """Copy EyeFlow-packed low-rank metrics into an AngioEye ProcessResult."""
@@ -1283,26 +1319,26 @@ class LowRankWaveformAcquisitionFigures:
     one-cycle ``figures/fig2_frequency_velocity`` summary.
     """
 
-    SEGMENT_VELOCITY_CANDIDATES = {
-        "artery": (
-            "Processing/Velocity/segments/Artery/Raw/value",
-            "EyeFlow/Processing/Velocity/segments/Artery/Raw/value",
-        ),
-        "vein": (
-            "Processing/Velocity/segments/Vein/Raw/value",
-            "EyeFlow/Processing/Velocity/segments/Vein/Raw/value",
-        ),
-    }
-    GLOBAL_VELOCITY_CANDIDATES = {
-        "artery": (
-            "Processing/Velocity/global/Artery/Raw/value",
-            "EyeFlow/Processing/Velocity/global/Artery/Raw/value",
-        ),
-        "vein": (
-            "Processing/Velocity/global/Vein/Raw/value",
-            "EyeFlow/Processing/Velocity/global/Vein/Raw/value",
-        ),
-    }
+    VESSEL_VELOCITY_NODES = {"artery": "Artery", "vein": "Vein"}
+
+    @classmethod
+    def _velocity_candidates(cls, kind: str, vessel: str, signal: str) -> tuple[str, ...]:
+        """EyeFlow velocity paths for one ``segments``/``global`` source.
+
+        Falls back to the raw node when the signal has no dedicated
+        velocity trace, so Fig. 2 still renders.
+        """
+        vessel_node = cls.VESSEL_VELOCITY_NODES.get(str(vessel).lower())
+        if vessel_node is None:
+            return ()
+        nodes = [VELOCITY_SIGNAL_NODES.get(str(signal).lower(), "Raw")]
+        if "Raw" not in nodes:
+            nodes.append("Raw")
+        return tuple(
+            f"{prefix}Processing/Velocity/{kind}/{vessel_node}/{node}/value"
+            for node in nodes
+            for prefix in ("", "EyeFlow/")
+        )
     FIG2_ASPECT = 3.0
     FIG2_HEIGHT = 2.8
     FIG2_WHISKER_INTERVAL_S = 0.1
@@ -1334,65 +1370,69 @@ class LowRankWaveformAcquisitionFigures:
         signal: str = "raw",
         file_stem: str | None = None,
         veins_flag: bool = False,
+        vessels: tuple[str, ...] | None = None,
     ) -> list[Path]:
-        """Write Figs. 2--4 into ``out_dir`` from packed low-rank metrics.
+        """Write the Fig. 2--4 set for one vessel/signal into ``out_dir``.
 
-        Fig. 2 has no SVD. Figs. 3--4 are written for joint SVD and again
-        with a ``_pb`` suffix for per-beat SVD.
-        ``veins_flag`` adds a venous row to every figure.
+        Fig. 2 has no SVD. Figs. 3--4 carry a ``<basis>_<observation level>``
+        suffix: ``joint_acq`` (one acquisition-wide basis), ``per_beat_acq``
+        (beat-local bases summarized to the acquisition), and
+        ``per_beat_beats`` (beat-local bases kept at beat level, so the band
+        spans beats). ``joint_beat`` is not canonical and is not written.
+        Variants whose packed payload is absent are skipped.
         """
         h5_path = Path(h5_path)
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         stem = file_stem or h5_path.stem
-        vessels = enabled_vessels(bool(veins_flag))
+        vessels = tuple(vessels or enabled_vessels(bool(veins_flag)))
         written: list[Path] = []
-        fig2 = cls.plot_frequency_velocity(
-            h5_path,
-            out_dir / f"{stem}_fig2_frequency_velocity.png",
-            signal=signal,
-            vessels=vessels,
+
+        def _keep(path: Path | None) -> None:
+            if path is not None:
+                written.append(path)
+
+        _keep(
+            cls.plot_frequency_velocity(
+                h5_path,
+                out_dir / f"{stem}_fig2_frequency_velocity.png",
+                signal=signal,
+                vessels=vessels,
+            )
         )
-        if fig2 is not None:
-            written.append(fig2)
-        fig3 = cls.plot_waveform_decomposition(
-            h5_path,
-            out_dir / f"{stem}_fig3_waveform_decomposition.png",
-            signal=signal,
-            vessels=vessels,
-            svd_method="joint",
+        fig3_variants = (
+            ("joint_acq", "joint", "beat_location"),
+            ("per_beat_acq", "per_beat", "beat_location"),
+            ("per_beat_beats", "per_beat", "beat"),
         )
-        if fig3 is not None:
-            written.append(fig3)
-        fig3_pb = cls.plot_waveform_decomposition(
-            h5_path,
-            out_dir / f"{stem}_fig3_waveform_decomposition_pb.png",
-            signal=signal,
-            vessels=vessels,
-            svd_method="per_beat",
+        for suffix, method, variability in fig3_variants:
+            _keep(
+                cls.plot_waveform_decomposition(
+                    h5_path,
+                    out_dir / f"{stem}_fig3_waveform_decomposition_{suffix}.png",
+                    signal=signal,
+                    vessels=vessels,
+                    svd_method=method,
+                    variability_method=variability,
+                )
+            )
+        fig4_variants = (
+            ("joint_acq", "joint", True),
+            ("per_beat_acq", "per_beat", False),
+            ("per_beat_beats", "per_beat", True),
         )
-        if fig3_pb is not None:
-            written.append(fig3_pb)
-        fig4 = cls.plot_energy_spectrum(
-            vessel_bundle,
-            out_dir / f"{stem}_fig4_energy_spectrum.png",
-            vessels=vessels,
-            svd_method="joint",
-            h5_path=h5_path,
-            signal=signal,
-        )
-        if fig4 is not None:
-            written.append(fig4)
-        fig4_pb = cls.plot_energy_spectrum(
-            vessel_bundle,
-            out_dir / f"{stem}_fig4_energy_spectrum_pb.png",
-            vessels=vessels,
-            svd_method="per_beat",
-            h5_path=h5_path,
-            signal=signal,
-        )
-        if fig4_pb is not None:
-            written.append(fig4_pb)
+        for suffix, method, band in fig4_variants:
+            _keep(
+                cls.plot_energy_spectrum(
+                    vessel_bundle,
+                    out_dir / f"{stem}_fig4_energy_spectrum_{suffix}.png",
+                    vessels=vessels,
+                    svd_method=method,
+                    h5_path=h5_path,
+                    signal=signal,
+                    band=band,
+                )
+            )
         return written
 
     @staticmethod
@@ -1449,10 +1489,10 @@ class LowRankWaveformAcquisitionFigures:
         packed beat-aligned ``v``. Ignores the one-cycle figure payload.
         """
         seg_path = find_first_existing_path(
-            h5, list(cls.SEGMENT_VELOCITY_CANDIDATES.get(vessel, ()))
+            h5, list(cls._velocity_candidates("segments", vessel, signal))
         )
         glob_path = find_first_existing_path(
-            h5, list(cls.GLOBAL_VELOCITY_CANDIDATES.get(vessel, ()))
+            h5, list(cls._velocity_candidates("global", vessel, signal))
         )
         dt_s = cls._velocity_dt_seconds(h5)
         if seg_path is not None:
@@ -1587,8 +1627,13 @@ class LowRankWaveformAcquisitionFigures:
         svd_method: str = DEFAULT_SVD_METHOD,
     ) -> dict[str, dict[str, np.ndarray]] | None:
         """Build Fig. 3 curves for one vessel and gray-band definition."""
+        beats_band = normalize_figure3_variability_method(variability_method) == "beat"
         payload = load_figure3_payload(
-            h5_path, vessel, signal=signal, svd_method=svd_method
+            h5_path,
+            vessel,
+            signal=signal,
+            svd_method=svd_method,
+            beats_band=beats_band,
         )
         if payload is not None:
             return payload
@@ -1776,6 +1821,7 @@ class LowRankWaveformAcquisitionFigures:
         spectra: np.ndarray,
         *,
         cumulative: bool,
+        band: bool = True,
     ) -> None:
         """Plot mean ± SD of per-beat spectra; optionally as a running sum."""
         vals = np.asarray(spectra, dtype=float)
@@ -1789,7 +1835,8 @@ class LowRankWaveformAcquisitionFigures:
         if not cumulative:
             lo = np.maximum(lo, np.where(mean > 0, mean * 1e-6, 1e-12))
         cls._draw_spectrum_curve(ax, x, mean)
-        ax.fill_between(x, lo, hi, color="black", alpha=0.12, linewidth=0)
+        if band:
+            ax.fill_between(x, lo, hi, color="black", alpha=0.12, linewidth=0)
 
     @classmethod
     def _style_spectrum_panel(
@@ -1820,8 +1867,13 @@ class LowRankWaveformAcquisitionFigures:
         svd_method: str = "joint",
         h5_path: Path | str | None = None,
         signal: str = "raw",
+        band: bool = True,
     ) -> Path | None:
-        """Fig. 4: singular values vs mode index for one SVD method."""
+        """Fig. 4: singular values vs mode index for one SVD method.
+
+        ``band=False`` draws the curve alone, for the per-beat spectrum
+        summarized to one acquisition-level observation.
+        """
         return cls._save_energy_spectrum_figure(
             vessel_bundle,
             out_path,
@@ -1830,28 +1882,7 @@ class LowRankWaveformAcquisitionFigures:
             svd_method=svd_method,
             h5_path=h5_path,
             signal=signal,
-        )
-
-    @classmethod
-    def plot_energy_spectrum_cumulative(
-        cls,
-        vessel_bundle: dict[str, dict | None],
-        out_path: Path,
-        *,
-        vessels: tuple[str, ...] | None = None,
-        svd_method: str = "joint",
-        h5_path: Path | str | None = None,
-        signal: str = "raw",
-    ) -> Path | None:
-        """Standalone cumulative-sum panel (same 2:1 aspect as Fig. 4)."""
-        return cls._save_energy_spectrum_figure(
-            vessel_bundle,
-            out_path,
-            cumulative=True,
-            vessels=vessels,
-            svd_method=svd_method,
-            h5_path=h5_path,
-            signal=signal,
+            band=band,
         )
 
     @classmethod
@@ -1865,6 +1896,7 @@ class LowRankWaveformAcquisitionFigures:
         svd_method: str = "joint",
         h5_path: Path | str | None = None,
         signal: str = "raw",
+        band: bool = True,
     ) -> Path | None:
         """Write Fig. 4 from joint or packed per-beat singular values."""
         out_path = Path(out_path)
@@ -1903,8 +1935,8 @@ class LowRankWaveformAcquisitionFigures:
                     mode = mode[:n_modes]
                     mean = mean[:n_modes]
                     cls._draw_spectrum_curve(ax, mode, mean)
-                    lo = np.asarray(payload.get("lo", []), dtype=float)
-                    hi = np.asarray(payload.get("hi", []), dtype=float)
+                    lo = np.asarray(payload.get("lo", []) if band else [], dtype=float)
+                    hi = np.asarray(payload.get("hi", []) if band else [], dtype=float)
                     if lo.size >= n_modes and hi.size >= n_modes:
                         ax.fill_between(
                             mode,
@@ -1919,7 +1951,7 @@ class LowRankWaveformAcquisitionFigures:
                 spectra = cls._beat_spectra(data)
                 if is_usable_beat_spectra(spectra):
                     cls._draw_spectrum_mean_std(
-                        ax, spectra[:, :n_keep], cumulative=cumulative
+                        ax, spectra[:, :n_keep], cumulative=cumulative, band=band
                     )
                     any_drawn = True
             else:

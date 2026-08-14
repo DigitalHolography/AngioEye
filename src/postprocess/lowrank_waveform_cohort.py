@@ -1,12 +1,18 @@
-"""Cohort low-rank Figs 4--8 and ``lowrank_cohort.h5`` from EyeFlow H5s.
+"""Cohort low-rank Figs. 4--7 and ``lowrank_cohort.h5`` from EyeFlow H5s.
 
-Figure names end in ``<basis>_<replication>``: ``joint_acquisition`` figures
-keep the article acquisition scalars; ``pb_acquisition`` figures use
-``median_b`` of packed per-beat SVD endpoints (ρ is
-``median_b(R)/median_b(R0)``); ``pb_beats`` bands pool beat-level variance.
-``T``, ``μ``, R0, and MPR stay joint, so Fig. 6 is basis-free.
-Fig. 4 joint and Fig. 5 ratio plots use packed joint singular values. Stats /
-confounds live in the same ``lowrank_cohort.h5``.
+Figures are written per vessel and signal source into
+``<png dir>/<vessel>/<signal>/``. SVD figure names end in
+``<basis>_<observation level>``: ``joint_acq`` keeps the article
+acquisition scalars from one acquisition-wide basis; ``per_beat_acq``
+uses ``median_b`` of packed per-beat SVD endpoints (ρ is
+``median_b(R)/median_b(R0)``), so one acquisition is still one dot;
+``per_beat_beats`` keeps beat-local values, so one beat is one dot and
+spectrum bands pool within-beat with between-acquisition variance.
+
+Fig. 4 is the singular spectrum by group, Fig. 5 the non-SVD context
+endpoints (``T``, ``μ``, R0, MPR -- basis-free, hence no suffix), Fig. 6
+the low-rank amplitudes, and Fig. 7 the residual/spectrum endpoints.
+Stats and confounds live in the same ``lowrank_cohort.h5``.
 """
 
 from __future__ import annotations
@@ -49,6 +55,9 @@ from input_output.hdf5_io import (
 )
 from input_output.hdf5_schema import ANGIOEYE_POSTPROCESS_ROOT
 from pipelines.lowrank_waveform_decomposition import (
+    ALL_VESSELS,
+    COHORT_SIGNAL,
+    SIGNALS,
     SPECTRUM_N_MODES,
     SVD_METHODS,
     aggregate_beatwise,
@@ -1641,108 +1650,104 @@ class LowRankWaveformCohortFigures:
         patient_id: str | None = None,
         beats_by_vessel: dict[str, pd.DataFrame] | None = None,
         points_by_vessel_per_beat: dict[str, pd.DataFrame] | None = None,
+        signal: str = COHORT_SIGNAL,
     ) -> list[Path]:
-        """Write Figs. 4--8 for the artery cohort.
+        """Write the cohort figure set for every vessel into ``out_dir``.
 
-        Figure names carry a ``<basis>_<replication>`` suffix: ``joint`` or
-        ``pb`` for the SVD basis, then ``acquisition`` or ``beats`` for the
-        axis the gray band (or dot set) spans. Fig. 6 shows non-SVD
-        endpoints, is identical under either basis, and keeps a plain name.
+        Each vessel/signal source gets its own ``<out_dir>/<vessel>/<signal>/``
+        folder. SVD figures carry a ``<basis>_<observation level>`` suffix:
+        ``joint_acq``, ``per_beat_acq``, or ``per_beat_beats``. Fig. 5 holds
+        the non-SVD context endpoints (T, mu, R0, MPR), which are basis-free
+        and therefore have no suffix.
         """
         out_dir = Path(out_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        protocol = infer_cohort_protocol(group_order)
-        grids = (
-            ("fig6_nonsvd_endpoints.png", cls.FIG5_PANELS),
-            ("fig7_lowrank_endpoints_joint_acquisition.png", cls.FIG6_PANELS),
-            (
-                "fig8_residual_spectrum_endpoints_joint_acquisition.png",
-                cls.FIG7_PANELS,
-            ),
-        )
-        written = [
-            cls._plot_endpoint_grid(
-                points_by_vessel,
-                panels,
-                out_dir / prefixed_filename(name, patient_id),
-                group_order,
-            )
-            for name, panels in grids
-        ]
-        pb_points = points_by_vessel_per_beat or {}
-        if _has_per_beat_endpoint_dots(pb_points):
-            pb_grids = (
-                ("fig7_lowrank_endpoints_pb_acquisition.png", cls.FIG6_PANELS),
-                (
-                    "fig8_residual_spectrum_endpoints_pb_acquisition.png",
-                    cls.FIG7_PANELS,
-                ),
-            )
+        written: list[Path] = []
+        for vessel, points in (points_by_vessel or {}).items():
+            if points is None or points.empty:
+                continue
             written.extend(
-                cls._plot_endpoint_grid(
-                    pb_points,
-                    panels,
-                    out_dir / prefixed_filename(name, patient_id),
+                cls._plot_vessel_figures(
+                    out_dir / vessel / signal,
+                    points,
+                    (points_by_vessel_per_beat or {}).get(vessel),
+                    (beats_by_vessel or {}).get(vessel),
                     group_order,
-                )
-                for name, panels in pb_grids
-            )
-        if _has_spectrum_modes(points_by_vessel.get("artery", pd.DataFrame())):
-            written.append(
-                cls._save_spectrum(
-                    out_dir
-                    / prefixed_filename(
-                        "fig4_variance_fraction_joint_acquisition.png", patient_id
-                    ),
-                    points_by_vessel,
-                    cumulative=False,
-                    group_order=group_order,
+                    patient_id=patient_id,
                 )
             )
-            if protocol.contrast_available:
+        return sorted(written, key=lambda path: str(path))
+
+    @classmethod
+    def _plot_vessel_figures(
+        cls,
+        out_dir: Path,
+        points: pd.DataFrame,
+        pb_points: pd.DataFrame | None,
+        beats: pd.DataFrame | None,
+        group_order: list[str],
+        *,
+        patient_id: str | None = None,
+    ) -> list[Path]:
+        """Figs. 4--7 for one vessel/signal source."""
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        pb_points = pd.DataFrame() if pb_points is None else pb_points
+        beats = pd.DataFrame() if beats is None else beats
+        beat_level = _beat_level_endpoint_frame(beats)
+        written: list[Path] = []
+
+        def _out(name: str) -> Path:
+            return out_dir / prefixed_filename(name, patient_id)
+
+        written.append(
+            cls._plot_endpoint_grid(
+                points, cls.FIG5_PANELS, _out("fig5_nonsvd_endpoints.png"), group_order
+            )
+        )
+        endpoint_sets = (
+            ("fig6_lowrank_endpoints", cls.FIG6_PANELS),
+            ("fig7_residual_spectrum_endpoints", cls.FIG7_PANELS),
+        )
+        sources = (
+            ("joint_acq", points, "full"),
+            ("per_beat_acq", pb_points, "full"),
+            ("per_beat_beats", beat_level, "effect_only"),
+        )
+        for stem, panels in endpoint_sets:
+            for suffix, frame, annotate in sources:
+                if not _has_endpoint_dots(frame, panels):
+                    continue
                 written.append(
-                    cls._save_spectrum_ratio(
-                        out_dir
-                        / prefixed_filename(
-                            "fig5_spectrum_ratio_joint_acquisition.png", patient_id
-                        ),
-                        points_by_vessel,
-                        cumulative=False,
-                        group_order=group_order,
+                    cls._plot_endpoint_grid(
+                        frame,
+                        panels,
+                        _out(f"{stem}_{suffix}.png"),
+                        group_order,
+                        annotate=annotate,
                     )
                 )
-        beats = beats_by_vessel or {}
-        pb_spectrum_source = (
-            pb_points
-            if _has_spectrum_modes(pb_points.get("artery", pd.DataFrame()))
-            else beats
+
+        spectra = (
+            ("joint_acq", points, "acquisitions"),
+            ("per_beat_acq", pb_points, "acquisitions"),
+            ("per_beat_beats", pb_points, "beats"),
         )
-        if _has_spectrum_modes(pb_spectrum_source.get("artery", pd.DataFrame())):
+        for suffix, frame, band in spectra:
+            if band == "beats":
+                if not _has_spectrum_beat_spread(frame):
+                    continue
+            elif not _has_spectrum_modes(frame):
+                continue
             written.append(
                 cls._save_spectrum(
-                    out_dir
-                    / prefixed_filename(
-                        "fig4_variance_fraction_pb_acquisition.png", patient_id
-                    ),
-                    pb_spectrum_source,
+                    _out(f"fig4_variance_fraction_{suffix}.png"),
+                    frame,
                     cumulative=False,
                     group_order=group_order,
+                    band=band,
                 )
             )
-        if _has_spectrum_beat_spread(pb_points.get("artery", pd.DataFrame())):
-            written.append(
-                cls._save_spectrum(
-                    out_dir
-                    / prefixed_filename(
-                        "fig4_variance_fraction_pb_beats.png", patient_id
-                    ),
-                    pb_points,
-                    cumulative=False,
-                    group_order=group_order,
-                    band="beats",
-                )
-            )
-        return sorted(written, key=lambda path: path.name)
+        return written
 
     @staticmethod
     def _style_axes(ax, *, tick_size: int = 9) -> None:
@@ -1752,9 +1757,20 @@ class LowRankWaveformCohortFigures:
 
     @classmethod
     def _draw_epoch_panel(
-        cls, ax, df: pd.DataFrame, metric: str, group_order: list[str]
+        cls,
+        ax,
+        df: pd.DataFrame,
+        metric: str,
+        group_order: list[str],
+        *,
+        annotate: str = "full",
     ) -> None:
-        """One endpoint panel: jittered dots, median±SD, pooled p/δ label."""
+        """One endpoint panel: jittered dots, median±SD, pooled p/δ label.
+
+        ``annotate="effect_only"`` prints Cliff's delta without a p value,
+        for grids whose dots are beats: beats from one acquisition are not
+        independent, so a beat-level p value would be pseudo-replicated.
+        """
         protocol = infer_cohort_protocol(group_order)
         display_labels = list(protocol.group_labels)
         if protocol.contrast_available:
@@ -1818,6 +1834,11 @@ class LowRankWaveformCohortFigures:
             all_vals = df[metric].to_numpy(dtype=float)
             if np.isfinite(all_vals).any():
                 p, delta = _protocol_contrast_test(df, metric, protocol)
+                label = (
+                    _format_delta(delta)
+                    if annotate == "effect_only"
+                    else f"{_format_p(p)}\n{_format_delta(delta)}"
+                )
                 bounds = [
                     float(np.nanmin(all_vals)),
                     float(np.nanmax(all_vals)),
@@ -1829,7 +1850,7 @@ class LowRankWaveformCohortFigures:
                 ax.text(
                     0.03,
                     0.97,
-                    f"{_format_p(p)}\n{_format_delta(delta)}",
+                    label,
                     transform=ax.transAxes,
                     ha="left",
                     va="top",
@@ -1847,14 +1868,16 @@ class LowRankWaveformCohortFigures:
     @classmethod
     def _plot_endpoint_grid(
         cls,
-        points_by_vessel: dict[str, pd.DataFrame],
+        df: pd.DataFrame,
         panels: tuple[tuple[str, str], ...],
         out_path: Path,
         group_order: list[str],
+        *,
+        annotate: str = "full",
     ) -> Path:
-        """Write a 1×N PNG of arterial endpoint panels."""
+        """Write a 1×N PNG of endpoint panels for one vessel/signal source."""
         out_path = Path(out_path)
-        df = points_by_vessel.get("artery", pd.DataFrame())
+        df = pd.DataFrame() if df is None else df
         n_cols = len(panels)
         fig, axes = plt.subplots(
             1,
@@ -1864,7 +1887,7 @@ class LowRankWaveformCohortFigures:
         )
         for col_idx, (metric, title) in enumerate(panels):
             ax = axes[0, col_idx]
-            cls._draw_epoch_panel(ax, df, metric, group_order)
+            cls._draw_epoch_panel(ax, df, metric, group_order, annotate=annotate)
             ax.set_box_aspect(1)
             ax.set_title(title, fontsize=11)
             if col_idx == 0:
@@ -1999,7 +2022,7 @@ class LowRankWaveformCohortFigures:
     def _save_spectrum(
         cls,
         out_path: Path,
-        frames_by_vessel: dict[str, pd.DataFrame] | None,
+        frame: pd.DataFrame | None,
         *,
         cumulative: bool,
         group_order: list[str] | None = None,
@@ -2007,16 +2030,14 @@ class LowRankWaveformCohortFigures:
     ) -> Path:
         """Write the per-mode or cumulative λ spectrum PNG.
 
-        ``band="acquisitions"`` shades ± 1 SD across the rows of
-        ``frames_by_vessel`` (acquisitions or beats, whichever was passed);
+        ``band="acquisitions"`` shades ± 1 SD across the rows of ``frame``;
         ``band="beats"`` shades the total across-beats SD pooled from the
         packed ``mode{m}_sd`` columns (non-cumulative only).
         """
         out_path = Path(out_path)
-        frames = frames_by_vessel or {}
-        artery = frames.get("artery", pd.DataFrame())
-        mode_cols = _spectrum_mode_cols(artery)
-        df = artery if (not artery.empty and mode_cols) else pd.DataFrame()
+        frame = pd.DataFrame() if frame is None else frame
+        mode_cols = _spectrum_mode_cols(frame)
+        df = frame if (not frame.empty and mode_cols) else pd.DataFrame()
 
         fig_h = 3.0
         fig, axes = plt.subplots(1, 1, figsize=(2.0 * fig_h, fig_h), squeeze=False)
@@ -2063,104 +2084,6 @@ class LowRankWaveformCohortFigures:
         plt.close(fig)
         return out_path
 
-    @staticmethod
-    def _spectrum_ratio_values(
-        df: pd.DataFrame,
-        mode_cols: list[str],
-        *,
-        cumulative: bool,
-        group_order: list[str] | None = None,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Return modes and percent flicker/baseline spectrum change."""
-        modes = np.arange(1, len(mode_cols) + 1)
-        if df.empty or not mode_cols or not ({"epoch", "group"} & set(df.columns)):
-            return modes, np.full(len(mode_cols), np.nan, dtype=float)
-        identity = df["group"] if "group" in df.columns else df["epoch"]
-        groups = group_order or ordered_groups(identity)
-        protocol = infer_cohort_protocol(groups)
-        reference_mask = pd.Series(False, index=df.index, dtype=bool)
-        intervention_mask = pd.Series(False, index=df.index, dtype=bool)
-        for group in protocol.groups:
-            if group.role.startswith("reference"):
-                reference_mask |= _group_mask(df, group)
-            elif group.role.startswith("intervention"):
-                intervention_mask |= _group_mask(df, group)
-        baseline = df.loc[reference_mask, mode_cols].to_numpy(dtype=float)
-        flicker = df.loc[intervention_mask, mode_cols].to_numpy(dtype=float)
-        if baseline.size == 0 or flicker.size == 0:
-            return modes, np.full(len(mode_cols), np.nan, dtype=float)
-        with np.errstate(all="ignore"):
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", RuntimeWarning)
-                baseline_mean = np.nanmean(baseline, axis=0)
-                flicker_mean = np.nanmean(flicker, axis=0)
-        if cumulative:
-            baseline_mean = np.nancumsum(baseline_mean)
-            flicker_mean = np.nancumsum(flicker_mean)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            ratio = flicker_mean / baseline_mean
-        percent_change = 100.0 * (ratio - 1.0)
-        percent_change = np.where(np.isfinite(percent_change), percent_change, np.nan)
-        return modes, percent_change
-
-    @classmethod
-    def _save_spectrum_ratio(
-        cls,
-        out_path: Path,
-        points_by_vessel: dict[str, pd.DataFrame] | None,
-        *,
-        cumulative: bool,
-        group_order: list[str] | None = None,
-    ) -> Path:
-        """Write Fig. 5 spectrum ratio PNG from acquisition-level singular values."""
-        out_path = Path(out_path)
-        frames = points_by_vessel or {}
-        df = frames.get("artery", pd.DataFrame())
-        mode_cols = _spectrum_mode_cols(df)
-        modes, percent_change = cls._spectrum_ratio_values(
-            df,
-            mode_cols,
-            cumulative=cumulative,
-            group_order=group_order,
-        )
-
-        fig_h = 3.0
-        fig, axes = plt.subplots(1, 1, figsize=(2.0 * fig_h, fig_h), squeeze=False)
-        ax = axes[0, 0]
-        ax.axhline(0.0, color="black", linestyle=":", linewidth=1.1)
-        ax.plot(
-            modes,
-            percent_change,
-            color="black",
-            linestyle="-",
-            marker="o",
-            linewidth=1.5,
-            markersize=5,
-            markerfacecolor="white",
-            markeredgecolor="black",
-            markeredgewidth=1.2,
-        )
-
-        finite = percent_change[np.isfinite(percent_change)]
-        if finite.size:
-            extent = max(5.0, float(np.nanmax(np.abs(finite))) * 1.2)
-            ax.set_ylim(-extent, extent)
-        ax.set_xticks(np.arange(1, SPECTRUM_N_MODES + 1))
-        ax.set_xticklabels([str(m) for m in range(1, SPECTRUM_N_MODES + 1)])
-        ax.set_xlim(0.5, SPECTRUM_N_MODES + 0.5)
-        ax.set_xlabel(r"$m$", fontsize=_FIG_LABEL_SIZE)
-        ax.set_ylabel(
-            (r"$100(Q^{\mathrm{cum}}_m-1)$ (%)" if cumulative else r"$100(Q_m-1)$ (%)"),
-            fontsize=_FIG_LABEL_SIZE,
-        )
-        ax.set_box_aspect(0.5)
-        cls._style_axes(ax, tick_size=_FIG_TICK_SIZE)
-        fig.tight_layout()
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(out_path, dpi=150, bbox_inches="tight")
-        plt.close(fig)
-        return out_path
-
 
 # =====================================================================
 # Collection from packed result H5s
@@ -2195,6 +2118,33 @@ def _has_spectrum_modes(df: pd.DataFrame) -> bool:
     return bool(np.isfinite(df[cols].to_numpy(dtype=float)).any())
 
 
+def _has_endpoint_dots(df: pd.DataFrame, panels: tuple[tuple[str, str], ...]) -> bool:
+    """True when ``df`` holds a finite value for some panel metric."""
+    if df is None or df.empty:
+        return False
+    cols = [metric for metric, _title in panels if metric in df.columns]
+    if not cols:
+        return False
+    return bool(np.isfinite(df[cols].to_numpy(dtype=float)).any())
+
+
+def _beat_level_endpoint_frame(beats: pd.DataFrame) -> pd.DataFrame:
+    """Beat rows keyed by canonical endpoint names, from per-beat SVD columns.
+
+    ``_beat_rows`` stores beat-local per-beat-SVD endpoints under ``*_pb``
+    names. Renaming them onto the canonical metric names lets one beat be
+    one dot in the standard endpoint grids.
+    """
+    if beats is None or beats.empty:
+        return pd.DataFrame()
+    frame = beats.copy()
+    for metric, _endpoint in CANONICAL_ENDPOINTS:
+        pb_col = f"{metric}_pb"
+        if pb_col in frame.columns:
+            frame[metric] = frame[pb_col]
+    return frame
+
+
 def _has_spectrum_beat_spread(df: pd.DataFrame) -> bool:
     """True if ``df`` has a finite packed across-beats spectrum SD."""
     if not _has_spectrum_modes(df):
@@ -2207,19 +2157,6 @@ def _has_spectrum_beat_spread(df: pd.DataFrame) -> bool:
     if not sd_cols:
         return False
     return bool(np.isfinite(df[sd_cols].to_numpy(dtype=float)).any())
-
-
-def _has_per_beat_endpoint_dots(points_by_vessel: dict[str, pd.DataFrame]) -> bool:
-    """True if any vessel has a finite per-beat SVD acquisition endpoint."""
-    for df in points_by_vessel.values():
-        if df is None or df.empty:
-            continue
-        for metric in PER_BEAT_POINT_METRICS:
-            if metric not in df.columns:
-                continue
-            if np.isfinite(df[metric].to_numpy(dtype=float)).any():
-                return True
-    return False
 
 
 @dataclass
@@ -2450,8 +2387,14 @@ def collect_payload(
     input_root: Path,
     *,
     veins: bool = True,
+    signal: str = COHORT_SIGNAL,
 ) -> CohortCollection:
-    """Load packed result H5s into points/beats frames for figures or stats."""
+    """Load packed result H5s into points/beats frames for figures or stats.
+
+    ``signal`` picks the EyeFlow source (``raw`` or ``bandlimited``).
+    Vessels follow the packed metrics rather than ``veins``: every vessel
+    EyeFlow wrote is collected, and vessels with no rows drop out.
+    """
     input_root = Path(input_root)
     records, group_order = classify_cohort(input_h5_paths, input_root)
     if not records:
@@ -2460,7 +2403,7 @@ def collect_payload(
     protocol = infer_cohort_protocol(group_order)
     groups_by_folder = {group.folder: group for group in protocol.groups}
     group_keys = list(dict.fromkeys([*group_order, *EPOCH_ORDER]))
-    vessels = enabled_vessels(bool(veins))
+    vessels = ALL_VESSELS if veins else enabled_vessels(False)
     acqs_by_vessel = {v: {g: [] for g in group_keys} for v in vessels}
     points_rows = {v: [] for v in vessels}
     points_rows_per_beat = {v: [] for v in vessels}
@@ -2469,7 +2412,9 @@ def collect_payload(
     flat_sequence = {v: 0 for v in vessels}
 
     for group, h5_path in records:
-        data = load_acquisition_from_result_h5(h5_path, veins_flag=bool(veins))
+        data = load_acquisition_from_result_h5(
+            h5_path, veins_flag=True, signal=signal
+        )
         if data is None:
             continue
         for vessel in vessels:
@@ -2877,6 +2822,7 @@ def _run_on_paths(
         layout.h5_paths,
         layout.root,
         veins=veins,
+        signal=COHORT_SIGNAL,
     )
     if collection.patient_id is None and patient_id is not None:
         collection.patient_id = patient_id
@@ -2888,15 +2834,34 @@ def _run_on_paths(
             h5_output_dir(output_dir),
         )
     )
-    if collection.points_by_vessel:
+    # Figures cover every packed vessel/signal source; the stats H5 stays on
+    # the canonical signal so the endpoint tables keep one definition.
+    for signal in SIGNALS:
+        signal_collection = (
+            collection
+            if signal == COHORT_SIGNAL
+            else collect_payload(
+                layout.h5_paths,
+                layout.root,
+                veins=veins,
+                signal=signal,
+            )
+        )
+        if signal_collection.patient_id is None and patient_id is not None:
+            signal_collection.patient_id = patient_id
+        if not signal_collection.points_by_vessel:
+            continue
         generated_paths.extend(
             LowRankWaveformCohortFigures.plot_all(
-                collection.points_by_vessel,
+                signal_collection.points_by_vessel,
                 png_output_dir(output_dir),
-                collection.group_order,
-                patient_id=collection.patient_id,
-                beats_by_vessel=collection.beats_by_vessel,
-                points_by_vessel_per_beat=collection.points_by_vessel_per_beat,
+                signal_collection.group_order,
+                patient_id=signal_collection.patient_id,
+                beats_by_vessel=signal_collection.beats_by_vessel,
+                points_by_vessel_per_beat=(
+                    signal_collection.points_by_vessel_per_beat
+                ),
+                signal=signal,
             )
         )
 
@@ -3005,7 +2970,8 @@ def run(
     accepted_input_modes=["folder", "zip"],
 )
 class LowRankWaveformCohortPostprocess(BatchPostprocess):
-    veins_flag = False
+    # Cohort figures cover every vessel EyeFlow packed.
+    veins_flag = True
 
     def run(self, context: PostprocessContext) -> PostprocessResult:
         """Registered entry: read the explicitly selected cohort folder/ZIP."""
