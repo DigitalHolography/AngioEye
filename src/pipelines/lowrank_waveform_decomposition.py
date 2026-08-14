@@ -29,7 +29,12 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.ticker import FuncFormatter, MultipleLocator, NullFormatter
+from matplotlib.ticker import (
+    FuncFormatter,
+    MaxNLocator,
+    MultipleLocator,
+    NullFormatter,
+)
 
 from input_output.hdf5_io import find_first_existing_path
 from input_output.hdf5_schema import find_pipeline_group
@@ -159,6 +164,38 @@ def safe_figure(name: str, plotter, /, **kwargs) -> Path | None:
             stacklevel=2,
         )
         return None
+
+
+def report_missing_figures(
+    source: str,
+    expected: list[str],
+    written: list[Path],
+    *,
+    source_label: str = "",
+) -> list[str]:
+    """Warn once naming the figures a source did not produce.
+
+    A figure is skipped whenever its packed payload is absent, which is a
+    normal outcome for some sources but indistinguishable from a bug when
+    the run stays silent. Naming the gaps makes an incomplete output set
+    self-explaining instead of something to reverse-engineer from folders.
+    """
+    produced = {path.stem for path in written}
+    missing = [
+        name
+        for name in expected
+        if not any(stem.endswith(name) for stem in produced)
+    ]
+    if missing:
+        where = f"{source_label} {source}".strip()
+        warnings.warn(
+            f"low-rank figures not produced for {where} "
+            f"({len(missing)} of {len(expected)}): {', '.join(missing)}. "
+            "The packed EyeFlow payload for these variants is absent.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    return missing
 
 
 def _finite_min(values: np.ndarray) -> float:
@@ -1390,6 +1427,12 @@ class LowRankWaveformAcquisitionFigures:
     FIG2_WHISKER_INTERVAL_S = 0.1
     FIG2_X_PAD_FRAC = 0.02
     FIG3_X_PAD_FRAC = 0.02
+    # Panel cell width for Fig. 3. Panels are square (box_aspect=1), so a
+    # cell much wider than the axes height shows up as dead space between
+    # columns; this keeps the cell close to the drawn panel while leaving
+    # room for each panel's own y tick labels.
+    FIG3_PANEL_W = 1.95
+    FIG3_Y_TICK_BINS = 4
     FIG2_TICK_SIZE = 12
     FIG2_LABEL_SIZE = 14
     FIG2_M_S_PEAK = 1.0
@@ -1433,9 +1476,11 @@ class LowRankWaveformAcquisitionFigures:
         stem = file_stem or h5_path.stem
         vessels = tuple(vessels or enabled_vessels(bool(veins_flag)))
         written: list[Path] = []
+        expected: list[str] = []
 
         def _keep(name: str, plotter, /, **kwargs) -> None:
             """Draw one figure; never let its failure hide the others."""
+            expected.append(name)
             path = safe_figure(name, plotter, **kwargs)
             if path is not None:
                 written.append(path)
@@ -1483,6 +1528,12 @@ class LowRankWaveformAcquisitionFigures:
                 signal=signal,
                 band=band,
             )
+        report_missing_figures(
+            f"{'/'.join(vessels)}/{signal}",
+            expected,
+            written,
+            source_label=stem,
+        )
         return written
 
     @staticmethod
@@ -1788,7 +1839,7 @@ class LowRankWaveformAcquisitionFigures:
         fig, axes = plt.subplots(
             n_rows,
             n_cols,
-            figsize=(cls.PANEL_SIZE * n_cols, cls.PANEL_SIZE * n_rows),
+            figsize=(cls.FIG3_PANEL_W * n_cols, cls.PANEL_SIZE * n_rows),
             sharex=True,
             sharey=False,
             layout="constrained",
@@ -1826,10 +1877,13 @@ class LowRankWaveformAcquisitionFigures:
                 ax.set_xlim(t0 - x_pad, t1 + x_pad)
                 if row_idx == 0:
                     ax.set_title(title, fontsize=11, pad=6)
+                # Every panel carries its own scale, so every panel keeps
+                # its y tick labels; only the axis title is not repeated.
                 if col_idx == 0:
                     ax.set_ylabel("Velocity (mm/s)", fontsize=10, labelpad=label_pad)
-                elif col_idx != 2:
-                    ax.tick_params(labelleft=False)
+                ax.yaxis.set_major_locator(
+                    MaxNLocator(nbins=cls.FIG3_Y_TICK_BINS, prune=None)
+                )
                 if row_idx == n_rows - 1 and col_idx == n_cols // 2:
                     ax.set_xlabel(
                         "Fraction of cardiac cycle",
@@ -1838,7 +1892,7 @@ class LowRankWaveformAcquisitionFigures:
                     )
                 cls._style_axes(ax, tick_size=9, label_size=10)
                 ax.set_box_aspect(1)
-        fig.get_layout_engine().set(w_pad=0.08, h_pad=0.0, wspace=0.02, hspace=0.02)
+        fig.get_layout_engine().set(w_pad=0.02, h_pad=0.0, wspace=0.01, hspace=0.02)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(out_path, dpi=150, bbox_inches="tight", pad_inches=0.02)
         plt.close(fig)

@@ -69,6 +69,7 @@ from pipelines.lowrank_waveform_decomposition import (
     is_usable_beat_spectra,
     load_acquisition_from_result_h5,
     mean_pm_std,
+    report_missing_figures,
     safe_figure,
 )
 
@@ -1696,12 +1697,14 @@ class LowRankWaveformCohortFigures:
         beats = pd.DataFrame() if beats is None else beats
         beat_level = _beat_level_endpoint_frame(beats)
         written: list[Path] = []
+        expected: list[str] = []
 
         def _out(name: str) -> Path:
             return out_dir / prefixed_filename(name, patient_id)
 
         def _keep(name: str, plotter, /, **kwargs) -> None:
             """Draw one figure; never let its failure hide the others."""
+            expected.append(name)
             path = safe_figure(name, plotter, **kwargs)
             if path is not None:
                 written.append(path)
@@ -1726,6 +1729,7 @@ class LowRankWaveformCohortFigures:
         for stem, panels in endpoint_sets:
             for suffix, frame in sources:
                 if not _has_endpoint_dots(frame, panels):
+                    expected.append(f"{stem}_{suffix}")
                     continue
                 _keep(
                     f"{stem}_{suffix}",
@@ -1744,8 +1748,10 @@ class LowRankWaveformCohortFigures:
         for suffix, frame, band in spectra:
             if band == "beats":
                 if not _has_spectrum_beat_spread(frame):
+                    expected.append(f"fig4_variance_fraction_{suffix}")
                     continue
             elif not _has_spectrum_modes(frame):
+                expected.append(f"fig4_variance_fraction_{suffix}")
                 continue
             _keep(
                 f"fig4_variance_fraction_{suffix}",
@@ -1756,6 +1762,9 @@ class LowRankWaveformCohortFigures:
                 group_order=group_order,
                 band=band,
             )
+        report_missing_figures(
+            out_dir.name, expected, written, source_label=str(out_dir.parent.name)
+        )
         return written
 
     @staticmethod
