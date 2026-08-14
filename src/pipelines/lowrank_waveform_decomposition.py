@@ -19,6 +19,7 @@ Cohort Figs. 4--7 and ``lowrank_cohort.h5`` live in
 
 from __future__ import annotations
 
+import threading
 import warnings
 from pathlib import Path
 
@@ -165,26 +166,41 @@ def aggregate_rho(R_b: np.ndarray, R0_b: np.ndarray, stat: str) -> float:
     return float(r / (t + 1e-12))
 
 
-def safe_figure(name: str, plotter, /, **kwargs) -> Path | None:
-    """Run one figure call, converting a failure into a warning.
+# Serializes every Matplotlib draw in this package. Batch runs render
+# figures from a ThreadPoolExecutor, and Matplotlib is not thread-safe.
+_FIGURE_LOCK = threading.RLock()
 
-    A batch run covers many acquisitions, vessels, and signals. Without
-    isolation, one unplottable source (an absent mode, an empty velocity
-    trace) raises and silently costs every later figure of that
-    acquisition, which looks like whole vessels or epochs going missing.
-    Any open figure is closed so a partial draw cannot leak.
+
+def safe_figure(name: str, plotter, /, **kwargs) -> Path | None:
+    """Draw one figure under the global lock, turning failure into a warning.
+
+    Two hazards are handled here. Matplotlib is not thread-safe: pyplot
+    keeps a global figure registry and mathtext is a module-global
+    pyparsing grammar, so drawing from the batch thread pool corrupts the
+    parser and raises ParseException on valid labels such as ``$m$`` or
+    Matplotlib's own ``\\mathdefault`` log-tick macro, at random. Every
+    figure is therefore serialized through ``_FIGURE_LOCK``.
+
+    Separately, one unplottable source (an absent mode, an empty velocity
+    trace) must not cost the later figures of that acquisition, which
+    would look like whole vessels or epochs going missing. Any open figure
+    is closed so a partial draw cannot leak.
     """
-    try:
-        return plotter(**kwargs)
-    except Exception as exc:  # one bad source must not stop the batch
-        plt.close("all")
-        warnings.warn(
-            f"low-rank figure {name!r} could not be drawn: "
-            f"{type(exc).__name__}: {exc}",
-            RuntimeWarning,
-            stacklevel=2,
-        )
-        return None
+    with _FIGURE_LOCK:
+        try:
+            return plotter(**kwargs)
+        except Exception as exc:  # one bad source must not stop the batch
+            plt.close("all")
+            # ``exc`` is unbound once the except block exits, so keep the
+            # parts of it the warning needs.
+            kind = type(exc).__name__
+            detail = " ".join(str(exc).split())[:200] or kind
+    warnings.warn(
+        f"low-rank figure {name!r} could not be drawn: {kind}: {detail}",
+        RuntimeWarning,
+        stacklevel=2,
+    )
+    return None
 
 
 def report_missing_figures(
