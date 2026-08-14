@@ -856,6 +856,7 @@ def load_vessel_data_from_result_h5(
         singular_values = np.asarray([], dtype=float)
         energy_fraction = np.asarray([], dtype=float)
         per_beat_spectrum = np.asarray([], dtype=float)
+        per_beat_spectrum_sd = np.asarray([], dtype=float)
         joint_spectrum_payload = _spectrum_payload_from_source(
             source, method="joint", cumulative=False
         )
@@ -866,6 +867,13 @@ def load_vessel_data_from_result_h5(
         )
         if pb_spectrum_payload is not None:
             per_beat_spectrum = np.asarray(pb_spectrum_payload["mean"], dtype=float)
+            lo = np.asarray(pb_spectrum_payload.get("lo", []), dtype=float)
+            hi = np.asarray(pb_spectrum_payload.get("hi", []), dtype=float)
+            n_sd = min(lo.size, hi.size, per_beat_spectrum.size)
+            if n_sd:
+                # EyeFlow packs lambda_lo/hi as mean -/+ 1 SD across beats,
+                # so the half-width recovers the across-beats sample SD.
+                per_beat_spectrum_sd = (hi[:n_sd] - lo[:n_sd]) / 2.0
         if isinstance(decomposition, h5py.Group):
             if singular_values.size == 0 and "singular_values" in decomposition:
                 singular_values = np.asarray(
@@ -921,6 +929,7 @@ def load_vessel_data_from_result_h5(
         "energy_fraction": energy_fraction,
         "singular_values": singular_values,
         "per_beat_spectrum": per_beat_spectrum,
+        "per_beat_spectrum_sd": per_beat_spectrum_sd,
         "beat_period_mean": beat_period_mean,
         "beat_period_sd": beat_period_sd,
         "beat_period_b": period_b,

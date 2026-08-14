@@ -1710,6 +1710,19 @@ class LowRankWaveformCohortFigures:
                     group_order=group_order,
                 )
             )
+        if _has_spectrum_beat_spread(pb_points.get("artery", pd.DataFrame())):
+            written.append(
+                cls._save_spectrum(
+                    out_dir
+                    / prefixed_filename(
+                        "fig4_variance_fraction_pb_beats.png", patient_id
+                    ),
+                    pb_points,
+                    cumulative=False,
+                    group_order=group_order,
+                    band="beats",
+                )
+            )
         return sorted(written, key=lambda path: path.name)
 
     @staticmethod
@@ -1847,9 +1860,33 @@ class LowRankWaveformCohortFigures:
         group_order: list[str] | None = None,
     ) -> None:
         """Draw pooled-baseline vs flicker mean±SD singular-value curves."""
-        if not mode_cols or df.empty or not ({"epoch", "group"} & set(df.columns)):
+        series = cls._spectrum_epoch_series(df, mode_cols, group_order)
+        if series is None:
             return
         plot_modes = np.arange(1, len(mode_cols) + 1)
+        for mask, color, style, marker in series:
+            vals = df.loc[mask, mode_cols].to_numpy(dtype=float)
+            if vals.size == 0:
+                continue
+            if cumulative:
+                vals = np.nancumsum(vals, axis=1)
+            mean, lo, hi = mean_pm_std(vals, axis=0)
+            if not cumulative:
+                lo = np.maximum(lo, np.where(mean > 0, mean * 1e-6, 1e-12))
+            cls._plot_spectrum_series(
+                ax, plot_modes, mean, lo, hi, color, style, marker
+            )
+
+    @classmethod
+    def _spectrum_epoch_series(
+        cls,
+        df: pd.DataFrame,
+        mode_cols: list[str],
+        group_order: list[str] | None,
+    ) -> tuple[tuple[pd.Series, str, str, str], ...] | None:
+        """(mask, color, style, marker) for baseline and flicker, or None."""
+        if not mode_cols or df.empty or not ({"epoch", "group"} & set(df.columns)):
+            return None
         identity = df["group"] if "group" in df.columns else df["epoch"]
         groups = group_order or ordered_groups(identity)
         protocol = infer_cohort_protocol(groups)
@@ -1865,60 +1902,114 @@ class LowRankWaveformCohortFigures:
             baseline_mask = df["epoch"].isin(["B1", "B2"])
             flicker_mask = df["epoch"] == "Flicker"
         else:
-            return
-        series = (
+            return None
+        return (
             (baseline_mask, *cls.SPECTRUM_BASELINE),
             (flicker_mask, *cls.SPECTRUM_FLICKER),
         )
+
+    @staticmethod
+    def _plot_spectrum_series(
+        ax, modes, mean, lo, hi, color: str, style: str, marker: str
+    ) -> None:
+        """One epoch's spectrum curve with its shaded band."""
+        ax.plot(
+            modes,
+            mean,
+            color=color,
+            linestyle=style,
+            marker=marker,
+            linewidth=1.5,
+            markersize=5,
+            markerfacecolor="white",
+            markeredgecolor=color,
+            markeredgewidth=1.2,
+        )
+        ax.fill_between(modes, lo, hi, color=color, alpha=0.12, linewidth=0)
+
+    @classmethod
+    def _draw_spectrum_beat_band(
+        cls,
+        ax,
+        df: pd.DataFrame,
+        mode_cols: list[str],
+        *,
+        group_order: list[str] | None = None,
+    ) -> None:
+        """Epoch spectrum curves with a total across-beats band.
+
+        Curves match ``_draw_spectrum``. The band is the pooled beat-level
+        SD from the law of total variance: the mean of the packed
+        within-acquisition beat variances (``mode{m}_sd``) plus the
+        between-acquisition variance of the beat-mean spectra, with
+        acquisitions weighted equally. Modes with no finite packed beat SD
+        fall back to the between-acquisition spread alone.
+        """
+        series = cls._spectrum_epoch_series(df, mode_cols, group_order)
+        sd_cols = [f"{col}_sd" for col in mode_cols]
+        if series is None or any(col not in df.columns for col in sd_cols):
+            return
+        plot_modes = np.arange(1, len(mode_cols) + 1)
         for mask, color, style, marker in series:
-            vals = df.loc[mask, mode_cols].to_numpy(dtype=float)
-            if vals.size == 0:
+            means = df.loc[mask, mode_cols].to_numpy(dtype=float)
+            beat_sds = df.loc[mask, sd_cols].to_numpy(dtype=float)
+            if means.size == 0:
                 continue
-            if cumulative:
-                vals = np.nancumsum(vals, axis=1)
-            mean, lo, hi = mean_pm_std(vals, axis=0)
-            if not cumulative:
-                lo = np.maximum(lo, np.where(mean > 0, mean * 1e-6, 1e-12))
-            ax.plot(
-                plot_modes,
-                mean,
-                color=color,
-                linestyle=style,
-                marker=marker,
-                linewidth=1.5,
-                markersize=5,
-                markerfacecolor="white",
-                markeredgecolor=color,
-                markeredgewidth=1.2,
+            mean, lo_acq, hi_acq = mean_pm_std(means, axis=0)
+            between_var = (hi_acq - mean) ** 2
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", category=RuntimeWarning)
+                within_var = np.nanmean(beat_sds**2, axis=0)
+            within_var = np.where(np.isfinite(within_var), within_var, 0.0)
+            total_sd = np.sqrt(between_var + within_var)
+            lo = mean - total_sd
+            hi = mean + total_sd
+            lo = np.maximum(lo, np.where(mean > 0, mean * 1e-6, 1e-12))
+            cls._plot_spectrum_series(
+                ax, plot_modes, mean, lo, hi, color, style, marker
             )
-            ax.fill_between(plot_modes, lo, hi, color=color, alpha=0.12, linewidth=0)
 
     @classmethod
     def _save_spectrum(
         cls,
         out_path: Path,
-        beats_by_vessel: dict[str, pd.DataFrame] | None,
+        frames_by_vessel: dict[str, pd.DataFrame] | None,
         *,
         cumulative: bool,
         group_order: list[str] | None = None,
+        band: str = "acquisitions",
     ) -> Path:
-        """Write the per-mode or cumulative λ spectrum PNG."""
+        """Write the per-mode or cumulative λ spectrum PNG.
+
+        ``band="acquisitions"`` shades ± 1 SD across the rows of
+        ``frames_by_vessel`` (acquisitions or beats, whichever was passed);
+        ``band="beats"`` shades the total across-beats SD pooled from the
+        packed ``mode{m}_sd`` columns (non-cumulative only).
+        """
         out_path = Path(out_path)
-        frames = beats_by_vessel or {}
-        beats = frames.get("artery", pd.DataFrame())
-        mode_cols = _spectrum_mode_cols(beats)
-        df = beats if (not beats.empty and mode_cols) else pd.DataFrame()
+        frames = frames_by_vessel or {}
+        artery = frames.get("artery", pd.DataFrame())
+        mode_cols = _spectrum_mode_cols(artery)
+        df = artery if (not artery.empty and mode_cols) else pd.DataFrame()
 
         fig_h = 3.0
         fig, axes = plt.subplots(1, 1, figsize=(2.0 * fig_h, fig_h), squeeze=False)
         ax = axes[0, 0]
-        cls._draw_spectrum(
-            ax,
-            df,
-            mode_cols,
-            cumulative=cumulative,
-            group_order=group_order,
-        )
+        if band == "beats":
+            cls._draw_spectrum_beat_band(
+                ax,
+                df,
+                mode_cols,
+                group_order=group_order,
+            )
+        else:
+            cls._draw_spectrum(
+                ax,
+                df,
+                mode_cols,
+                cumulative=cumulative,
+                group_order=group_order,
+            )
 
         modes = np.arange(1, SPECTRUM_N_MODES + 1)
         ax.set_xticks(modes)
@@ -2076,6 +2167,20 @@ def _has_spectrum_modes(df: pd.DataFrame) -> bool:
     if not cols:
         return False
     return bool(np.isfinite(df[cols].to_numpy(dtype=float)).any())
+
+
+def _has_spectrum_beat_spread(df: pd.DataFrame) -> bool:
+    """True if ``df`` has a finite packed across-beats spectrum SD."""
+    if not _has_spectrum_modes(df):
+        return False
+    sd_cols = [
+        f"{col}_sd"
+        for col in _spectrum_mode_cols(df)
+        if f"{col}_sd" in df.columns
+    ]
+    if not sd_cols:
+        return False
+    return bool(np.isfinite(df[sd_cols].to_numpy(dtype=float)).any())
 
 
 def _has_per_beat_endpoint_dots(points_by_vessel: dict[str, pd.DataFrame]) -> bool:
@@ -2304,6 +2409,12 @@ def _points_row_per_beat(
         for m in range(1, SPECTRUM_N_MODES + 1):
             row[f"mode{m}"] = (
                 float(spectrum[m - 1]) if spectrum.size >= m else float("nan")
+            )
+    spread = np.asarray(vessel_data.get("per_beat_spectrum_sd", []), dtype=float)
+    if spread.size:
+        for m in range(1, SPECTRUM_N_MODES + 1):
+            row[f"mode{m}_sd"] = (
+                float(spread[m - 1]) if spread.size >= m else float("nan")
             )
     return row
 
