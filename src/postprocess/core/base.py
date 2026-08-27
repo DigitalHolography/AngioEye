@@ -31,6 +31,8 @@ def registerPostprocess(
     required_option: str | list[str] | None = None,
     input_methods: list[PostprocessInputMethod] | None = None,
     visibility: str = "visible",
+    minimum_input_files: int = 1,
+    accepted_input_modes: list[str] | None = None,
 ):
     def decorator(target):
         requires = required_deps or []
@@ -54,6 +56,10 @@ def registerPostprocess(
             target.missing_deps = missing
             target.available = len(missing) == 0
             target.visibility = visibility
+            target.minimum_input_files = max(1, int(minimum_input_files))
+            target.accepted_input_modes = tuple(
+                dict.fromkeys(accepted_input_modes or ())
+            )
             POSTPROCESS_REGISTRY[name] = target
             return target
 
@@ -68,6 +74,8 @@ def registerPostprocess(
             required_option=options,
             input_methods=supported_input_methods,
             visibility=visibility,
+            minimum_input_files=minimum_input_files,
+            accepted_input_modes=accepted_input_modes or [],
         )
         POSTPROCESS_REGISTRY[name] = postprocess_cls
         return target
@@ -175,6 +183,8 @@ def _build_function_postprocess(
     required_option: list[str],
     input_methods: list[PostprocessInputMethod],
     visibility: str,
+    minimum_input_files: int,
+    accepted_input_modes: list[str],
 ) -> type["FunctionPostprocess"]:
     class RegisteredFunctionPostprocess(FunctionPostprocess):
         pass
@@ -194,6 +204,12 @@ def _build_function_postprocess(
     RegisteredFunctionPostprocess.input_methods = input_methods
     RegisteredFunctionPostprocess.missing_pipelines = []
     RegisteredFunctionPostprocess.visibility = visibility
+    RegisteredFunctionPostprocess.minimum_input_files = max(
+        1, int(minimum_input_files)
+    )
+    RegisteredFunctionPostprocess.accepted_input_modes = tuple(
+        dict.fromkeys(accepted_input_modes)
+    )
     return RegisteredFunctionPostprocess
 
 
@@ -233,6 +249,8 @@ class PostprocessDescriptor:
     postprocess_cls: type["BatchPostprocess"] | None = None
     error_msg: str = ""
     visibility: str = "visible"
+    minimum_input_files: int = 1
+    accepted_input_modes: tuple[str, ...] = ()
 
     def instantiate(self) -> "BatchPostprocess":
         if not self.available or self.postprocess_cls is None:
@@ -262,6 +280,8 @@ class BatchPostprocess:
     input_methods: list[PostprocessInputMethod]
     missing_pipelines: list[str]
     visibility: str = "visible"
+    minimum_input_files: int = 1
+    accepted_input_modes: tuple[str, ...] = ()
 
     def __init__(self) -> None:
         if not getattr(self, "name", None):
