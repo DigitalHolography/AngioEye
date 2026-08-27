@@ -113,6 +113,7 @@ def zip_output_dir(
     return create_zip_from_tree(
         folder,
         target_path,
+        archive_root_name=target_path.stem,
         exclude_root_dirs=ZIP_COMPANION_OUTPUT_FOLDERS,
         compresslevel=1,
         progress_callback=progress_callback,
@@ -728,7 +729,15 @@ def _run_workflow_postprocesses(
         start_final_progress(final_progress_units, final_status)
 
     postprocess_started_at = time.monotonic() if postprocesses else None
-    if postprocesses and pipeline_result.processed_outputs:
+    if postprocesses:
+        # Always attempt selected postprocesses. Steps that require pipeline
+        # outputs skip themselves when processed_outputs is empty; cohort
+        # steps that read context.input_path (ZIP/folder) can still run.
+        if not pipeline_result.processed_outputs:
+            log(
+                "[POST] No successful pipeline outputs; running postprocess "
+                "steps that do not require them."
+            )
         run_postprocesses(
             postprocesses,
             output_dir,
@@ -740,12 +749,6 @@ def _run_workflow_postprocesses(
             zip_outputs=zip_outputs,
             record_timing=pipeline_result.timings.add,
         )
-    elif postprocesses:
-        log(
-            "[POST SKIP] No successful pipeline outputs were generated, "
-            "so postprocess steps were skipped."
-        )
-        advance_progress(len(postprocesses))
     if postprocess_started_at is not None:
         _add_timing(
             pipeline_result.timings,

@@ -22,7 +22,7 @@ wheels = [
 
 [[package]]
 name = "angioeye"
-version = "1.22.0"
+version = "1.23.1"
 source = { editable = "." }
 dependencies = [
     { name = "h5py" },

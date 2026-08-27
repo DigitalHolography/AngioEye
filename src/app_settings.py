@@ -158,6 +158,9 @@ def normalize_pipeline_visibility(
 def normalize_postprocess_visibility(
     postprocess_names: Iterable[str], stored_visibility: Mapping[str, bool] | None
 ) -> tuple[dict[str, bool], bool]:
+    if not stored_visibility:
+        ordered_names = list(dict.fromkeys(postprocess_names))
+        return ({name: False for name in ordered_names}, bool(ordered_names))
     return normalize_named_visibility(postprocess_names, stored_visibility)
 
 

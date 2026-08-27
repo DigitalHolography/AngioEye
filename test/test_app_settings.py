@@ -71,13 +71,13 @@ class AppSettingsTests(unittest.TestCase):
 
             self.assertEqual(store.load_pipeline_visibility(), expected)
 
-    def test_normalize_postprocess_visibility_defaults_first_run_to_visible(self) -> None:
+    def test_normalize_postprocess_visibility_defaults_to_unselected(self) -> None:
         visibility, changed = normalize_postprocess_visibility(
             ["Graphics Dashboard"],
             {},
         )
 
-        self.assertEqual(visibility, {"Graphics Dashboard": True})
+        self.assertEqual(visibility, {"Graphics Dashboard": False})
         self.assertTrue(changed)
 
     def test_store_round_trips_postprocess_visibility(self) -> None:
