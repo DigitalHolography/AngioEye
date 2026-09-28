@@ -10,6 +10,7 @@ import h5py
 import numpy as np
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
+from matplotlib.ticker import MultipleLocator
 
 from input_output.archive_io import iter_extracted_h5_members, list_h5_members
 
@@ -21,7 +22,10 @@ from .core.base import (
 
 LUMEN_DIAMETER_PATH = "/Segmentation/Artery/LumenDiameter/value"
 PIXEL_PITCH_PATH = "/Segmentation/PixelPitch_m/value"
+BLOOD_VOLUME_RATE_PATH = "/Processing/BloodVolumeRate/Artery/totalMaskedEdges/value"
 OUTPUT_FOLDER_NAME = "lumen_diameter_distributions"
+BLOOD_VOLUME_RATE_OUTPUT_FOLDER = "blood_volume_rate"
+PHASE_SAMPLE_COUNT = 128
 
 _CONTROL_GROUP_NAMES = {
     "baseline",
@@ -67,6 +71,12 @@ class LumenDiameterCollection:
     values_by_cohort: dict[str, np.ndarray]
     input_file_count: int
     loaded_file_count: int
+    skipped_files: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class BloodVolumeRateCollection:
+    waveforms_by_group: dict[str, np.ndarray]
     skipped_files: tuple[str, ...]
 
 
@@ -124,6 +134,32 @@ def read_lumen_diameters(h5_path: str | Path) -> np.ndarray:
     return values[np.isfinite(values)] * pixel_pitch_m * 1e6
 
 
+def read_blood_volume_rate_waveforms(
+    h5_path: str | Path,
+    *,
+    phase_sample_count: int = PHASE_SAMPLE_COUNT,
+) -> np.ndarray:
+    """Return beats as rows, resampled over a normalized cardiac phase."""
+    with h5py.File(h5_path, "r") as h5file:
+        if BLOOD_VOLUME_RATE_PATH not in h5file:
+            raise KeyError(f"Missing EyeFlow dataset: {BLOOD_VOLUME_RATE_PATH}")
+        values = np.asarray(h5file[BLOOD_VOLUME_RATE_PATH][...], dtype=float)
+    if values.ndim != 2:
+        raise ValueError(f"Expected a 2D array at {BLOOD_VOLUME_RATE_PATH}")
+
+    source_phase = np.linspace(0.0, 1.0, values.shape[0])
+    target_phase = np.linspace(0.0, 1.0, phase_sample_count)
+    waveforms: list[np.ndarray] = []
+    for beat in values.T:
+        finite = np.isfinite(beat)
+        if np.count_nonzero(finite) < 2:
+            continue
+        waveforms.append(np.interp(target_phase, source_phase[finite], beat[finite]))
+    if not waveforms:
+        return np.empty((0, phase_sample_count), dtype=float)
+    return np.vstack(waveforms)
+
+
 def collect_lumen_diameters(zip_path: str | Path) -> LumenDiameterCollection:
     """Collect lumen diameters by cohort and eye from an EyeFlow ZIP.
 
@@ -166,6 +202,32 @@ def collect_lumen_diameters(zip_path: str | Path) -> LumenDiameterCollection:
     )
 
 
+def collect_blood_volume_rate(zip_path: str | Path) -> BloodVolumeRateCollection:
+    waveforms: defaultdict[str, list[np.ndarray]] = defaultdict(list)
+    skipped_files: list[str] = []
+    for member in list_h5_members(zip_path):
+        group_name = _member_cohort_name(member.relative_path)
+        for extracted in iter_extracted_h5_members(zip_path, [member]):
+            try:
+                file_waveforms = read_blood_volume_rate_waveforms(extracted.path)
+            except (KeyError, OSError, TypeError, ValueError) as exc:
+                skipped_files.append(f"{member.name}: {exc}")
+                continue
+            if file_waveforms.size == 0:
+                skipped_files.append(f"{member.name}: no finite BVR waveforms")
+                continue
+            waveforms[group_name].append(file_waveforms)
+
+    return BloodVolumeRateCollection(
+        waveforms_by_group={
+            group_name: np.vstack(group_waveforms)
+            for group_name, group_waveforms in waveforms.items()
+            if group_waveforms
+        },
+        skipped_files=tuple(skipped_files),
+    )
+
+
 def build_lumen_diameter_figure(values: np.ndarray) -> tuple[Figure, float, float]:
     """Build the requested grey histogram and black dashed Gaussian fit."""
     finite_values = np.asarray(values, dtype=float).ravel()
@@ -180,9 +242,15 @@ def build_lumen_diameter_figure(values: np.ndarray) -> tuple[Figure, float, floa
     figure = Figure(figsize=(6.4, 4.8), constrained_layout=True)
     FigureCanvasAgg(figure)
     axis = figure.subplots()
+    bin_width = 5.0
+    bin_start = math.floor(float(np.min(finite_values)) / bin_width) * bin_width
+    bin_stop = math.ceil(float(np.max(finite_values)) / bin_width) * bin_width
+    if bin_stop <= bin_start:
+        bin_stop = bin_start + bin_width
+    bins = np.arange(bin_start, bin_stop + bin_width, bin_width)
     axis.hist(
         finite_values,
-        bins="auto",
+        bins=bins,
         density=True,
         color="grey",
         edgecolor="white",
@@ -214,6 +282,7 @@ def build_lumen_diameter_figure(values: np.ndarray) -> tuple[Figure, float, floa
 
     axis.set_xlabel("Lumen diameter (µm)", fontsize="medium")
     axis.set_ylabel("Density", fontsize="medium")
+    axis.xaxis.set_major_locator(MultipleLocator(10.0))
     axis.tick_params(axis="both", labelsize="medium")
     axis.text(
         0.98,
@@ -252,6 +321,90 @@ def write_lumen_diameter_histogram(
     finally:
         figure.clear()
     return output_path
+
+
+def build_blood_volume_rate_figure(
+    baseline_waveforms: np.ndarray,
+    indentation_waveforms: np.ndarray,
+) -> Figure:
+    phase = np.linspace(0.0, 1.0, baseline_waveforms.shape[1])
+    baseline_median = np.nanmedian(baseline_waveforms, axis=0)
+    baseline_std = np.nanstd(baseline_waveforms, axis=0)
+    indentation_median = np.nanmedian(indentation_waveforms, axis=0)
+    indentation_std = np.nanstd(indentation_waveforms, axis=0)
+
+    figure = Figure(figsize=(6.4, 4.8), constrained_layout=True)
+    FigureCanvasAgg(figure)
+    axis = figure.subplots()
+    axis.fill_between(
+        phase,
+        baseline_median - baseline_std,
+        baseline_median + baseline_std,
+        color="black",
+        alpha=0.12,
+        linewidth=0,
+    )
+    axis.fill_between(
+        phase,
+        indentation_median - indentation_std,
+        indentation_median + indentation_std,
+        facecolor="none",
+        edgecolor="grey",
+        hatch="///",
+        linewidth=0,
+    )
+    axis.plot(phase, baseline_median, color="black", linewidth=1.8, label="Baseline")
+    axis.plot(
+        phase,
+        indentation_median,
+        color="grey",
+        linestyle="--",
+        linewidth=1.8,
+        label="Indentation",
+    )
+    axis.axhline(0.0, color="grey", linestyle=":", linewidth=0.8)
+    axis.set_xlim(0.0, 1.0)
+    axis.set_xticks([0.0, 1.0])
+    axis.set_xlabel("Cardiac phase, t/T", fontsize="medium")
+    axis.set_ylabel("Q(t) (mm3/s)", fontsize="medium")
+    axis.tick_params(axis="both", labelsize="medium")
+    axis.legend(frameon=False, fontsize="medium")
+    return figure
+
+
+def generate_blood_volume_rate_figures(
+    zip_path: str | Path,
+    output_root: str | Path,
+) -> tuple[list[Path], BloodVolumeRateCollection]:
+    collection = collect_blood_volume_rate(zip_path)
+    output_dir = Path(output_root) / BLOOD_VOLUME_RATE_OUTPUT_FOLDER
+    generated_paths: list[Path] = []
+    for eye_name in ("left_eye", "right_eye"):
+        baseline_key = f"baseline_{eye_name}"
+        indentation_key = f"indentation_{eye_name}"
+        if not {
+            baseline_key,
+            indentation_key,
+        }.issubset(collection.waveforms_by_group):
+            continue
+        figure = build_blood_volume_rate_figure(
+            collection.waveforms_by_group[baseline_key],
+            collection.waveforms_by_group[indentation_key],
+        )
+        output_path = output_dir / f"{eye_name}_blood_volume_rate.png"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            figure.savefig(output_path, dpi=150, format="png")
+        finally:
+            figure.clear()
+        generated_paths.append(output_path)
+
+    if not generated_paths:
+        raise ValueError(
+            "No eye has both baseline and indentation BVR data at "
+            f"{BLOOD_VOLUME_RATE_PATH}."
+        )
+    return generated_paths, collection
 
 
 def generate_lumen_diameter_distributions(
@@ -311,7 +464,13 @@ class BloodVolumeRatePipeline(ArchiveProcessPipeline):
             input_path,
             output_dir,
         )
-        skipped_count = len(collection.skipped_files)
+        bvr_paths, bvr_collection = generate_blood_volume_rate_figures(
+            input_path,
+            output_dir,
+        )
+        skipped_count = len(collection.skipped_files) + len(
+            bvr_collection.skipped_files
+        )
         skipped_suffix = (
             f" Skipped {skipped_count} incompatible HDF5 file(s)."
             if skipped_count
@@ -320,11 +479,13 @@ class BloodVolumeRatePipeline(ArchiveProcessPipeline):
         return ArchiveProcessResult(
             summary=(
                 f"Generated {len(generated_paths)} lumen-diameter cohort "
-                f"histogram(s).{skipped_suffix}"
+                f"histogram(s) and {len(bvr_paths)} BVR comparison figure(s)."
+                f"{skipped_suffix}"
             ),
-            generated_paths=[str(path) for path in generated_paths],
+            generated_paths=[str(path) for path in (*generated_paths, *bvr_paths)],
             metadata={
                 "cohorts": list(collection.values_by_cohort),
+                "bvr_groups": list(bvr_collection.waveforms_by_group),
                 "input_file_count": collection.input_file_count,
                 "loaded_file_count": collection.loaded_file_count,
                 "skipped_files": list(collection.skipped_files),
@@ -333,14 +494,21 @@ class BloodVolumeRatePipeline(ArchiveProcessPipeline):
 
 
 __all__ = [
+    "BLOOD_VOLUME_RATE_OUTPUT_FOLDER",
+    "BLOOD_VOLUME_RATE_PATH",
     "BloodVolumeRatePipeline",
+    "BloodVolumeRateCollection",
     "LUMEN_DIAMETER_PATH",
     "LumenDiameterCollection",
     "OUTPUT_FOLDER_NAME",
     "build_lumen_diameter_figure",
+    "build_blood_volume_rate_figure",
+    "collect_blood_volume_rate",
     "collect_lumen_diameters",
     "generate_lumen_diameter_distributions",
+    "generate_blood_volume_rate_figures",
     "normalize_cohort_name",
     "read_lumen_diameters",
+    "read_blood_volume_rate_waveforms",
     "write_lumen_diameter_histogram",
 ]

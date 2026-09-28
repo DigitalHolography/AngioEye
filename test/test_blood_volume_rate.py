@@ -16,7 +16,9 @@ if str(SRC_DIR) not in sys.path:
 from input_output import list_h5_members  # noqa: E402
 from pipelines import load_pipeline_catalog  # noqa: E402
 from pipelines.blood_volume_rate import (  # noqa: E402
+    BLOOD_VOLUME_RATE_OUTPUT_FOLDER,
     OUTPUT_FOLDER_NAME,
+    build_blood_volume_rate_figure,
     build_lumen_diameter_figure,
     collect_lumen_diameters,
 )
@@ -38,6 +40,7 @@ def _write_eyeflow_h5(
     values: list[float],
     *,
     pixel_pitch_m: float = 2e-6,
+    bvr_offset: float = 0.0,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with h5py.File(path, "w") as h5file:
@@ -48,6 +51,11 @@ def _write_eyeflow_h5(
         h5file.create_dataset(
             "/Segmentation/PixelPitch_m/value",
             data=pixel_pitch_m,
+        )
+        phase = np.linspace(0.0, 1.0, 128)
+        h5file.create_dataset(
+            "/Processing/BloodVolumeRate/Artery/totalMaskedEdges/value",
+            data=np.column_stack((phase + bvr_offset, phase + bvr_offset + 0.2)),
         )
 
 
@@ -149,6 +157,12 @@ class BloodVolumeRateTests(unittest.TestCase):
         self.assertEqual("", axis.get_title())
         self.assertEqual("Lumen diameter (µm)", axis.get_xlabel())
         self.assertEqual("Density", axis.get_ylabel())
+        ticks = axis.get_xticks()
+        np.testing.assert_allclose(np.diff(ticks), 10.0)
+        np.testing.assert_allclose(
+            [patch.get_width() for patch in axis.patches],
+            5.0,
+        )
         self.assertEqual("--", axis.lines[0].get_linestyle())
         self.assertEqual("black", axis.lines[0].get_color())
         self.assertIsNone(axis.get_legend())
@@ -161,6 +175,23 @@ class BloodVolumeRateTests(unittest.TestCase):
         self.assertIn("Std:", axis.texts[0].get_text())
         self.assertEqual(2.5, median)
         self.assertAlmostEqual(float(np.std([1.0, 2.0, 3.0, 4.0])), standard_deviation)
+
+    def test_bvr_figure_compares_baseline_and_indentation(self) -> None:
+        phase = np.linspace(0.0, 1.0, 128)
+        figure = build_blood_volume_rate_figure(
+            np.vstack((phase, phase + 0.2)),
+            np.vstack((phase - 0.4, phase - 0.2)),
+        )
+        self.addCleanup(figure.clear)
+        axis = figure.axes[0]
+
+        self.assertEqual("Cardiac phase, t/T", axis.get_xlabel())
+        self.assertEqual("Q(t) (mm3/s)", axis.get_ylabel())
+        self.assertEqual("black", axis.lines[0].get_color())
+        self.assertEqual("-", axis.lines[0].get_linestyle())
+        self.assertEqual("grey", axis.lines[1].get_color())
+        self.assertEqual("--", axis.lines[1].get_linestyle())
+        self.assertEqual("///", axis.collections[1].get_hatch())
 
     def test_archive_pipeline_generates_named_pngs_in_final_zip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -228,10 +259,26 @@ class BloodVolumeRateTests(unittest.TestCase):
                 "indentation_left_eye_lumen_diameter_distribution.png",
                 "indentation_right_eye_lumen_diameter_distribution.png",
             }
-            self.assertEqual(4, len(result.generated_outputs))
+            expected_bvr_names = {
+                "left_eye_blood_volume_rate.png",
+                "right_eye_blood_volume_rate.png",
+            }
+            self.assertEqual(6, len(result.generated_outputs))
             self.assertEqual(
                 expected_names,
-                {path.name for path in result.generated_outputs},
+                {
+                    path.name
+                    for path in result.generated_outputs
+                    if path.parent.name == OUTPUT_FOLDER_NAME
+                },
+            )
+            self.assertEqual(
+                expected_bvr_names,
+                {
+                    path.name
+                    for path in result.generated_outputs
+                    if path.parent.name == BLOOD_VOLUME_RATE_OUTPUT_FOLDER
+                },
             )
             self.assertEqual(output_dir / "result.zip", result.zip_path)
             with zipfile.ZipFile(result.zip_path) as archive:
@@ -239,6 +286,12 @@ class BloodVolumeRateTests(unittest.TestCase):
             self.assertTrue(
                 {
                     f"result/{OUTPUT_FOLDER_NAME}/{name}" for name in expected_names
+                }.issubset(archived_names)
+            )
+            self.assertTrue(
+                {
+                    f"result/{BLOOD_VOLUME_RATE_OUTPUT_FOLDER}/{name}"
+                    for name in expected_bvr_names
                 }.issubset(archived_names)
             )
 
