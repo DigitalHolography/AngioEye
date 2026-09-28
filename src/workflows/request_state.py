@@ -63,9 +63,7 @@ def resolve_work_selection(
 ) -> WorkflowWorkSelection:
     """Resolve frontend names into descriptors consumed by the dispatcher."""
     selected_pipelines = [
-        pipeline_registry[name]
-        for name in pipeline_names
-        if name in pipeline_registry
+        pipeline_registry[name] for name in pipeline_names if name in pipeline_registry
     ]
     missing_pipelines = [
         name for name in pipeline_names if name not in pipeline_registry
@@ -132,6 +130,16 @@ def build_workflow_request(
                 f"Cannot prepare input: {exc}",
             ) from exc
         request_mode = input_plan.kind
+
+    pipeline_input_mode_errors = _pipeline_input_mode_errors(
+        work_selection.pipelines,
+        request_mode,
+    )
+    if pipeline_input_mode_errors:
+        raise WorkflowInputError(
+            "Pipeline input",
+            "\n".join(pipeline_input_mode_errors),
+        )
 
     input_mode_errors = _postprocess_input_mode_errors(
         work_selection.postprocesses,
@@ -239,6 +247,21 @@ def _postprocess_input_mode_errors(
         if accepted and request_mode not in accepted:
             errors.append(
                 f"{postprocess.name} accepts only "
+                f"{' or '.join(accepted)} input; received {request_mode}."
+            )
+    return errors
+
+
+def _pipeline_input_mode_errors(
+    pipelines: Sequence[object],
+    request_mode: str,
+) -> list[str]:
+    errors: list[str] = []
+    for pipeline in pipelines:
+        accepted = tuple(getattr(pipeline, "accepted_input_modes", ()))
+        if accepted and request_mode not in accepted:
+            errors.append(
+                f"{pipeline.name} accepts only "
                 f"{' or '.join(accepted)} input; received {request_mode}."
             )
     return errors

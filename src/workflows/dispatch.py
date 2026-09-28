@@ -181,13 +181,14 @@ def _dispatch_zip_workflow(
         message = (
             f"No .h5/.hdf5 files found inside ZIP archive: {input_plan.input_path}"
         )
-        callbacks.log(
-            f"Error: No .h5/.hdf5 files found inside {input_plan.input_path}"
-        )
+        callbacks.log(f"Error: No .h5/.hdf5 files found inside {input_plan.input_path}")
         raise WorkflowInputError("Invalid input", message)
 
     callbacks.start_primary_progress(
-        input_plan.item_count * len(request.pipelines),
+        _zip_pipeline_progress_units(
+            request.pipelines,
+            input_plan.item_count,
+        ),
         "Running pipelines...",
     )
     callbacks.log(
@@ -222,6 +223,16 @@ def _dispatch_zip_workflow(
         idle_callback=callbacks.idle_callback,
     )
     return WorkflowDispatchResult(workflow_result=workflow_result)
+
+
+def _zip_pipeline_progress_units(
+    pipelines: Sequence[Any],
+    member_count: int,
+) -> int:
+    return sum(
+        1 if getattr(pipeline, "execution_scope", "file") == "archive" else member_count
+        for pipeline in pipelines
+    )
 
 
 def _input_plan_for_mode(

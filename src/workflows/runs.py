@@ -3,9 +3,9 @@ from __future__ import annotations
 import shutil
 import threading
 import time
-from functools import cache, partial
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
+from functools import cache, partial
 from pathlib import Path
 from tempfile import mkdtemp
 from typing import Any, Protocol
@@ -41,6 +41,7 @@ class RunWorkflowResult:
     failures: list[str]
     summary_message: str
     processed_input_paths: list[Path] = field(default_factory=list)
+    generated_outputs: list[Path] = field(default_factory=list)
     zip_path: Path | None = None
     zip_failed: bool = False
     zip_error: str | None = None
@@ -187,10 +188,7 @@ def reset_zip_workflow_output_dir(
     """
     output_dir = output_dir.expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    protected = {
-        path.expanduser().resolve()
-        for path in protected_paths
-    }
+    protected = {path.expanduser().resolve() for path in protected_paths}
 
     def remove_entry(path: Path) -> None:
         if path.resolve() in protected:
@@ -199,8 +197,7 @@ def reset_zip_workflow_output_dir(
             path.unlink()
             return
         if any(
-            protected_path == path.resolve()
-            or path.resolve() in protected_path.parents
+            protected_path == path.resolve() or path.resolve() in protected_path.parents
             for protected_path in protected
         ):
             for child in path.iterdir():
@@ -405,6 +402,7 @@ def _workflow_result(
         output_dir=output_dir,
         processed_outputs=pipeline_result.processed_outputs,
         processed_input_paths=pipeline_result.processed_input_paths,
+        generated_outputs=pipeline_result.generated_outputs,
         failures=pipeline_result.failures,
         summary_message=finalized_outputs.summary_message,
         zip_path=finalized_outputs.zip_path,
@@ -825,7 +823,9 @@ def _zip_workflow_outputs(
             make_zip_progress_callback(),
         )
         if timings is not None:
-            _add_timing(timings, "final ZIP creation", time.monotonic() - zip_started_at)
+            _add_timing(
+                timings, "final ZIP creation", time.monotonic() - zip_started_at
+            )
         copy_started_at = time.monotonic()
         companion_paths = copy_zip_companion_output_folders(
             output_dir,

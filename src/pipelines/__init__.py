@@ -7,6 +7,8 @@ from pathlib import Path
 # import inspect
 from .core.base import (
     PIPELINE_REGISTRY,
+    ArchiveProcessPipeline,
+    ArchiveProcessResult,
     DatasetValue,
     MissingPipeline,
     PipelineDescriptor,
@@ -73,6 +75,8 @@ def _discover_pipelines() -> tuple[list[PipelineDescriptor], list[PipelineDescri
             requires=cls.requires,
             missing_deps=cls.missing_deps,
             pipeline_cls=cls,
+            execution_scope=getattr(cls, "execution_scope", "file"),
+            accepted_input_modes=tuple(getattr(cls, "accepted_input_modes", ())),
         )
         if getattr(cls, "available", True):
             available.append(desc)
@@ -107,6 +111,8 @@ for _name, _cls in _EXPORTED_PIPELINE_CLASSES.items():
 
 
 __all__ = [
+    "ArchiveProcessPipeline",
+    "ArchiveProcessResult",
     "ProcessPipeline",
     "ProcessResult",
     "PipelineDescriptor",

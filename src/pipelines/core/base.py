@@ -1,4 +1,4 @@
-﻿import csv
+import csv
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -6,8 +6,8 @@ from typing import Any
 
 import h5py
 
-from input_output.hdf5_io import MetricsTree
 from dependency_utils import find_missing_dependencies
+from input_output.hdf5_io import MetricsTree
 
 # Global Registry of all imports needed by the pipelines
 PIPELINE_REGISTRY: dict[str, type["ProcessPipeline"]] = {}
@@ -39,6 +39,15 @@ class ProcessResult:
     metrics: dict[str, Any]
     attrs: dict[str, Any] | None = None  # attributes stored on the pipeline group
     output_h5_path: str | None = None
+
+
+@dataclass
+class ArchiveProcessResult:
+    """Artifacts produced by a pipeline that runs once for a whole archive."""
+
+    generated_paths: list[str] = field(default_factory=list)
+    summary: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -89,6 +98,8 @@ class PipelineDescriptor:
     missing_deps: list[str] = field(default_factory=list)
     pipeline_cls: type["ProcessPipeline"] | None = None
     error_msg: str = ""
+    execution_scope: str = "file"
+    accepted_input_modes: tuple[str, ...] = ()
 
     def instantiate(self) -> "ProcessPipeline":
         """Factory method to create the actual pipeline instance."""
@@ -108,6 +119,8 @@ class ProcessPipeline:
     available: bool
     missing_deps: list[str]
     requires: list[str]
+    execution_scope = "file"
+    accepted_input_modes: tuple[str, ...] = ()
 
     def __init__(self) -> None:
         # Derive the pipeline name from the module filename (e.g., basic_stats.py -> basic_stats).
@@ -143,6 +156,26 @@ class ProcessPipeline:
         return output_path
 
 
+class ArchiveProcessPipeline(ProcessPipeline):
+    """Base class for pipelines that run once across an input ZIP archive."""
+
+    execution_scope = "archive"
+    accepted_input_modes = ("zip",)
+
+    def run(self, h5file: h5py.File) -> ProcessResult:
+        del h5file
+        raise RuntimeError(
+            f"Pipeline '{self.name}' runs on a complete ZIP archive, not one HDF5 file."
+        )
+
+    def run_archive(
+        self,
+        zip_path: Path | str,
+        output_dir: Path | str,
+    ) -> ArchiveProcessResult:
+        raise NotImplementedError
+
+
 class MissingPipeline(ProcessPipeline):
     """Placeholder for pipelines whose dependencies are missing."""
 
@@ -164,4 +197,3 @@ class MissingPipeline(ProcessPipeline):
         raise ImportError(
             f"Pipeline '{self.name}' unavailable. Missing dependencies: {missing}"
         )
-

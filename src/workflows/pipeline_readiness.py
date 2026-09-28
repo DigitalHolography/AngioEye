@@ -20,6 +20,7 @@ class ResolvedPipelineInputs:
     files: tuple[tuple[str, Path], ...] = ()
     missing_sources: tuple[str, ...] = ()
     input_error: str | None = None
+    input_mode: str | None = None
 
 
 def resolve_pipeline_inputs(
@@ -28,17 +29,18 @@ def resolve_pipeline_inputs(
     """Resolve the HDF5 files a pipeline would receive for this selection."""
     if selection.convention == "holo":
         if not selection.holo_paths:
-            return ResolvedPipelineInputs()
+            return ResolvedPipelineInputs(input_mode="holo")
         try:
             resolved = resolve_selected_holo_contexts(selection.holo_paths)
         except (OSError, RuntimeError, ValueError) as exc:
-            return ResolvedPipelineInputs(input_error=str(exc))
+            return ResolvedPipelineInputs(input_error=str(exc), input_mode="holo")
         return ResolvedPipelineInputs(
             files=tuple(
                 (context.holo_path.stem, context.h5_path)
                 for context in resolved.contexts
             ),
             missing_sources=tuple(resolved.skipped_stems),
+            input_mode="holo",
         )
 
     if not selection.data_value and not selection.legacy_input_paths:
@@ -52,9 +54,10 @@ def resolve_pipeline_inputs(
     except (OSError, RuntimeError, ValueError) as exc:
         return ResolvedPipelineInputs(input_error=str(exc))
     if plan.is_zip:
-        return ResolvedPipelineInputs()
+        return ResolvedPipelineInputs(input_mode="zip")
     return ResolvedPipelineInputs(
         files=tuple((path.stem, path) for path in plan.h5_paths),
+        input_mode=plan.kind,
     )
 
 
@@ -63,6 +66,13 @@ def pipeline_input_status(
     selection: WorkflowInputSelection,
 ) -> str | None:
     """Return an input-specific status, or ``None`` when no override applies."""
+    accepted_input_modes = tuple(getattr(pipeline, "accepted_input_modes", ()))
+    inputs = None
+    if accepted_input_modes:
+        inputs = resolve_pipeline_inputs(selection)
+        if inputs.input_mode and inputs.input_mode not in accepted_input_modes:
+            return f"Requires {' or '.join(accepted_input_modes)} input"
+
     pipeline_cls = getattr(pipeline, "pipeline_cls", None)
     required_paths = tuple(
         getattr(pipeline_cls, "required_h5_paths", ()) if pipeline_cls else ()
@@ -70,14 +80,12 @@ def pipeline_input_status(
     if not required_paths:
         return None
 
-    inputs = resolve_pipeline_inputs(selection)
+    if inputs is None:
+        inputs = resolve_pipeline_inputs(selection)
     source_label = getattr(pipeline_cls, "h5_source_label", "H5")
     if inputs.missing_sources:
         label = "file" if len(inputs.missing_sources) == 1 else "files"
-        return (
-            f"Missing {source_label} {label}: "
-            + ", ".join(inputs.missing_sources)
-        )
+        return f"Missing {source_label} {label}: " + ", ".join(inputs.missing_sources)
     if inputs.input_error:
         return "Unreadable input"
     if not inputs.files:

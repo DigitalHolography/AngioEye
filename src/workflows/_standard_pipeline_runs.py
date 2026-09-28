@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import inspect
 import functools
+import inspect
 import shutil
 import threading
 import time
@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from batch_engine import (
-    BatchGroupResult,
     BatchExecutionSettings,
+    BatchGroupResult,
     batch_count,
     can_pickle,
     iter_batches,
@@ -21,8 +21,8 @@ from batch_engine import (
     run_threaded_batches_in_process_pool,
 )
 from input_output import ZipH5Member, strip_epoch_wrap
-from pipelines import load_pipeline_catalog
 from pipeline_engine import OutputPathAllocator
+from pipelines import load_pipeline_catalog
 
 from ._zip_batches import (
     ExtractedZipBatch,
@@ -39,6 +39,7 @@ _PIPELINE_RESOLVE_LOCK = threading.Lock()
 class PipelineRunResult:
     processed_outputs: list[Path] = field(default_factory=list)
     processed_input_paths: list[Path] = field(default_factory=list)
+    generated_outputs: list[Path] = field(default_factory=list)
     failures: list[str] = field(default_factory=list)
     timings: TimingRecorder = field(default_factory=TimingRecorder)
 
@@ -78,7 +79,9 @@ def run_filesystem_pipeline_run(
     jobs = [
         PipelineFileJob(
             h5_path=h5_path,
-            output_relative_parent=strip_epoch_wrap(relative_parent(h5_path, data_root)),
+            output_relative_parent=strip_epoch_wrap(
+                relative_parent(h5_path, data_root)
+            ),
             output_filename=output_filename,
             input_label=str(h5_path),
             log_label=h5_path.name,
@@ -345,14 +348,63 @@ def run_zip_pipeline_run(
     advance_progress: Callable[[float], None],
     idle_callback: Callable[[], None] | None = None,
 ) -> PipelineRunResult:
-    result = PipelineRunResult()
-    if not pipelines:
-        log(
-            "[PIPELINE] No pipelines selected; the source ZIP will be passed "
-            "directly to the selected postprocess steps."
-        )
-        return result
+    file_pipelines = [
+        pipeline
+        for pipeline in pipelines
+        if _pipeline_execution_scope(pipeline) != "archive"
+    ]
+    archive_pipelines = [
+        pipeline
+        for pipeline in pipelines
+        if _pipeline_execution_scope(pipeline) == "archive"
+    ]
 
+    if file_pipelines:
+        result = _run_file_pipelines_from_zip(
+            zip_path=zip_path,
+            members=members,
+            member_count=member_count,
+            pipelines=file_pipelines,
+            output_dir=output_dir,
+            settings=settings,
+            run_pipeline_file=run_pipeline_file,
+            log=log,
+            advance_progress=advance_progress,
+            idle_callback=idle_callback,
+        )
+    else:
+        result = PipelineRunResult()
+        if not archive_pipelines:
+            log(
+                "[PIPELINE] No pipelines selected; the source ZIP will be passed "
+                "directly to the selected postprocess steps."
+            )
+
+    _run_archive_pipelines(
+        pipelines=archive_pipelines,
+        zip_path=zip_path,
+        output_dir=output_dir,
+        result=result,
+        log=log,
+        advance_progress=advance_progress,
+    )
+    return result
+
+
+def _run_file_pipelines_from_zip(
+    *,
+    zip_path: Path,
+    members: Iterable[ZipH5Member],
+    member_count: int,
+    pipelines: Sequence[Any],
+    output_dir: Path,
+    settings: ZipBatchSettings,
+    run_pipeline_file: RunPipelineFile,
+    log: Callable[[str], None],
+    advance_progress: Callable[[float], None],
+    idle_callback: Callable[[], None] | None = None,
+) -> PipelineRunResult:
+    result = PipelineRunResult()
     pipeline_names = _pipeline_names(pipelines)
     use_process_pool = settings.process_workers > 1 and (
         _can_run_pipeline_batches_in_process_pool(
@@ -462,6 +514,61 @@ def run_zip_pipeline_run(
         )
     _log_pipeline_run_summary(result, total_files=member_count, log=log)
     return result
+
+
+def _pipeline_execution_scope(pipeline: Any) -> str:
+    scope = getattr(pipeline, "execution_scope", None)
+    if scope is None:
+        scope = getattr(
+            getattr(pipeline, "pipeline_cls", None), "execution_scope", None
+        )
+    return str(scope or "file")
+
+
+def _run_archive_pipelines(
+    *,
+    pipelines: Sequence[Any],
+    zip_path: Path,
+    output_dir: Path,
+    result: PipelineRunResult,
+    log: Callable[[str], None],
+    advance_progress: Callable[[float], None],
+) -> None:
+    for descriptor in pipelines:
+        pipeline_name = getattr(descriptor, "name", type(descriptor).__name__)
+        log(f"[PIPELINE] Running archive pipeline {pipeline_name}...")
+        started_at = time.monotonic()
+        try:
+            pipeline = descriptor.instantiate()
+            run_archive = getattr(pipeline, "run_archive", None)
+            if not callable(run_archive):
+                raise TypeError(
+                    f"Archive pipeline '{pipeline_name}' does not implement "
+                    "run_archive()."
+                )
+            archive_result = run_archive(zip_path, output_dir)
+            generated_paths = [
+                Path(path) for path in getattr(archive_result, "generated_paths", ())
+            ]
+            result.generated_outputs.extend(generated_paths)
+            summary = str(getattr(archive_result, "summary", "")).strip()
+            if summary:
+                log(f"[OK] {pipeline_name}: {summary}")
+            else:
+                log(
+                    f"[OK] {pipeline_name}: generated "
+                    f"{len(generated_paths)} artifact(s)."
+                )
+        except Exception as exc:  # noqa: BLE001
+            error_message = f"{zip_path}: {pipeline_name}: {exc}"
+            result.failures.append(error_message)
+            log(f"[FAIL] {error_message}")
+        finally:
+            result.timings.add(
+                f"archive pipeline [{pipeline_name}]",
+                time.monotonic() - started_at,
+            )
+            advance_progress(1.0)
 
 
 def _run_threaded_zip_batches_in_process_pool(
@@ -695,8 +802,8 @@ def _run_pipeline_job(
     timings: TimingRecorder | None = None,
 ) -> Path:
     compatibility_started_at = time.monotonic()
-    accepts_record_timing = (
-        timings is not None and _accepts_record_timing(run_pipeline_file)
+    accepts_record_timing = timings is not None and _accepts_record_timing(
+        run_pipeline_file
     )
     if timings is not None:
         timings.add(
