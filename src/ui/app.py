@@ -5,14 +5,11 @@ from tkinter import ttk
 
 from app_settings import AppSettingsStore, app_display_name
 from pipelines import PipelineDescriptor
-from postprocess import PostprocessDescriptor
 
 from .compat import BaseAppTk, sv_ttk
 from .controllers import (
     PipelineLibraryController,
-    PostprocessLibraryController,
     RunTabController,
-    WorkflowSelectionController,
 )
 from .drag_drop import DragDropMixin
 from .progress import ProgressMixin
@@ -20,6 +17,7 @@ from .resources import ResourceMixin
 from .services import UiServices
 from .settings import SettingsMixin
 from .views import ViewBuilderMixin
+
 
 class ProcessApp(
     ViewBuilderMixin,
@@ -39,60 +37,47 @@ class ProcessApp(
         self._settings_warning_shown = False
         self._ensure_default_settings()
         self.ui_mode = self.settings_store.load_ui_mode()
-        self.pipeline_registry: dict[str, PipelineDescriptor] = {}
         self.pipeline_catalog: dict[str, PipelineDescriptor] = {}
         self.pipeline_rows: list[PipelineDescriptor] = []
         self.pipeline_visibility: dict[str, bool] = {}
         self.pipeline_visibility_vars: dict[str, tk.BooleanVar] = {}
-        self.postprocess_registry: dict[str, PostprocessDescriptor] = {}
-        self.postprocess_catalog: dict[str, PostprocessDescriptor] = {}
-        self.postprocess_rows: list[PostprocessDescriptor] = []
-        self.postprocess_visibility: dict[str, bool] = {}
-        self.postprocess_visibility_vars: dict[str, tk.BooleanVar] = {}
         self.batch_input_var = tk.StringVar()
         self.batch_output_var = tk.StringVar(value=str(Path.cwd()))
         self.batch_zip_var = tk.BooleanVar(value=False)
         self.batch_zip_name_var = tk.StringVar(value="outputs.zip")
         self.batch_progress_var = tk.DoubleVar(value=0.0)
-        self.input_convention_var = tk.StringVar(value="legacy")
         self.batch_input_paths: list[Path] = []
-        self.holo_input_paths: list[Path] = []
-        self.holo_input_var = tk.StringVar()
-        self.holo_status_var = tk.StringVar()
+        self.batch_selection_label = ""
+        self.processing_branch_var = tk.StringVar(
+            value=self.settings_store.load_processing_branch()
+        )
+        self._batch_running = False
         self.minimal_status_var = tk.StringVar(value="Ready.")
         self.pipeline_library_summary_var = tk.StringVar(value="")
-        self.postprocess_library_summary_var = tk.StringVar(value="")
         self.minimal_input_path_var = tk.StringVar(value="No input")
         self.minimal_output_path_var = tk.StringVar(value="")
         self._progress_total_units = 1.0
-        self._progress_completed_units = 0.0
         self._last_saved_batch_log_path: Path | None = None
         self._progress_primary_style = "MinimalPrimary.Horizontal.TProgressbar"
-        self._progress_final_style = "MinimalFinal.Horizontal.TProgressbar"
         self._window_icon_image: tk.PhotoImage | None = None
         self._minimal_logo_image: tk.PhotoImage | None = None
         self._minimal_title_font: tkfont.Font | None = None
-        self._persist_eyeflow_data = tk.BooleanVar(
-            value=self.settings_store.load_persist_source()
-        )
         self.run_controller = RunTabController(self)
-        self.workflow_selection_controller = WorkflowSelectionController(self)
         self.pipeline_library_controller = PipelineLibraryController(self)
-        self.postprocess_library_controller = PostprocessLibraryController(self)
 
         self._set_initial_window_size()
         self._apply_theme()
         self._set_window_icon()
         self._build_ui()
         self._install_drop_targets()
-        self.batch_input_var.trace_add("write", self.run_controller.on_batch_paths_changed)
         self.batch_input_var.trace_add(
-            "write", self.pipeline_library_controller.update_input_statuses
+            "write", self.run_controller.on_batch_paths_changed
         )
-        self.batch_output_var.trace_add("write", self.run_controller.on_batch_paths_changed)
+        self.batch_output_var.trace_add(
+            "write", self.run_controller.on_batch_paths_changed
+        )
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.pipeline_library_controller.register()
-        self.postprocess_library_controller.register()
         self._reset_batch_output()
         self.run_controller.update_minimal_path_labels()
         self._apply_ui_mode(self.ui_mode, persist=False)
@@ -157,7 +142,6 @@ class ProcessApp(
     def _configure_progress_styles(self) -> None:
         progress_colors = {
             self._progress_primary_style: self._accent_color,
-            self._progress_final_style: "#3fb37f",
         }
         for style_name, color in progress_colors.items():
             try:

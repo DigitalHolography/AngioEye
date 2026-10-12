@@ -11,7 +11,7 @@ SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from input_output import create_h5_file  # noqa: E402
+from input_output import stage_analysis_file  # noqa: E402
 
 
 class AppVersionsTests(unittest.TestCase):
@@ -22,6 +22,7 @@ class AppVersionsTests(unittest.TestCase):
             output_path = tmp_path / "ae_output.h5"
 
             with h5py.File(input_path, "w") as h5file:
+                h5file.require_group("Processing/Metrics")
                 h5file.create_dataset(
                     "app_versions",
                     data=json.dumps(
@@ -34,7 +35,7 @@ class AppVersionsTests(unittest.TestCase):
                     dtype=h5py.string_dtype(encoding="utf-8"),
                 )
 
-            create_h5_file(output_path, source_file=input_path)
+            stage_analysis_file(input_path, output_path)
 
             expected_version = re.search(
                 r'^version\s*=\s*"([^"]+)"$',
@@ -62,10 +63,10 @@ class AppVersionsTests(unittest.TestCase):
             tmp_path = Path(tmp_dir)
             input_path = tmp_path / "legacy_input.h5"
             output_path = tmp_path / "ae_output.h5"
-            with h5py.File(input_path, "w"):
-                pass
+            with h5py.File(input_path, "w") as h5file:
+                h5file.require_group("Processing/Metrics")
 
-            create_h5_file(output_path, source_file=input_path)
+            stage_analysis_file(input_path, output_path)
 
             with h5py.File(output_path, "r") as h5file:
                 versions = h5file["/app_versions"]

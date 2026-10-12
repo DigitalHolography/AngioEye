@@ -2,6 +2,7 @@ import sys
 import tkinter as tk
 from pathlib import Path
 
+
 class ResourceMixin:
     def _resource_roots(self) -> list[Path]:
         roots: list[Path] = []

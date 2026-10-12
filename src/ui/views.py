@@ -4,7 +4,6 @@ from tkinter import ttk
 
 from .controllers import AdvancedViewController, MinimalViewController
 from .pipeline_library import PipelineLibraryTab
-from .postprocess_library import PostprocessLibraryTab
 
 
 class MinimalView(ttk.Frame):
@@ -41,7 +40,7 @@ class MinimalView(ttk.Frame):
 
         minimal_select_button = ttk.Button(
             content,
-            text="Select .h5, .holo, or zip archive",
+            text="Select EyeFlow outputs or ZIP archive",
             command=controller.choose_input,
         )
         minimal_select_button.grid(row=2, column=0, pady=(0, 10))
@@ -68,9 +67,7 @@ class MinimalView(ttk.Frame):
         minimal_output_path_label.grid(row=4, column=0, pady=(0, 18), sticky="ew")
         controller.set_widget("minimal_output_path_label", minimal_output_path_label)
 
-        minimal_run_button = ttk.Button(
-            content, text="Run", command=controller.run
-        )
+        minimal_run_button = ttk.Button(content, text="Run", command=controller.run)
         minimal_run_button.grid(row=5, column=0, pady=(0, 18))
         controller.set_widget("minimal_run_button", minimal_run_button)
 
@@ -95,6 +92,9 @@ class MinimalView(ttk.Frame):
         )
         minimal_status_label.grid(row=7, column=0, pady=(8, 0), sticky="ew")
         controller.set_widget("minimal_status_label", minimal_status_label)
+        ttk.Button(
+            content, text="Choose pipelines", command=controller.choose_pipelines
+        ).grid(row=8, column=0, pady=(12, 0))
 
 
 class RunTab(ttk.Frame):
@@ -110,9 +110,7 @@ class RunTab(ttk.Frame):
 
         advanced_input_frame = ttk.Frame(self)
         advanced_input_frame.grid(row=0, column=0, sticky="ew")
-        advanced_input_frame.columnconfigure(
-            0, minsize=controller.form_label_width
-        )
+        advanced_input_frame.columnconfigure(0, minsize=controller.form_label_width)
         advanced_input_frame.columnconfigure(1, weight=1)
         controller.set_widget("advanced_input_frame", advanced_input_frame)
 
@@ -122,9 +120,7 @@ class RunTab(ttk.Frame):
             sticky="w",
             padx=(0, 16),
         )
-        input_entry = ttk.Entry(
-            advanced_input_frame, textvariable=controller.input_var
-        )
+        input_entry = ttk.Entry(advanced_input_frame, textvariable=controller.input_var)
         input_entry.grid(row=0, column=1, sticky="ew", padx=(0, 4))
         input_btn_frame = ttk.Frame(advanced_input_frame)
         input_btn_frame.grid(row=0, column=2, sticky="w")
@@ -134,20 +130,6 @@ class RunTab(ttk.Frame):
         ttk.Button(
             input_btn_frame, text="Browse file", command=controller.choose_file
         ).pack(side="left", padx=(4, 0))
-
-        advanced_holo_status_label = tk.Label(
-            advanced_input_frame,
-            textvariable=controller.holo_status_var,
-            bg=controller.bg_color,
-            fg="#d65f5f",
-            justify="left",
-            anchor="w",
-        )
-        advanced_holo_status_label.grid(
-            row=1, column=1, columnspan=2, sticky="ew", pady=(8, 0)
-        )
-        advanced_holo_status_label.grid_remove()
-        controller.set_widget("advanced_holo_status_label", advanced_holo_status_label)
 
         ttk.Label(advanced_input_frame, text="Output").grid(
             row=2,
@@ -159,37 +141,47 @@ class RunTab(ttk.Frame):
         batch_output_entry = ttk.Entry(
             advanced_input_frame, textvariable=controller.output_var
         )
-        batch_output_entry.grid(
-            row=2, column=1, sticky="ew", padx=(0, 4), pady=(10, 0)
-        )
+        batch_output_entry.grid(row=2, column=1, sticky="ew", padx=(0, 4), pady=(10, 0))
         ttk.Button(
             advanced_input_frame,
             text="Browse",
             command=controller.choose_output,
         ).grid(row=2, column=2, sticky="w", pady=(10, 0))
 
-        run_btn = ttk.Button(
-            advanced_input_frame, text="Run", command=controller.run
-        )
+        run_btn = ttk.Button(advanced_input_frame, text="Run", command=controller.run)
         run_btn.grid(
-            row=3,
+            row=5,
             column=0,
             sticky="w",
             padx=(0, 16),
             pady=(12, 0),
         )
+        controller.set_widget("run_button", run_btn)
 
-        persist_eyeflow_data_btn = ttk.Checkbutton(
+        ttk.Label(advanced_input_frame, text="EyeFlow branch").grid(
+            row=3, column=0, sticky="w", padx=(0, 16), pady=(10, 0)
+        )
+        processing_branch = ttk.Combobox(
             advanced_input_frame,
-            text="Persist Eyeflow Data",
-            variable=controller.persist_eyeflow_data_var,
-            command=controller.persist_source_preference,
+            textvariable=controller.processing_branch_var,
+            values=("Processing", "ProcessingAlt"),
+            state="readonly",
+            width=18,
         )
-        persist_eyeflow_data_btn.grid(row=3, column=1, sticky="w", pady=(12, 0))
+        processing_branch.grid(row=3, column=1, sticky="w", pady=(10, 0))
+        processing_branch.bind(
+            "<<ComboboxSelected>>", controller.persist_processing_branch
+        )
+        archive_options = ttk.Frame(advanced_input_frame)
+        archive_options.grid(row=4, column=1, sticky="w", pady=(10, 0))
+        ttk.Checkbutton(
+            archive_options, text="ZIP results", variable=controller.zip_outputs_var
+        ).pack(side="left")
+        ttk.Entry(archive_options, textvariable=controller.zip_name_var, width=26).pack(
+            side="left", padx=(8, 0)
+        )
 
-        ttk.Label(self, text="BatchLog").grid(
-            row=1, column=0, sticky="w", pady=(16, 4)
-        )
+        ttk.Label(self, text="BatchLog").grid(row=1, column=0, sticky="w", pady=(16, 4))
         batch_output_frame = ttk.Frame(self)
         batch_output_frame.grid(row=2, column=0, sticky="nsew")
         batch_output_frame.columnconfigure(0, weight=1)
@@ -231,13 +223,8 @@ class AdvancedView(ttk.Frame):
             app.notebook,
             controller.create_pipeline_library_controller(),
         )
-        app.postprocess_library_tab = PostprocessLibraryTab(
-            app.notebook,
-            controller.create_postprocess_library_controller(),
-        )
         app.notebook.add(app.batch_tab, text="Run")
-        app.notebook.add(app.pipeline_library_tab, text="Pipeline Library")
-        app.notebook.add(app.postprocess_library_tab, text="Postprocess Library")
+        app.notebook.add(app.pipeline_library_tab, text="Pipelines")
 
 
 class ViewBuilderMixin:

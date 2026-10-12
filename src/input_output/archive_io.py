@@ -5,9 +5,9 @@ import zipfile
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from posixpath import normpath
-from tempfile import TemporaryDirectory
+from tempfile import NamedTemporaryFile, TemporaryDirectory
 
 from .hdf5_schema import is_hdf5_path
 
@@ -27,7 +27,10 @@ class ExtractedH5Member:
 
 
 def _safe_zip_relative_path(member_name: str) -> Path:
-    normalized = normpath(member_name.replace("\\", "/")).strip("/")
+    portable_name = member_name.replace("\\", "/")
+    if portable_name.startswith("/") or PureWindowsPath(portable_name).drive:
+        raise ValueError(f"Unsafe ZIP member path: {member_name}")
+    normalized = normpath(portable_name)
     parts = [part for part in normalized.split("/") if part and part != "."]
     if not parts or any(part == ".." for part in parts):
         raise ValueError(f"Unsafe ZIP member path: {member_name}")
@@ -66,28 +69,6 @@ def list_h5_members(zip_path: str | Path) -> list[ZipH5Member]:
     return members
 
 
-def batched(items: Iterable[ZipH5Member], batch_size: int) -> Iterator[list[ZipH5Member]]:
-    if batch_size < 1:
-        raise ValueError("batch_size must be at least 1.")
-
-    batch: list[ZipH5Member] = []
-    for item in items:
-        batch.append(item)
-        if len(batch) == batch_size:
-            yield batch
-            batch = []
-    if batch:
-        yield batch
-
-
-def iter_h5_member_batches(
-    members: Iterable[ZipH5Member],
-    batch_size: int,
-) -> Iterator[tuple[int, list[ZipH5Member]]]:
-    for batch_idx, member_batch in enumerate(batched(members, batch_size), start=1):
-        yield batch_idx, member_batch
-
-
 def extract_h5_member(
     zip_path: str | Path,
     member: ZipH5Member,
@@ -110,21 +91,6 @@ def _extract_h5_member_from_archive(
     target_path.parent.mkdir(parents=True, exist_ok=True)
     with archive.open(member.name) as src, target_path.open("wb") as dest:
         shutil.copyfileobj(src, dest, length=1024 * 1024)
-
-
-def extract_h5_members(
-    zip_path: str | Path,
-    members: Iterable[ZipH5Member],
-    output_root: str | Path,
-) -> list[Path]:
-    output_root_path = Path(output_root)
-    extracted: list[Path] = []
-    with zipfile.ZipFile(zip_path, "r") as archive:
-        for member in members:
-            target_path = output_root_path / member.relative_path
-            _extract_h5_member_from_archive(archive, member, target_path)
-            extracted.append(target_path)
-    return extracted
 
 
 def iter_extracted_h5_members(
@@ -157,7 +123,8 @@ def create_zip_from_tree(
     progress_callback: Callable[[int, int, Path], None] | None = None,
 ) -> Path:
     tree_root_path = Path(tree_root).expanduser().resolve()
-    zip_path_obj = Path(zip_path)
+    zip_path_obj = Path(zip_path).expanduser()
+    archive_path = zip_path_obj.resolve()
     zip_path_obj.parent.mkdir(parents=True, exist_ok=True)
     excluded_root_dirs = set(exclude_root_dirs or ())
     wrap = Path(archive_root_name) if archive_root_name else Path()
@@ -168,6 +135,7 @@ def create_zip_from_tree(
                 path
                 for path in tree_root_path.rglob("*")
                 if path.is_file()
+                and path.resolve() != archive_path
                 and not _is_in_excluded_root_dir(
                     path,
                     tree_root_path,
@@ -182,6 +150,10 @@ def create_zip_from_tree(
             file_path = Path(source_path).expanduser().resolve()
             if not file_path.is_file():
                 raise FileNotFoundError(f"Source file does not exist: {file_path}")
+            if file_path == archive_path or (
+                zip_path_obj.exists() and file_path.samefile(zip_path_obj)
+            ):
+                raise ValueError("The output ZIP must differ from its source files.")
             try:
                 file_path.relative_to(tree_root_path)
             except ValueError as exc:
@@ -198,22 +170,39 @@ def create_zip_from_tree(
             files.append(file_path)
         files.sort(key=lambda path: path.relative_to(tree_root_path).as_posix())
 
-    with zipfile.ZipFile(
-        zip_path_obj,
-        "w",
-        compression=zipfile.ZIP_DEFLATED,
-        compresslevel=compresslevel,
-    ) as archive:
-        total_files = len(files)
-        if progress_callback is not None:
-            progress_callback(0, total_files, Path("."))
-        for idx, file_path in enumerate(files, start=1):
-            rel_path = file_path.relative_to(tree_root_path)
-            arcname = (wrap / rel_path).as_posix() if archive_root_name else rel_path
-            archive.write(file_path, arcname)
+    temporary_path = _temporary_archive_path(zip_path_obj)
+    try:
+        with zipfile.ZipFile(
+            temporary_path,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+            compresslevel=compresslevel,
+        ) as archive:
+            total_files = len(files)
             if progress_callback is not None:
-                progress_callback(idx, total_files, Path(arcname))
+                progress_callback(0, total_files, Path("."))
+            for idx, file_path in enumerate(files, start=1):
+                rel_path = file_path.relative_to(tree_root_path)
+                arcname = (
+                    (wrap / rel_path).as_posix() if archive_root_name else rel_path
+                )
+                archive.write(file_path, arcname)
+                if progress_callback is not None:
+                    progress_callback(idx, total_files, Path(arcname))
+        temporary_path.replace(zip_path_obj)
+    finally:
+        temporary_path.unlink(missing_ok=True)
     return zip_path_obj
+
+
+def _temporary_archive_path(destination: Path) -> Path:
+    with NamedTemporaryFile(
+        dir=destination.parent,
+        prefix=f".{destination.name}.",
+        suffix=".tmp",
+        delete=False,
+    ) as temporary:
+        return Path(temporary.name)
 
 
 def _is_in_excluded_root_dir(
@@ -259,53 +248,36 @@ def replace_folder_in_zip(
     *,
     arc_folder: str,
 ) -> None:
-    temp_zip = str(zip_path) + ".tmp"
-    folder_path_obj = Path(folder_path)
+    zip_path_obj = Path(zip_path).expanduser()
+    folder_path_obj = Path(folder_path).expanduser().resolve()
+    if not folder_path_obj.is_dir():
+        raise FileNotFoundError(f"Source folder does not exist: {folder_path_obj}")
+    source_files = sorted(
+        path
+        for path in folder_path_obj.rglob("*")
+        if path.is_file() and path.resolve() != zip_path_obj.resolve()
+    )
+    temporary_path = _temporary_archive_path(zip_path_obj)
+    try:
+        with zipfile.ZipFile(zip_path_obj, "r") as source_archive:
+            with zipfile.ZipFile(
+                temporary_path,
+                "w",
+                compression=zipfile.ZIP_DEFLATED,
+            ) as target_archive:
+                for item in source_archive.infolist():
+                    if not item.filename.startswith(f"{arc_folder}/"):
+                        target_archive.writestr(
+                            item, source_archive.read(item.filename)
+                        )
 
-    with zipfile.ZipFile(zip_path, "r") as source_archive:
-        with zipfile.ZipFile(
-            temp_zip,
-            "w",
-            compression=zipfile.ZIP_DEFLATED,
-        ) as target_archive:
-            for item in source_archive.infolist():
-                if not item.filename.startswith(f"{arc_folder}/"):
-                    target_archive.writestr(item, source_archive.read(item.filename))
-
-            for root, _, files in folder_path_obj.walk():
-                root_path = Path(root)
-                for file_name in files:
-                    full_path = root_path / file_name
+                for full_path in source_files:
                     rel_path = full_path.relative_to(folder_path_obj)
                     arcname = (Path(arc_folder) / rel_path).as_posix()
                     target_archive.write(full_path, arcname)
-
-    Path(temp_zip).replace(zip_path)
-
-
-def replace_file_in_zip(
-    zip_path: str | Path,
-    file_to_add: str | Path,
-    *,
-    arcname: str | None = None,
-) -> None:
-    temp_zip = str(zip_path) + ".tmp"
-    file_path = Path(file_to_add)
-    archive_name = arcname or file_path.name
-
-    with zipfile.ZipFile(zip_path, "r") as source_archive:
-        with zipfile.ZipFile(
-            temp_zip,
-            "w",
-            compression=zipfile.ZIP_DEFLATED,
-        ) as target_archive:
-            for item in source_archive.infolist():
-                if item.filename != archive_name:
-                    target_archive.writestr(item, source_archive.read(item.filename))
-
-            target_archive.write(file_path, archive_name)
-
-    Path(temp_zip).replace(zip_path)
+        temporary_path.replace(zip_path_obj)
+    finally:
+        temporary_path.unlink(missing_ok=True)
 
 
 def extract_file_from_zip(
@@ -354,19 +326,15 @@ def extract_folder_from_zip(
 __all__ = [
     "ZipH5Member",
     "ExtractedH5Member",
-    "batched",
     "count_h5_members",
     "create_zip_from_tree",
     "extract_file_from_zip",
     "extract_folder_from_zip",
     "extract_h5_member",
-    "extract_h5_members",
     "extracted_zip_tree",
     "iter_extracted_h5_members",
-    "iter_h5_member_batches",
     "iter_h5_members",
     "list_h5_members",
-    "replace_file_in_zip",
     "replace_folder_in_zip",
     "reset_output_dir",
     "temporary_zip_from_tree",

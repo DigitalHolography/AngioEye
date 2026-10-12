@@ -14,18 +14,14 @@ from app_settings import (  # noqa: E402
     app_display_name,
     default_settings_path,
     normalize_pipeline_visibility,
-    normalize_postprocess_visibility,
 )
 
 
 class AppSettingsTests(unittest.TestCase):
-    def test_default_settings_path_prefers_appdata_and_version(self) -> None:
+    def test_default_settings_path_prefers_appdata_and_version(self):
         with mock.patch.dict(
             "os.environ",
-            {
-                "APPDATA": r"C:\Users\Test\AppData\Roaming",
-                "ANGIOEYE_VERSION": "9.9.9",
-            },
+            {"APPDATA": r"C:\Users\Test\AppData\Roaming", "ANGIOEYE_VERSION": "9.9.9"},
             clear=True,
         ):
             self.assertEqual(
@@ -33,158 +29,127 @@ class AppSettingsTests(unittest.TestCase):
                 Path(r"C:\Users\Test\AppData\Roaming\AngioEye\9.9.9\settings.json"),
             )
 
-    def test_app_display_name_includes_version(self) -> None:
+    def test_display_name_includes_version(self):
         with mock.patch.dict("os.environ", {"ANGIOEYE_VERSION": "9.9.9"}):
-            self.assertEqual("AngioEye v9.9.9", app_display_name())
+            self.assertEqual(app_display_name(), "AngioEye v9.9.9")
 
-    def test_normalize_pipeline_visibility_defaults_first_run_to_waveform_metrics(
-        self,
-    ) -> None:
+    def test_first_launch_selects_summary_and_manifest(self):
         visibility, changed = normalize_pipeline_visibility(
-            ["a", "waveform_shape_metrics", "b"],
-            {},
+            ["HTML summary", "Pipeline Metrics Manifest", "Composite Scoring"], {}
         )
-
         self.assertEqual(
             visibility,
-            {"a": False, "waveform_shape_metrics": True, "b": False},
+            {
+                "HTML summary": True,
+                "Pipeline Metrics Manifest": True,
+                "Composite Scoring": False,
+            },
         )
         self.assertTrue(changed)
 
-    def test_normalize_pipeline_visibility_hides_new_pipelines_after_first_run(
-        self,
-    ) -> None:
+    def test_new_pipelines_remain_unselected_and_removed_names_are_pruned(self):
         visibility, changed = normalize_pipeline_visibility(
-            ["a", "b", "c"],
-            {"a": True, "b": False},
+            ["a", "b"], {"a": True, "removed": False}
         )
-
-        self.assertEqual(visibility, {"a": True, "b": False, "c": False})
+        self.assertEqual(visibility, {"a": True, "b": False})
         self.assertTrue(changed)
 
-    def test_store_round_trips_pipeline_visibility(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            store = AppSettingsStore(Path(tmp_dir) / "settings.json")
-            expected = {"Basic Stats": True, "Dummy Heavy": False}
-
-            store.save_pipeline_visibility(expected)
-
-            self.assertEqual(store.load_pipeline_visibility(), expected)
-
-    def test_normalize_postprocess_visibility_defaults_to_unselected(self) -> None:
-        visibility, changed = normalize_postprocess_visibility(
-            ["Graphics Dashboard"],
-            {},
-        )
-
-        self.assertEqual(visibility, {"Graphics Dashboard": False})
-        self.assertTrue(changed)
-
-    def test_store_round_trips_postprocess_visibility(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            store = AppSettingsStore(Path(tmp_dir) / "settings.json")
-            expected = {"Graphics Dashboard": True}
-
-            store.save_postprocess_visibility(expected)
-
-            self.assertEqual(store.load_postprocess_visibility(), expected)
-
-    def test_load_ui_mode_defaults_to_minimal(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            store = AppSettingsStore(Path(tmp_dir) / "settings.json")
-
-            self.assertEqual(store.load_ui_mode(), "minimal")
-
-    def test_load_persist_source_defaults_to_false(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            store = AppSettingsStore(Path(tmp_dir) / "settings.json")
-
-            self.assertFalse(store.load_persist_source())
-
-    def test_load_uses_default_template_when_user_settings_missing(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            template_path = tmp_path / "default_settings.json"
-            settings_path = tmp_path / "settings.json"
-            template_path.write_text(
+    def test_legacy_settings_preserve_batch_selection_and_clean_obsolete_keys(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings_path = Path(directory) / "settings.json"
+            settings_path.write_text(
                 json.dumps(
                     {
-                        "pipeline_visibility": {"Demo": True},
-                        "postprocess_visibility": {"Report": False},
+                        "pipeline_visibility": {"waveform_shape_metrics": True},
+                        "postprocess_visibility": {
+                            "Composite Scoring": True,
+                            "HTML summary": False,
+                        },
+                        "postprocess_batching": {"variability": {"batch_size": 4}},
+                        "persist_source": True,
+                        "trim_h5source": False,
                         "ui_mode": "advanced",
                     }
                 ),
                 encoding="utf-8",
             )
-            store = AppSettingsStore(settings_path, template_path)
-
-            self.assertEqual(store.load_ui_mode(), "advanced")
-            self.assertEqual(store.load_pipeline_visibility(), {"Demo": True})
-
-    def test_initialize_from_defaults_does_not_overwrite_existing_settings(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            template_path = tmp_path / "default_settings.json"
-            settings_path = tmp_path / "settings.json"
-            template_path.write_text(
-                json.dumps({"ui_mode": "advanced"}),
-                encoding="utf-8",
-            )
-            settings_path.write_text(
-                json.dumps({"ui_mode": "minimal"}),
-                encoding="utf-8",
-            )
-            store = AppSettingsStore(settings_path, template_path)
-
-            self.assertFalse(store.initialize_from_defaults())
-            self.assertEqual(store.load_ui_mode(), "minimal")
-
-    def test_initialize_from_defaults_writes_missing_settings(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            template_path = tmp_path / "default_settings.json"
-            settings_path = tmp_path / "settings.json"
-            template_path.write_text(
-                json.dumps({"ui_mode": "advanced"}),
-                encoding="utf-8",
-            )
-            store = AppSettingsStore(settings_path, template_path)
-
-            self.assertTrue(store.initialize_from_defaults())
-            self.assertEqual(
-                json.loads(settings_path.read_text(encoding="utf-8")),
-                {"ui_mode": "advanced"},
-            )
-
-    def test_store_round_trips_ui_mode(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            store = AppSettingsStore(Path(tmp_dir) / "settings.json")
-
-            store.save_ui_mode("advanced")
-
-            self.assertEqual(store.load_ui_mode(), "advanced")
-
-    def test_store_round_trips_persist_source(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            store = AppSettingsStore(Path(tmp_dir) / "settings.json")
-
-            store.save_persist_source(True)
-
-            self.assertTrue(store.load_persist_source())
-
-    def test_load_batch_execution_reads_settings_json(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            settings_path = Path(tmp_dir) / "settings.json"
-            settings_path.write_text(
-                json.dumps({"batch_execution": {"batch_size": 12}}),
-                encoding="utf-8",
-            )
             store = AppSettingsStore(settings_path)
+            self.assertEqual(
+                store.load_pipeline_visibility(),
+                {"Composite Scoring": True, "HTML summary": False},
+            )
+            self.assertEqual(
+                store.load_pipeline_batching(), {"variability": {"batch_size": 4}}
+            )
+            store.save_ui_mode("minimal")
+            saved = json.loads(settings_path.read_text(encoding="utf-8"))
+            for key in (
+                "postprocess_visibility",
+                "postprocess_batching",
+                "persist_source",
+                "trim_h5source",
+            ):
+                self.assertNotIn(key, saved)
+            self.assertEqual(
+                saved["pipeline_visibility"],
+                {"Composite Scoring": True, "HTML summary": False},
+            )
 
-            self.assertEqual(store.load_batch_execution(), {"batch_size": 12})
+    def test_branch_round_trip_and_invalid_values(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = AppSettingsStore(Path(directory) / "settings.json")
+            self.assertEqual(store.load_processing_branch(), "Processing")
+            store.save_processing_branch("ProcessingAlt")
+            self.assertEqual(store.load_processing_branch(), "ProcessingAlt")
+            with self.assertRaises(ValueError):
+                store.save_processing_branch("missing")
+            for value in ("unknown", {}, []):
+                store.save({"processing_branch": value})
+                self.assertEqual(store.load_processing_branch(), "Processing")
 
+    def test_renamed_batch_tools_preserve_legacy_selection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = AppSettingsStore(Path(directory) / "settings.json")
+            store.save(
+                {
+                    "postprocess_visibility": {
+                        "Variability and heterogeneity tables": True,
+                        "groups comparison dashboard": True,
+                    }
+                }
+            )
+            self.assertEqual(
+                store.load_pipeline_visibility(),
+                {
+                    "Variability and heterogeneity": True,
+                    "Group comparison (Dashboard) - Waveform Shape Metrics": True,
+                },
+            )
 
-if __name__ == "__main__":
-    unittest.main()
+    def test_defaults_initialization_preserves_existing_user_preferences(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            template = root / "defaults.json"
+            template.write_text(
+                json.dumps(
+                    {
+                        "pipeline_visibility": {"HTML summary": True},
+                        "ui_mode": "advanced",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            store = AppSettingsStore(root / "settings.json", template)
+            self.assertTrue(store.initialize_from_defaults())
+            store.save_pipeline_visibility({"HTML summary": False})
+            self.assertFalse(store.initialize_from_defaults())
+            self.assertEqual(store.load_pipeline_visibility(), {"HTML summary": False})
+            self.assertEqual(store.load_ui_mode(), "advanced")
+
+    def test_malformed_json_returns_default_mode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            path.write_text("not json", encoding="utf-8")
+            store = AppSettingsStore(path)
+            self.assertEqual(store.load(), {})
+            self.assertEqual(store.load_ui_mode(), "minimal")

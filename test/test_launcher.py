@@ -8,7 +8,7 @@ SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-import launcher
+import launcher  # noqa: E402
 
 
 class LauncherTests(unittest.TestCase):
@@ -27,7 +27,7 @@ class LauncherTests(unittest.TestCase):
                 start_dir=nested_dir,
             )
 
-            self.assertEqual(src_dir, result)
+            self.assertEqual(src_dir.resolve(), result)
 
     def test_call_entry_prefers_checkout_module(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -36,8 +36,7 @@ class LauncherTests(unittest.TestCase):
             src_dir.mkdir()
             (repo_root / "pyproject.toml").write_text("[project]\nname='AngioEye'\n")
             (src_dir / "fake_entry.py").write_text(
-                "def main(value=None):\n"
-                "    return ('checkout', value)\n",
+                "def main(value=None):\n    return ('checkout', value)\n",
                 encoding="utf-8",
             )
 
@@ -57,8 +56,7 @@ class LauncherTests(unittest.TestCase):
             outside_dir = module_dir / "outside"
             outside_dir.mkdir()
             (module_dir / "fallback_entry.py").write_text(
-                "def main():\n"
-                "    return 'installed'\n",
+                "def main():\n    return 'installed'\n",
                 encoding="utf-8",
             )
             sys.path.insert(0, str(module_dir))

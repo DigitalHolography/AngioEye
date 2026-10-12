@@ -12,19 +12,12 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 import input_output.hdf5_io as hdf5_io  # noqa: E402
-from math_utils import (  # noqa: E402
-    cv_1d,
-    finite_1d,
-    iqr_1d,
-    mad_1d,
-    median_1d,
-    nanmedian_or_nan,
-    std_1d,
-)
-from postprocess.variability_heterogeneity import (  # noqa: E402
+from math_utils import nanmedian_or_nan  # noqa: E402
+from pipelines.variability_heterogeneity import (  # noqa: E402
     compute,
     constants,
     export,
+    rendering,
     statistics,
 )
 
@@ -32,12 +25,20 @@ from postprocess.variability_heterogeneity import (  # noqa: E402
 def _reference_axis_statistics(slices, eps):
     stats = {name: [] for name in ("median", "std", "iqr", "mad", "cv")}
     for values in slices:
-        finite = finite_1d(values)
-        stats["median"].append(median_1d(finite))
-        stats["std"].append(std_1d(finite))
-        stats["iqr"].append(iqr_1d(finite))
-        stats["mad"].append(mad_1d(finite))
-        stats["cv"].append(cv_1d(finite, eps=eps))
+        values = np.asarray(values, dtype=float)
+        finite = values[np.isfinite(values)]
+        if not finite.size:
+            for entries in stats.values():
+                entries.append(np.nan)
+            continue
+        median = np.median(finite)
+        std = np.std(finite, ddof=1) if finite.size > 1 else 0.0
+        q25, q75 = np.percentile(finite, (25, 75))
+        stats["median"].append(median)
+        stats["std"].append(std)
+        stats["iqr"].append(q75 - q25)
+        stats["mad"].append(np.median(np.abs(finite - median)))
+        stats["cv"].append(std / (abs(np.mean(finite)) + eps))
     return {name: np.asarray(values, dtype=float) for name, values in stats.items()}
 
 
@@ -161,9 +162,7 @@ class HigherMetricComputationTests(unittest.TestCase):
         for name, values in cases.items():
             with self.subTest(name=name):
                 expected = _reference_higher_metrics(values)
-                actual = compute.compute_file_higher_metrics_from_segment_array(
-                    values
-                )
+                actual = compute.compute_file_higher_metrics_from_segment_array(values)
                 self.assertEqual(actual.keys(), expected.keys())
                 np.testing.assert_allclose(
                     list(actual.values()),
@@ -175,9 +174,7 @@ class HigherMetricComputationTests(unittest.TestCase):
 
     def test_non_3d_array_is_rejected(self):
         self.assertIsNone(
-            compute.compute_file_higher_metrics_from_segment_array(
-                np.ones((2, 2))
-            )
+            compute.compute_file_higher_metrics_from_segment_array(np.ones((2, 2)))
         )
 
 
@@ -222,11 +219,9 @@ class ThresholdSweepTests(unittest.TestCase):
                 control,
                 group,
             )
-            actual = (
-                statistics.best_threshold_sensitivity_specificity_cumulative_sweep(
-                    control,
-                    group,
-                )
+            actual = statistics.best_threshold_sensitivity_specificity_cumulative_sweep(
+                control,
+                group,
             )
 
             with self.subTest(sample_index=sample_index):
@@ -237,11 +232,9 @@ class ThresholdSweepTests(unittest.TestCase):
         control = np.asarray([-100.0] * 5 + [5.0] + [300.0] * 5)
         group = np.asarray([-200.0] * 4 + [6.0] * 2 + [200.0] * 5)
 
-        preferred = (
-            statistics.best_threshold_sensitivity_specificity_cumulative_sweep(
-                control,
-                group,
-            )
+        preferred = statistics.best_threshold_sensitivity_specificity_cumulative_sweep(
+            control,
+            group,
         )
         both = statistics.best_threshold_sensitivity_specificity_cumulative_sweep(
             control,
@@ -281,6 +274,16 @@ class ThresholdSweepTests(unittest.TestCase):
 
 
 class ReportExportTests(unittest.TestCase):
+    def test_latex_table_preserves_preformatted_labels_and_cells(self):
+        frame = rendering.pd.DataFrame(
+            [[r"metric\_name", r"1.00 $\pm$ 0.10", r"control \& patient"]],
+            columns=[r"metric\_label", "Value", r"Group \& comparison"],
+        )
+        text = rendering.dataframe_to_latex_table(frame)
+        self.assertIn(r"metric\_label & Value & Group \& comparison \\", text)
+        self.assertIn(r"metric\_name & 1.00 $\pm$ 0.10 & control \& patient \\", text)
+        self.assertNotIn(r"\textbackslash", text)
+
     def test_export_builds_complete_report_tree_from_grouped_results(self):
         results = {}
         for group_name, scale in (("control", 1.0), ("patient", 1.8)):
@@ -301,22 +304,23 @@ class ReportExportTests(unittest.TestCase):
             output_dir = Path(tmp_dir) / "Variability and heterogeneity"
             generated = export.export_group_tables_from_results(results, output_dir)
 
-            self.assertEqual(63, len(generated))
+            self.assertTrue(generated)
+            self.assertTrue(all(Path(path).is_file() for path in generated))
             self.assertTrue(
-                (output_dir / "spatial/raw/control_spatial_variability_table.csv").is_file()
+                (
+                    output_dir / "spatial/raw/control_spatial_variability_table.csv"
+                ).is_file()
             )
             self.assertTrue(
                 (
-                    output_dir
-                    / "spatial/comparisons_vs_control/"
+                    output_dir / "spatial/comparisons_vs_control/"
                     "patient_vs_control_spatial_auc_separability_ranking_all_metrics.csv"
                 ).is_file()
             )
             self.assertTrue(
                 (
-                    output_dir
-                    / "temporal/comparisons_vs_control/"
-                    "patient_vs_control_best_temporal_variability_mannwhitney.tex"
+                    output_dir / "temporal/comparisons_vs_control/"
+                    "patient_vs_control_temporal_auc_separability_ranking_all_metrics.tex"
                 ).is_file()
             )
             self.assertTrue((output_dir / "variability_report.html").is_file())

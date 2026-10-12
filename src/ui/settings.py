@@ -1,5 +1,7 @@
 import tkinter as tk
+
 from .services import services_for
+
 
 class SettingsMixin:
     def _ensure_default_settings(self) -> None:
@@ -26,30 +28,19 @@ class SettingsMixin:
                 f"Could not save UI mode preference:\n{exc}",
             )
 
-    def _persist_source_preference(self) -> None:
-        try:
-            self.settings_store.save_persist_source(
-                bool(self._persist_eyeflow_data.get())
-            )
-        except OSError as exc:
-            self._show_settings_warning(
-                "Settings not saved",
-                f"Could not save source persistence preference:\n{exc}",
-            )
-
     def _window_size_for_mode(self, mode: str) -> tuple[int, int, int, int]:
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         if mode == "advanced":
             width = min(900, max(760, screen_width - 240), screen_width)
             height = min(640, max(520, screen_height - 240), screen_height)
-            min_width = min(620, width)
-            min_height = min(520, height)
+            min_width = min(740, width)
+            min_height = min(580, height)
         else:
-            width = max(560, min(660, screen_width - 260))
-            height = max(480, min(440, screen_height - 260))
+            width = min(660, max(560, screen_width - 260), screen_width)
+            height = min(600, max(560, screen_height - 220), screen_height)
             min_width = min(500, width)
-            min_height = min(460, height)
+            min_height = min(520, height)
         return width, height, min_width, min_height
 
     def _ensure_window_size_for_mode(
@@ -121,15 +112,17 @@ class SettingsMixin:
 
         self._ensure_window_size_for_mode(
             normalized_mode,
-            force_target_size=(
-                normalized_mode == "minimal"
-                and (previous_mode == "advanced" or not persist)
-            ),
+            force_target_size=(previous_mode != normalized_mode or not persist),
         )
         if persist:
             self._persist_ui_mode()
 
     def _on_close(self) -> None:
+        self._closing = True
         self._persist_ui_mode()
-        self._persist_source_preference()
-        self.destroy()
+        if getattr(self, "_batch_running", False):
+            # Keep the event loop alive until the worker finishes its writes.
+            # Closing the window must not terminate a partially written batch.
+            self.withdraw()
+        else:
+            self.destroy()

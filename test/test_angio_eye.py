@@ -1,8 +1,8 @@
 import sys
 import tempfile
 import unittest
-import zipfile
 from pathlib import Path
+from threading import get_ident
 from types import SimpleNamespace
 from unittest import mock
 
@@ -10,456 +10,231 @@ SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-import pipeline_engine.execution as pipeline_execution  # noqa: E402
-from angio_eye import ProcessApp  # noqa: E402
-from workflows import RunWorkflowResult, WorkflowDispatchResult  # noqa: E402
+from ui.controllers.run import RunTabController  # noqa: E402
+from ui.drag_drop import DragDropMixin  # noqa: E402
+from ui.services import UiServices  # noqa: E402
+from ui.settings import SettingsMixin  # noqa: E402
 
 
-class _Var:
-    def __init__(self, value):
-        self._value = value
+class Var:
+    def __init__(self, value=""):
+        self.value = value
 
     def get(self):
-        return self._value
+        return self.value
 
     def set(self, value):
-        self._value = value
+        self.value = value
 
 
-class BatchZipCleanupTests(unittest.TestCase):
-    def _make_fake_app(
-        self,
-        *,
-        input_path: Path,
-        base_output_dir: Path,
-        zip_should_fail: bool,
-    ):
-        logs: list[str] = []
-        data_root = input_path.parent / "extracted"
-        h5_path = data_root / "sample.h5"
+def make_app():
+    pipeline = SimpleNamespace(name="Summary", available=True)
+    return SimpleNamespace(
+        batch_input_var=Var(),
+        batch_output_var=Var(),
+        batch_input_paths=[],
+        batch_selection_label="",
+        batch_zip_var=Var(False),
+        batch_zip_name_var=Var("statistics.zip"),
+        processing_branch_var=Var("ProcessingAlt"),
+        minimal_input_path_var=Var(),
+        minimal_output_path_var=Var(),
+        pipeline_rows=[pipeline],
+        pipeline_visibility={"Summary": True},
+        _batch_running=False,
+        _progress_total_units=1.0,
+        _reset_progress=mock.Mock(),
+        _set_progress_units=mock.Mock(),
+        _set_minimal_status=mock.Mock(),
+        _reset_batch_output=mock.Mock(),
+        _log_batch=mock.Mock(),
+        _show_batch_error_dialog=mock.Mock(),
+        update=mock.Mock(),
+        after=mock.Mock(),
+        destroy=mock.Mock(),
+        withdraw=mock.Mock(),
+        _persist_ui_mode=mock.Mock(),
+        ui_services=UiServices(dialogs=mock.Mock(), file_dialogs=mock.Mock()),
+    )
 
-        def _run_pipelines_on_file(
-            _h5_path,
-            _pipelines,
-            output_dir,
-            output_relative_parent=Path("."),
-            output_filename=None,
-            **_kwargs,
-        ):
-            target_dir = output_dir / output_relative_parent
-            target_dir.mkdir(parents=True, exist_ok=True)
-            png_dir = output_dir / "png"
-            png_dir.mkdir(parents=True, exist_ok=True)
-            (png_dir / "composite_scoring_raw_rwas_by_cohort.png").write_text(
-                "png",
-                encoding="utf-8",
-            )
-            result_path = target_dir / (output_filename or "sample_pipelines_result.h5")
-            result_path.write_text("result", encoding="utf-8")
-            return result_path
 
-        def _zip_output_dir(_folder, target_path=None, progress_callback=None):
-            if zip_should_fail:
-                raise RuntimeError("zip failed")
-            if progress_callback is not None:
-                progress_callback(1, 1, Path("sample_pipelines_result.h5"))
-            assert target_path is not None
-            target_path.write_text("archive", encoding="utf-8")
-            return target_path
-
-        return SimpleNamespace(
-            batch_input_var=_Var(str(input_path)),
-            batch_output_var=_Var(str(base_output_dir)),
-            batch_zip_var=_Var(True),
-            batch_zip_name_var=_Var("outputs.zip"),
-            batch_input_paths=[],
-            ui_mode="advanced",
-            _progress_total_units=1.0,
-            _progress_completed_units=0.0,
-            pipeline_rows=[SimpleNamespace(name="Demo", available=True)],
-            postprocess_rows=[],
-            pipeline_visibility={"Demo": True},
-            postprocess_visibility={},
-            pipeline_registry={"Demo": object()},
-            postprocess_registry={},
-            _validate_postprocess_selection=lambda *args, **kwargs: [],
-            _reset_batch_output=lambda *args, **kwargs: None,
-            _prepare_data_root=lambda _path: (data_root, None),
-            _find_h5_inputs=lambda _path: [h5_path],
-            _relative_input_parent=lambda *args, **kwargs: Path("."),
-            _run_pipelines_on_file=_run_pipelines_on_file,
-            _run_postprocesses=lambda *args, **kwargs: None,
-            _zip_output_dir=_zip_output_dir,
-            run_pipeline_file=_run_pipelines_on_file,
-            _log_batch=logs.append,
-            _show_batch_error_dialog=lambda *args, **kwargs: None,
-            _reset_progress=lambda: None,
-            _start_progress=lambda total_units, **_kwargs: None,
-            _set_progress_units=lambda completed_units: None,
-            _advance_progress=lambda units=1.0: None,
-            _minimal_output_filename_for_run=lambda _data_path, _inputs: None,
-            update=lambda: None,
-            logs=logs,
-            _uses_holo_input_convention=lambda: False,
-            _selected_batch_input_paths=lambda: [],
-            _progress_primary_style="primary.Horizontal.TProgressbar",
-            _progress_final_style="final.Horizontal.TProgressbar",
-            _set_minimal_status=lambda *_args, **_kwargs: None,
-        )
-
-    @mock.patch("angio_eye.messagebox.showwarning")
-    @mock.patch("angio_eye.messagebox.showerror")
-    @mock.patch("angio_eye.messagebox.showinfo")
-    def test_run_batch_removes_temp_output_dir_after_successful_zip(
-        self,
-        showinfo,
-        _showerror,
-        _showwarning,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            input_path = tmp_path / "input.zip"
-            with zipfile.ZipFile(input_path, "w") as archive:
-                archive.writestr("sample.h5", "dummy")
-            base_output_dir = tmp_path / "outputs"
-            base_output_dir.mkdir()
-
-            app = self._make_fake_app(
-                input_path=input_path,
-                base_output_dir=base_output_dir,
-                zip_should_fail=False,
-            )
-
+class BatchControllerTests(unittest.TestCase):
+    def test_explicit_selection_submits_whole_batch_once(self):
+        app = make_app()
+        controller = RunTabController(app)
+        with tempfile.TemporaryDirectory() as directory:
+            paths = [Path(directory) / "a_EF.h5", Path(directory) / "b_EF.h5"]
+            controller.apply_inputs(paths)
+            result = SimpleNamespace(failures=[], summary_message="Analyzed 2 files.")
             with mock.patch(
-                "workflows.dispatch.run_pipeline_file",
-                app.run_pipeline_file,
-            ):
-                ProcessApp.run_batch(app)
+                "ui.controllers.run.run_batch", return_value=result
+            ) as runner:
+                controller.run()
+                controller._worker_thread.join(timeout=5)
+                controller._poll_worker_events()
+            self.assertEqual(runner.call_count, 1)
+            call = runner.call_args
+            self.assertEqual(call.args[0], tuple(paths))
+            self.assertEqual(call.args[1], app.pipeline_rows)
+            self.assertEqual(call.kwargs["processing_branch"], "ProcessingAlt")
+            self.assertFalse(app._batch_running)
+            app._set_minimal_status.assert_called_with("Completed.")
 
-            self.assertTrue((base_output_dir / "outputs.zip").exists())
-            self.assertEqual(
-                [base_output_dir / "outputs.zip", base_output_dir / "png"],
-                sorted(base_output_dir.iterdir()),
-            )
-            self.assertTrue(
-                (
-                    base_output_dir
-                    / "png"
-                    / "composite_scoring_raw_rwas_by_cohort.png"
-                ).exists()
-            )
-            self.assertTrue(
-                any("outputs.zip" in message for message in app.logs),
-            )
-            showinfo.assert_not_called()
+    def test_manual_input_edit_overrides_multiselection(self):
+        app = make_app()
+        controller = RunTabController(app)
+        controller.apply_inputs([Path("a.h5"), Path("b.h5")])
+        app.batch_input_var.set("replacement.h5")
+        self.assertEqual(controller.selected_inputs(), (Path("replacement.h5"),))
 
-    @mock.patch("angio_eye.messagebox.showwarning")
-    @mock.patch("angio_eye.messagebox.showerror")
-    @mock.patch("angio_eye.messagebox.showinfo")
-    def test_run_batch_keeps_work_dir_when_zip_creation_fails(
-        self,
-        showinfo,
-        showerror,
-        _showwarning,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            input_path = tmp_path / "input.zip"
-            with zipfile.ZipFile(input_path, "w") as archive:
-                archive.writestr("sample.h5", "dummy")
-            base_output_dir = tmp_path / "outputs"
-            base_output_dir.mkdir()
+    def test_no_selected_pipeline_does_not_run(self):
+        app = make_app()
+        app.batch_input_var.set("sample.h5")
+        app.pipeline_visibility["Summary"] = False
+        with mock.patch("ui.controllers.run.run_batch") as runner:
+            RunTabController(app).run()
+        runner.assert_not_called()
+        app.ui_services.dialogs.showwarning.assert_called_once()
 
-            app = self._make_fake_app(
-                input_path=input_path,
-                base_output_dir=base_output_dir,
-                zip_should_fail=True,
-            )
-
-            with mock.patch(
-                "workflows.dispatch.run_pipeline_file",
-                app.run_pipeline_file,
-            ):
-                ProcessApp.run_batch(app)
-
-            work_dirs = [path for path in base_output_dir.iterdir() if path.is_dir()]
-            self.assertEqual(1, len(work_dirs))
-            self.assertTrue(
-                (work_dirs[0] / "sample_pipelines_result.h5").exists(),
-            )
-            self.assertFalse((base_output_dir / "outputs.zip").exists())
-            self.assertTrue(
-                any(str(work_dirs[0]) in message for message in app.logs),
-            )
-            self.assertEqual("ZIP failed", showerror.call_args.args[0])
-            showinfo.assert_not_called()
-
-    def test_apply_input_defaults_for_zip_input(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            input_path = tmp_path / "sample.zip"
-            input_path.write_text("dummy", encoding="utf-8")
-
-            app = SimpleNamespace(
-                input_convention_var=_Var("legacy"),
-                holo_input_paths=[],
-                holo_input_var=_Var(""),
-                batch_output_var=_Var(""),
-                batch_zip_var=_Var(False),
-                batch_zip_name_var=_Var("outputs.zip"),
-                _default_output_stem=lambda input_path: f"{input_path.stem}_angioeye",
-                _default_archive_name=(
-                    lambda input_path: f"{input_path.stem}_angioeye.zip"
-                ),
-                _update_holo_status_labels=lambda: None,
-                _reset_progress=lambda: None,
-                _set_minimal_status=lambda *_args, **_kwargs: None,
-            )
-
-            ProcessApp._apply_input_defaults(app, input_path)
-
-            self.assertEqual(
-                str(tmp_path / "sample_angioeye"),
-                app.batch_output_var.get(),
-            )
-            self.assertTrue(app.batch_zip_var.get())
-            self.assertEqual("sample_angioeye.zip", app.batch_zip_name_var.get())
-
-    def test_minimal_output_filename_for_single_h5(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            input_path = Path(tmp_dir) / "sample.h5"
-            input_path.write_text("dummy", encoding="utf-8")
-
-            app = SimpleNamespace(
-                ui_mode="minimal",
-                batch_zip_var=_Var(False),
-                _default_output_artifact_name=lambda path: f"{path.stem}_angioeye.h5",
-            )
-
-            output_name = ProcessApp._minimal_output_filename_for_run(
-                app,
-                input_path,
-                [input_path],
-            )
-
-            self.assertEqual("sample_angioeye.h5", output_name)
-
-    def test_handle_dropped_paths_accepts_supported_file(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            input_path = Path(tmp_dir) / "sample.zip"
-            input_path.write_text("dummy", encoding="utf-8")
-            applied_paths: list[Path] = []
-            logs: list[str] = []
-
-            app = SimpleNamespace(
-                input_convention_var=_Var("legacy"),
-                batch_input_var=_Var(""),
-                run_controller=SimpleNamespace(
-                    is_supported_file_input=lambda path: path.suffix == ".zip",
-                    apply_input_defaults=lambda path: applied_paths.append(path),
-                ),
-                _log_batch=logs.append,
-            )
-
-            accepted = ProcessApp._handle_dropped_paths(app, [input_path])
-
-            self.assertTrue(accepted)
-            self.assertEqual(str(input_path), app.batch_input_var.get())
-            self.assertEqual([input_path], applied_paths)
-            self.assertIn("Drag and drop", logs[0])
-
-    def test_handle_dropped_paths_accepts_holo_path_list(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            list_path = Path(tmp_dir) / "holo_inputs.txt"
-            list_path.write_text("sample.holo\n", encoding="utf-8")
-            applied_holo_paths: list[Path] = []
-            logs: list[str] = []
-
-            app = SimpleNamespace(
-                run_controller=SimpleNamespace(
-                    apply_holo_inputs=lambda paths: applied_holo_paths.extend(paths),
-                ),
-                _log_batch=logs.append,
-            )
-
-            accepted = ProcessApp._handle_dropped_paths(app, [list_path])
-
-            self.assertTrue(accepted)
-            self.assertEqual([list_path], applied_holo_paths)
-            self.assertIn("Drag and drop", logs[0])
-
-    @mock.patch("angio_eye.messagebox.showwarning")
-    @mock.patch("angio_eye.messagebox.showerror")
-    def test_run_batch_sends_explicit_file_folder_and_zip_modes(
-        self,
-        _showerror,
-        _showwarning,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            base_output_dir = tmp_path / "outputs"
-            base_output_dir.mkdir()
-            file_input = tmp_path / "sample.h5"
-            file_input.write_text("h5", encoding="utf-8")
-            folder_input = tmp_path / "folder"
-            folder_input.mkdir()
-            (folder_input / "nested.h5").write_text("h5", encoding="utf-8")
-            zip_input = tmp_path / "input.zip"
-            with zipfile.ZipFile(zip_input, "w") as archive:
-                archive.writestr("sample.h5", "h5")
-
-            captured_modes: list[str] = []
-
-            def _dispatch(request, _callbacks):
-                captured_modes.append(request.mode)
-                return WorkflowDispatchResult(
-                    workflow_result=RunWorkflowResult(
-                        output_dir=base_output_dir,
-                        processed_outputs=[],
-                        failures=[],
-                        summary_message="done",
-                    )
-                )
-
-            with mock.patch("angio_eye.dispatch_workflow", side_effect=_dispatch):
-                for input_path in (file_input, folder_input, zip_input):
-                    app = self._make_fake_app(
-                        input_path=input_path,
-                        base_output_dir=base_output_dir,
-                        zip_should_fail=False,
-                    )
-                    ProcessApp.run_batch(app)
-
-            self.assertEqual(["file", "folder", "zip"], captured_modes)
-
-    def test_zip_output_dir_excludes_root_png_companion_folder(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            work_dir = tmp_path / "work"
-            work_dir.mkdir()
-            (work_dir / "sample_result.h5").write_text("result", encoding="utf-8")
-            png_dir = work_dir / "png"
-            png_dir.mkdir()
-            (png_dir / "composite_scoring_raw_rwas_by_cohort.png").write_text(
-                "png",
-                encoding="utf-8",
-            )
-            zip_path = tmp_path / "outputs.zip"
-
-            ProcessApp._zip_output_dir(
-                ProcessApp.__new__(ProcessApp),
-                work_dir,
-                target_path=zip_path,
-            )
-
-            with zipfile.ZipFile(zip_path, "r") as archive:
-                names = sorted(archive.namelist())
-
-            self.assertEqual(["sample_result.h5"], names)
-
-
-class PostprocessExecutionTests(unittest.TestCase):
-    def test_postprocess_metadata_failures_do_not_block_next_postprocess(self) -> None:
-        calls: list[str] = []
-        logs: list[str] = []
-        failures: list[str] = []
-        progress: list[float] = []
-
-        class _Postprocess:
-            def __init__(self, name, result):
-                self._name = name
-                self._result = result
-
-            def run(self, _context):
-                calls.append(self._name)
-                return self._result
-
-        class _Descriptor:
-            def __init__(self, name, result):
-                self.name = name
-                self._result = result
-
-            def instantiate(self):
-                return _Postprocess(self.name, self._result)
-
-        first_result = SimpleNamespace(
-            summary="partial",
-            metadata={"failures": ["Composite Scoring skipped broken.h5"]},
-        )
-        second_result = SimpleNamespace(summary="done", metadata={})
+    def test_run_failure_restores_controls_and_reports_error(self):
+        app = make_app()
+        app.batch_input_var.set("sample.h5")
+        app.batch_output_var.set("outputs")
+        app.run_button = mock.Mock()
         with mock.patch(
-            "pipeline_engine.execution.PostprocessContext",
-            lambda **kwargs: kwargs,
+            "ui.controllers.run.run_batch",
+            side_effect=ValueError("Invalid EyeFlow output"),
         ):
-            pipeline_execution.run_postprocesses(
-                postprocesses=(
-                    _Descriptor("Composite Scoring", first_result),
-                    _Descriptor("Next Postprocess", second_result),
-                ),
-                output_dir=Path("."),
-                processed_outputs=(Path("ok.h5"),),
-                input_h5_paths=(Path("ok_input.h5"),),
-                input_path=Path("archive.zip"),
-                selected_pipeline_names=("waveform_shape_metrics",),
-                failures=failures,
-                zip_outputs=False,
-                log=logs.append,
-                advance_progress=lambda units=1.0: progress.append(units),
+            controller = RunTabController(app)
+            controller.run()
+            controller._worker_thread.join(timeout=5)
+            controller._poll_worker_events()
+        self.assertFalse(app._batch_running)
+        app.run_button.configure.assert_called_with(state="normal")
+        app.ui_services.dialogs.showerror.assert_called_with(
+            "Batch statistics failed", "Invalid EyeFlow output"
+        )
+
+    def test_reentrant_run_is_ignored(self):
+        app = make_app()
+        app._batch_running = True
+        with mock.patch("ui.controllers.run.run_batch") as runner:
+            RunTabController(app).run()
+        runner.assert_not_called()
+
+    def test_worker_callbacks_reach_tk_only_when_main_thread_polls(self):
+        app = make_app()
+        app.batch_input_var.set("sample.h5")
+        app.batch_output_var.set("outputs")
+        calls = []
+        app._log_batch.side_effect = lambda message: calls.append(
+            (message, get_ident())
+        )
+        app._set_minimal_status.side_effect = lambda message: calls.append(
+            (message, get_ident())
+        )
+
+        def fake_batch(*_args, log, progress, **_kwargs):
+            log("Batch log")
+            progress(1, 2, "Analyzing")
+            return SimpleNamespace(failures=[], summary_message="Complete")
+
+        controller = RunTabController(app)
+        with mock.patch("ui.controllers.run.run_batch", side_effect=fake_batch):
+            controller.run()
+            controller._worker_thread.join(timeout=5)
+        self.assertEqual(calls, [])
+        self.assertTrue(app._batch_running)
+        controller._poll_worker_events()
+        self.assertEqual(
+            [message for message, _thread in calls],
+            ["Batch log", "Analyzing", "Completed."],
+        )
+        self.assertTrue(all(thread == get_ident() for _message, thread in calls))
+        self.assertFalse(app._batch_running)
+
+    def test_closing_window_finishes_worker_without_showing_dialog(self):
+        app = make_app()
+        app.batch_input_var.set("sample.h5")
+        app.batch_output_var.set("outputs")
+        controller = RunTabController(app)
+        with mock.patch(
+            "ui.controllers.run.run_batch", side_effect=ValueError("Failed")
+        ):
+            controller.run()
+            controller._worker_thread.join(timeout=5)
+        SettingsMixin._on_close(app)
+        app.withdraw.assert_called_once()
+        app.destroy.assert_not_called()
+        controller._poll_worker_events()
+        app.destroy.assert_called_once()
+        app.ui_services.dialogs.showerror.assert_not_called()
+        self.assertFalse(app._batch_running)
+        self.assertFalse(controller._worker_thread.daemon)
+
+    def test_drop_accepts_multiple_hdf5_files_or_single_folder(self):
+        app = make_app()
+        app.run_controller = RunTabController(app)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = root / "a.h5"
+            second = root / "b.hdf5"
+            first.touch()
+            second.touch()
+            self.assertTrue(DragDropMixin._handle_dropped_paths(app, [first, second]))
+            self.assertEqual(app.run_controller.selected_inputs(), (first, second))
+            self.assertFalse(DragDropMixin._handle_dropped_paths(app, [first, root]))
+            self.assertTrue(DragDropMixin._handle_dropped_paths(app, [root]))
+            self.assertEqual(app.run_controller.selected_inputs(), (root,))
+            unsupported = root / "sample.holo"
+            unsupported.touch()
+            self.assertFalse(DragDropMixin._handle_dropped_paths(app, [unsupported]))
+
+
+class GuiConstructionTests(unittest.TestCase):
+    def test_gui_exposes_only_batch_pipelines_with_valid_defaults(self):
+        import tkinter as tk
+
+        import ui.app as app_module
+        from app_settings import AppSettingsStore
+
+        original_init = app_module.BaseAppTk.__init__
+
+        def hidden_init(window, *args, **kwargs):
+            original_init(window, *args, **kwargs)
+            window.withdraw()
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = AppSettingsStore(
+                Path(directory) / "settings.json",
+                Path(__file__).resolve().parents[1] / "default_settings.json",
             )
-
-        self.assertEqual(["Composite Scoring", "Next Postprocess"], calls)
-        self.assertEqual(["Composite Scoring skipped broken.h5"], failures)
-        self.assertTrue(
-            any(
-                "[POST WARN] Composite Scoring skipped broken.h5" == log
-                for log in logs
-            )
-        )
-        self.assertEqual([1.0, 1.0], progress)
-
-
-class MouseWheelBindingTests(unittest.TestCase):
-    def test_mousewheel_scroll_units_handles_delta_and_button_events(self) -> None:
-        self.assertEqual(
-            -1, ProcessApp._mousewheel_scroll_units(SimpleNamespace(delta=120))
-        )
-        self.assertEqual(
-            1, ProcessApp._mousewheel_scroll_units(SimpleNamespace(delta=-120))
-        )
-        self.assertEqual(
-            -2, ProcessApp._mousewheel_scroll_units(SimpleNamespace(delta=240))
-        )
-        self.assertEqual(
-            -1, ProcessApp._mousewheel_scroll_units(SimpleNamespace(delta=1))
-        )
-        self.assertEqual(
-            -1, ProcessApp._mousewheel_scroll_units(SimpleNamespace(delta=0, num=4))
-        )
-        self.assertEqual(
-            1, ProcessApp._mousewheel_scroll_units(SimpleNamespace(delta=0, num=5))
-        )
-
-    def test_bind_vertical_mousewheel_registers_handlers_that_scroll_canvas(self):
-        app = ProcessApp.__new__(ProcessApp)
-        widget = mock.Mock()
-        canvas = mock.Mock()
-
-        ProcessApp._bind_vertical_mousewheel(app, widget, canvas)
-
-        self.assertEqual(
-            ["<MouseWheel>", "<Button-4>", "<Button-5>"],
-            [call.args[0] for call in widget.bind.call_args_list],
-        )
-        self.assertTrue(
-            all(call.kwargs.get("add") == "+" for call in widget.bind.call_args_list)
-        )
-
-        mousewheel_handler = widget.bind.call_args_list[0].args[1]
-        result = mousewheel_handler(SimpleNamespace(delta=-120))
-
-        canvas.yview_scroll.assert_called_once_with(1, "units")
-        self.assertEqual("break", result)
-
-
-if __name__ == "__main__":
-    unittest.main()
+            app = None
+            try:
+                with (
+                    mock.patch.object(
+                        app_module, "AppSettingsStore", return_value=store
+                    ),
+                    mock.patch.object(app_module.BaseAppTk, "__init__", hidden_init),
+                    mock.patch.object(
+                        app_module.ProcessApp, "_ensure_window_size_for_mode"
+                    ),
+                ):
+                    try:
+                        app = app_module.ProcessApp()
+                    except tk.TclError as exc:
+                        self.skipTest(f"Tk display unavailable: {exc}")
+                self.assertEqual(
+                    [app.notebook.tab(tab, "text") for tab in app.notebook.tabs()],
+                    ["Run", "Pipelines"],
+                )
+                selected = app.run_controller.selected_pipelines()
+                self.assertIn(
+                    "Pipeline Metrics Manifest", [item.name for item in selected]
+                )
+                self.assertTrue(all(item.available for item in selected))
+                self.assertEqual(app.processing_branch_var.get(), "Processing")
+                self.assertEqual(app.state(), "withdrawn")
+            finally:
+                if app is not None:
+                    app.destroy()

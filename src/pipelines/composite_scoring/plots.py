@@ -1,0 +1,238 @@
+from pathlib import Path
+
+import numpy as np
+
+from input_output import png_output_dir
+from input_output.hdf5_schema import safe_h5_key
+from math_utils import nanmax, nanmin, nanpercentile
+from pipelines.core.grouped_batch import build_group_order
+
+from .dataclasses import ScoreRecord
+from .metrics import REPRESENTATIONS
+
+
+def write_score_plots(
+    records: list[ScoreRecord],
+    output_dir: Path,
+) -> list[str]:
+    if not records:
+        return []
+
+    import matplotlib
+
+    matplotlib.use("Agg", force=True)
+    import matplotlib.pyplot as plt
+
+    png_dir = png_output_dir(output_dir)
+    png_dir.mkdir(parents=True, exist_ok=True)
+    created_paths: list[str] = []
+
+    for representation in REPRESENTATIONS:
+        representation_records = [
+            record for record in records if record.representation == representation
+        ]
+        if not representation_records:
+            continue
+        created_paths.append(
+            _plot_score_violin_by_cohort(
+                representation_records,
+                score_name="WAS",
+                value_getter=lambda record: record.was,
+                representation=representation,
+                png_dir=png_dir,
+                plt=plt,
+            )
+        )
+        created_paths.append(
+            _plot_score_violin_by_cohort(
+                representation_records,
+                score_name="WAS-c",
+                value_getter=lambda record: record.was_c,
+                representation=representation,
+                png_dir=png_dir,
+                plt=plt,
+            )
+        )
+        created_paths.append(
+            _plot_was_c_histogram(
+                representation_records,
+                representation=representation,
+                png_dir=png_dir,
+                plt=plt,
+            )
+        )
+
+    return created_paths
+
+
+def _plot_score_violin_by_cohort(
+    records: list[ScoreRecord],
+    *,
+    score_name: str,
+    value_getter,
+    representation: str,
+    png_dir: Path,
+    plt,
+) -> str:
+    cohorts = build_group_order({record.cohort for record in records})
+
+    fig, ax = plt.subplots(figsize=(max(6.4, len(cohorts) * 1.3), 4.9))
+    cmap = plt.get_cmap("tab10")
+    for cohort_index, cohort in enumerate(cohorts):
+        cohort_records = [record for record in records if record.cohort == cohort]
+        if not cohort_records:
+            continue
+
+        position = cohort_index
+        color = cmap(cohort_index % 10)
+        values = np.asarray(
+            [value_getter(record) for record in cohort_records],
+            dtype=float,
+        )
+        values = values[np.isfinite(values)]
+        if values.size == 0:
+            continue
+
+        if values.size > 1 and float(nanmax(values) - nanmin(values)) > 0:
+            parts = ax.violinplot(
+                [values],
+                positions=[position],
+                widths=0.78,
+                showmeans=False,
+                showmedians=True,
+                showextrema=False,
+            )
+            for body in parts["bodies"]:
+                body.set_facecolor(color)
+                body.set_edgecolor("black")
+                body.set_alpha(0.34)
+                body.set_linewidth(0.8)
+            if "cmedians" in parts:
+                parts["cmedians"].set_color("black")
+                parts["cmedians"].set_linewidth(1.4)
+        else:
+            ax.scatter(
+                [position],
+                [float(values[0])],
+                color=color,
+                marker="_",
+                s=520,
+                linewidths=2.0,
+                zorder=3,
+            )
+
+        x_values = [
+            position + _centered_jitter(index, values.size, width=0.26)
+            for index in range(values.size)
+        ]
+        ax.scatter(
+            x_values,
+            values,
+            color=color,
+            alpha=0.42,
+            edgecolors="black",
+            linewidths=0.25,
+            s=24,
+            zorder=4,
+        )
+
+        q1, median, q3 = nanpercentile(values, [25, 50, 75])
+        ax.vlines(position, q1, q3, color="black", linewidth=2.0, zorder=5)
+        ax.scatter(
+            [position],
+            [median],
+            color="white",
+            edgecolors="black",
+            linewidths=0.8,
+            s=38,
+            zorder=6,
+        )
+
+    ax.set_title(f"{score_name} concentration by cohort ({representation})")
+    ax.set_xlabel("Cohort")
+    ax.set_ylabel(score_name)
+    ax.set_xticks(range(len(cohorts)))
+    ax.set_xticklabels(
+        [
+            f"{cohort}\nn={sum(1 for record in records if record.cohort == cohort)}"
+            for cohort in cohorts
+        ],
+    )
+    ax.grid(axis="y", alpha=0.25)
+    if score_name == "WAS":
+        ax.set_yscale("symlog", linthresh=1.0)
+        ax.set_ylabel("WAS (symlog)")
+    else:
+        ax.set_ylim(bottom=0, top=10)
+    fig.tight_layout()
+
+    output_path = png_dir / (
+        f"composite_scoring_{safe_h5_key(representation)}_"
+        f"{safe_h5_key(score_name)}_violin_by_cohort.png"
+    )
+    fig.savefig(output_path, dpi=180)
+    plt.close(fig)
+    return str(output_path)
+
+
+def _centered_jitter(index: int, count: int, *, width: float) -> float:
+    if count <= 1:
+        return 0.0
+    slots = min(count, 31)
+    slot = index % slots
+    return ((slot / max(slots - 1, 1)) - 0.5) * width
+
+
+def _plot_was_c_histogram(
+    records: list[ScoreRecord],
+    *,
+    representation: str,
+    png_dir: Path,
+    plt,
+) -> str:
+    cohort_values: dict[str, list[float]] = {}
+    for record in records:
+        value = float(record.was_c)
+        if np.isfinite(value):
+            cohort_values.setdefault(record.cohort, []).append(value)
+
+    fig, ax = plt.subplots(figsize=(max(6.4, len(cohort_values) * 1.25), 4.9))
+    cmap = plt.get_cmap("tab10")
+
+    bins = np.linspace(0, 10, 11)
+    for cohort_index, (cohort, values) in enumerate(cohort_values.items()):
+        ax.hist(
+            values,
+            bins=bins,
+            alpha=0.42,
+            edgecolor="black",
+            linewidth=0.8,
+            label=f"{cohort} (n={len(values)})",
+            color=cmap(cohort_index % 10),
+        )
+
+    if not cohort_values:
+        ax.text(
+            0.5,
+            0.5,
+            "No finite scores",
+            transform=ax.transAxes,
+            ha="center",
+            va="center",
+        )
+
+    ax.set_title(f"WAS-c score distribution by cohort ({representation})")
+    ax.set_xlabel("WAS-c")
+    ax.set_ylabel("Count")
+    ax.set_xlim(0, 10)
+    ax.grid(axis="y", alpha=0.25)
+    if cohort_values:
+        ax.legend(frameon=False)
+    fig.tight_layout()
+
+    output_path = png_dir / (
+        f"composite_scoring_{safe_h5_key(representation)}_was_c_histogram_by_cohort.png"
+    )
+    fig.savefig(output_path, dpi=180)
+    plt.close(fig)
+    return str(output_path)

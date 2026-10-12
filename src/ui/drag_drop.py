@@ -5,11 +5,11 @@ from pathlib import Path
 from .compat import DND_FILES
 from .services import services_for
 
+
 class DragDropMixin:
     def _install_drop_targets(self) -> None:
-        if DND_FILES is None:
-            return
-        self._register_drop_target_tree(self)
+        if DND_FILES is not None and getattr(self, "_drag_drop_available", True):
+            self._register_drop_target_tree(self)
 
     def _register_drop_target_tree(self, widget: tk.Misc) -> None:
         if DND_FILES is None:
@@ -19,54 +19,34 @@ class DragDropMixin:
             widget.dnd_bind("<<Drop>>", self._on_input_drop)
         except (AttributeError, tk.TclError):
             pass
-
         for child in widget.winfo_children():
             self._register_drop_target_tree(child)
 
-    def _handle_dropped_paths(self, dropped_paths: Sequence[Path]) -> bool:
-        if dropped_paths and all(
-            path.is_file() and path.suffix.lower() == ".holo"
-            for path in dropped_paths
+    def _handle_dropped_paths(self, paths: Sequence[Path]) -> bool:
+        if not paths or not all(
+            path.is_dir()
+            or (path.is_file() and self.run_controller.is_supported_file_input(path))
+            for path in paths
         ):
-            self.run_controller.apply_holo_inputs(dropped_paths)
-            self._log_batch(
-                f"[INPUT] Drag and drop -> {len(dropped_paths)} .holo file(s)"
-            )
-            return True
-
-        if (
-            len(dropped_paths) == 1
-            and dropped_paths[0].is_file()
-            and dropped_paths[0].suffix.lower() == ".txt"
+            return False
+        if len(paths) > 1 and any(
+            not path.is_file() or path.suffix.lower() not in {".h5", ".hdf5"}
+            for path in paths
         ):
-            self.run_controller.apply_holo_inputs(dropped_paths)
-            self._log_batch(f"[INPUT] Drag and drop -> {dropped_paths[0]}")
-            return True
-
-        for dropped_path in dropped_paths:
-            if dropped_path.is_file() and self.run_controller.is_supported_file_input(
-                dropped_path
-            ):
-                self.input_convention_var.set("legacy")
-                self.batch_input_var.set(str(dropped_path))
-                self.run_controller.apply_input_defaults(dropped_path)
-                self._log_batch(f"[INPUT] Drag and drop -> {dropped_path}")
-                return True
-        return False
+            return False
+        self.run_controller.apply_inputs(paths)
+        self._log_batch(f"[INPUT] Drag and drop: {len(paths)} input(s)")
+        return True
 
     def _on_input_drop(self, event) -> None:
         raw_data = getattr(event, "data", "")
         try:
-            dropped_values = self.tk.splitlist(raw_data)
+            values = self.tk.splitlist(raw_data)
         except tk.TclError:
-            dropped_values = (raw_data,)
-
-        dropped_paths = [Path(value) for value in dropped_values if value]
-        if self._handle_dropped_paths(dropped_paths):
-            return
-
-        services_for(self).dialogs.showwarning(
-            "Unsupported drop",
-            "Drop .holo file(s), a .txt holo path list, "
-            "or a single .h5, .hdf5, or .zip file.",
-        )
+            values = (raw_data,)
+        paths = [Path(value) for value in values if value]
+        if not self._handle_dropped_paths(paths):
+            services_for(self).dialogs.showwarning(
+                "Unsupported drop",
+                "Drop EyeFlow HDF5 files, one folder, or one ZIP archive.",
+            )
