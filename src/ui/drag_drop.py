@@ -16,6 +16,8 @@ class DragDropMixin:
             return
         try:
             widget.drop_target_register(DND_FILES)
+            widget.dnd_bind("<<DropEnter>>", self._on_input_drag)
+            widget.dnd_bind("<<DropPosition>>", self._on_input_drag)
             widget.dnd_bind("<<Drop>>", self._on_input_drop)
         except (AttributeError, tk.TclError):
             pass
@@ -23,30 +25,25 @@ class DragDropMixin:
             self._register_drop_target_tree(child)
 
     def _handle_dropped_paths(self, paths: Sequence[Path]) -> bool:
-        if not paths or not all(
-            path.is_dir()
-            or (path.is_file() and self.run_controller.is_supported_file_input(path))
-            for path in paths
-        ):
+        if not self.run_controller.apply_inputs(paths):
             return False
-        if len(paths) > 1 and any(
-            not path.is_file() or path.suffix.lower() not in {".h5", ".hdf5"}
-            for path in paths
-        ):
-            return False
-        self.run_controller.apply_inputs(paths)
         self._log_batch(f"[INPUT] Drag and drop: {len(paths)} input(s)")
         return True
 
-    def _on_input_drop(self, event) -> None:
+    def _on_input_drag(self, _event) -> str:
+        return "refuse_drop" if getattr(self, "_batch_running", False) else "copy"
+
+    def _on_input_drop(self, event) -> str:
+        if getattr(self, "_batch_running", False):
+            return "refuse_drop"
         raw_data = getattr(event, "data", "")
         try:
             values = self.tk.splitlist(raw_data)
         except tk.TclError:
-            values = (raw_data,)
-        paths = [Path(value) for value in values if value]
-        if not self._handle_dropped_paths(paths):
             services_for(self).dialogs.showwarning(
                 "Unsupported drop",
-                "Drop EyeFlow HDF5 files, one folder, or one ZIP archive.",
+                "Could not read the dropped paths. Drop .holo recordings or one folder containing .holo recordings.",
             )
+            return "refuse_drop"
+        paths = [Path(value) for value in values if value]
+        return "copy" if self._handle_dropped_paths(paths) else "refuse_drop"

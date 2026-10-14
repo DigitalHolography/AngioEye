@@ -7,6 +7,24 @@ from input_output.output_paths import H5_OUTPUT_DIRNAME, html_output_dir
 from .core.base import BatchPipeline, PipelineContext, PipelineResult, registerPipeline
 
 
+def _summary_output_path(processed_file: Path, output_dir: Path) -> Path:
+    app_dir = processed_file.parent.parent
+    if (
+        processed_file.parent.name.lower() == H5_OUTPUT_DIRNAME
+        and app_dir.name == f"{app_dir.parent.name}_AE"
+    ):
+        return html_output_dir(app_dir) / f"{processed_file.stem}.html"
+
+    try:
+        relative_parent = processed_file.resolve().relative_to(output_dir).parent
+    except ValueError:
+        relative_parent = Path(".")
+    relative_parent = Path(
+        *(part for part in relative_parent.parts if part.lower() != H5_OUTPUT_DIRNAME)
+    )
+    return html_output_dir(output_dir) / relative_parent / f"{processed_file.stem}.html"
+
+
 @registerPipeline(
     name="HTML summary",
     description=(
@@ -26,24 +44,7 @@ class WaveformMetricSummaryTablesPipeline(BatchPipeline):
         output_dir = Path(context.output_dir).expanduser().resolve()
         paths = []
         for index, processed_file in enumerate(context.processed_files):
-            try:
-                relative_parent = (
-                    processed_file.resolve().relative_to(output_dir).parent
-                )
-            except ValueError:
-                relative_parent = Path(".")
-            relative_parent = Path(
-                *(
-                    part
-                    for part in relative_parent.parts
-                    if part.lower() != H5_OUTPUT_DIRNAME.lower()
-                )
-            )
-            html_path = (
-                html_output_dir(output_dir)
-                / relative_parent
-                / f"{processed_file.stem}.html"
-            )
+            html_path = _summary_output_path(processed_file, output_dir)
             source_path = processed_file
             if index < len(context.input_h5_paths):
                 original = context.input_h5_paths[index]

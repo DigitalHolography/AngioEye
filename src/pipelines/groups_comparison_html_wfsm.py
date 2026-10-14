@@ -49,7 +49,7 @@ class GroupsComparisonHTMLPipeline(BatchPipeline):
         from .utils import groups_comparison_html
 
         with temporary_zip_from_tree(
-            output_dir,
+            context.batch_root,
             source_paths=context.processed_files,
         ) as temp_zip:
             temp_root = temp_zip.parent

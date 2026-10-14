@@ -24,6 +24,7 @@ from input_output.hdf5_schema import pipeline_path_candidates
 from math_utils import nanmedian, nanstd
 
 from ..core.grouped_batch import (
+    extract_group_name,
     find_control_group_name,
 )
 
@@ -162,9 +163,7 @@ def analyze_zip(zip_path):
             if not h5_files:
                 continue
 
-            group_name = os.path.basename(root)
-            if root == tmpdir:
-                group_name = "all"
+            group_name = extract_group_name(root, tmpdir)
 
             for file in h5_files:
                 filepath = os.path.join(root, file)

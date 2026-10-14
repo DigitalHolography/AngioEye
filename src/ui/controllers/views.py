@@ -50,6 +50,9 @@ class MinimalViewController(ViewController):
     def choose_input(self) -> None:
         self.app.run_controller.choose_file()
 
+    def choose_folder(self) -> None:
+        self.app.run_controller.choose_folder()
+
     def run(self) -> None:
         self.app.run_controller.run()
 

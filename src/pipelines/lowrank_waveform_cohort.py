@@ -79,6 +79,7 @@ from .core.base import (
     PipelineResult,
     registerPipeline,
 )
+from .core.grouped_batch import extract_group_name
 
 # =====================================================================
 # Group / epoch identity
@@ -205,7 +206,8 @@ def classify_cohort(
     """Group each H5 by its top-level folder under ``input_root``.
 
     Returns ``(records, group_order)``. Files sitting directly under the root
-    get ``group=None``. Files outside the root are skipped.
+    or inside its acquisition output wrappers get ``group=None``. Files
+    outside the root are skipped.
     """
     records: list[tuple[str | None, Path]] = []
     input_root = Path(input_root)
@@ -216,10 +218,12 @@ def classify_cohort(
             # On Windows, ``resolve`` can turn a mapped drive (for example Z:)
             # into its UNC path. Normalize both sides before comparing so paths
             # that name the same network file are not incorrectly skipped.
-            rel = h5_path.resolve().relative_to(resolved_input_root)
+            resolved_h5_path = h5_path.resolve()
+            resolved_h5_path.relative_to(resolved_input_root)
         except ValueError:
             continue
-        group = rel.parts[0] if len(rel.parts) > 1 else None
+        group_name = extract_group_name(resolved_h5_path.parent, resolved_input_root)
+        group = None if group_name == "all" else group_name
         records.append((group, h5_path))
     records.sort(key=lambda r: (_group_sort_key(r[0]), r[1].name))
     return records, ordered_groups(group for group, _ in records)
@@ -424,7 +428,13 @@ def _is_generated_output_h5(path: Path, root: Path) -> bool:
         COHORT_RESULTS_DIRNAME.lower(),
         H5_OUTPUT_DIRNAME.lower(),
     }
-    return bool(relative.parts and relative.parts[0].lower() in generated_roots)
+    if relative.parts and relative.parts[0].lower() in generated_roots:
+        return True
+    directory_parts = path.parent.parts
+    return any(
+        child.lower() == f"{parent}_ae".lower()
+        for parent, child in zip(directory_parts, directory_parts[1:], strict=False)
+    )
 
 
 def find_cohort_input_h5s(root: Path | str) -> list[Path]:
@@ -2298,7 +2308,40 @@ def _cohort_root_from_paths(
 ) -> Path:
     """Pick a directory that exposes group folders for ``h5_paths``."""
     if preferred_root is not None and preferred_root.is_dir():
-        return resolve_cohort_root(preferred_root)
+        root = preferred_root
+        while True:
+            try:
+                relative_paths = [
+                    Path(path).resolve().relative_to(root.resolve())
+                    for path in h5_paths
+                ]
+            except ValueError:
+                break
+            # Only selected files decide whether a wrapper needs unwrapping.
+            # Existing reports and unrelated folders must not change the groups.
+            if not relative_paths or any(
+                len(path.parts) < 2 for path in relative_paths
+            ):
+                return root
+            children = {path.parts[0] for path in relative_paths}
+            if len(children) != 1:
+                return root
+            child_name = next(iter(children))
+            match = _NUMBERED_GROUP_RE.fullmatch(child_name)
+            child = root / child_name
+            _nested_records, nested_order = classify_cohort(h5_paths, child)
+            nested_groups = any(
+                _NUMBERED_GROUP_RE.fullmatch(group) for group in nested_order
+            )
+            if (
+                match is not None
+                and int(match.group("index")) == 1
+                and not nested_groups
+            ):
+                return root
+            if not child.is_dir():
+                return root
+            root = child
 
     try:
         common = Path(os.path.commonpath([str(Path(p).resolve()) for p in h5_paths]))
@@ -2775,12 +2818,16 @@ class LowRankWaveformCohortPipeline(BatchPipeline):
     def run(self, context: PipelineContext) -> PipelineResult:
         """Analyze the selected branch from the staged cohort files."""
         input_path = Path(context.input_path).expanduser()
-        output_dir = cohort_results_dir(context.output_dir)
+        output_dir = (
+            Path(context.output_dir)
+            if context.analysis_root is not None
+            else cohort_results_dir(context.output_dir)
+        )
 
         paths = list(context.processed_files)
         summary, generated_paths = _run_on_paths(
             paths,
-            _cohort_root_from_paths(paths, h5_output_dir(context.output_dir)),
+            _cohort_root_from_paths(paths, context.batch_root),
             output_dir,
             veins=bool(self.veins_flag),
             patient_id=extract_patient_id(input_path),

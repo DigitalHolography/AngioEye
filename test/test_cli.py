@@ -46,8 +46,8 @@ class StatisticalCliTests(unittest.TestCase):
             status = cli.main(
                 [
                     "--data",
-                    "a.h5",
-                    "b.h5",
+                    "a.holo",
+                    "b.holo",
                     "--pipelines",
                     "HTML summary",
                     "--processing-branch",
@@ -58,8 +58,9 @@ class StatisticalCliTests(unittest.TestCase):
                 ]
             )
         self.assertEqual(0, status)
-        self.assertEqual(["a.h5", "b.h5"], run.call_args.args[0])
+        self.assertEqual(["a.holo", "b.holo"], run.call_args.args[0])
         self.assertEqual([self.descriptor], run.call_args.args[1])
+        self.assertEqual(Path("results"), run.call_args.args[2])
         self.assertEqual("ProcessingAlt", run.call_args.kwargs["processing_branch"])
         self.assertTrue(run.call_args.kwargs["zip_outputs"])
 
@@ -73,9 +74,9 @@ class StatisticalCliTests(unittest.TestCase):
                 cli, "run_batch", return_value=SimpleNamespace(failures=["failed"])
             ) as run,
         ):
-            self.assertEqual(1, cli.run_cli("sample.h5", ["old metric calculator"]))
+            self.assertEqual(1, cli.run_cli("sample.holo", ["old metric calculator"]))
             run.assert_not_called()
-            self.assertEqual(1, cli.run_cli("sample.h5", ["HTML summary"]))
+            self.assertEqual(1, cli.run_cli("sample.holo", ["HTML summary"]))
 
     def test_default_selection_uses_migrated_settings(self):
         with (
@@ -90,13 +91,51 @@ class StatisticalCliTests(unittest.TestCase):
             store.return_value.load_pipeline_visibility.return_value = {
                 "HTML summary": True
             }
-            self.assertEqual(0, cli.run_cli("sample.h5"))
+            self.assertEqual(0, cli.run_cli("sample.holo"))
             self.assertEqual([self.descriptor], run.call_args.args[1])
+            self.assertIsNone(run.call_args.args[2])
 
     def test_list_pipelines_runs_without_input(self):
         with mock.patch.object(cli, "print") as printer:
             self.assertEqual(0, cli.main(["--list-pipelines"]))
         self.assertTrue(printer.called)
+
+    def test_cli_rejects_direct_exports_and_archives(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with (
+                mock.patch.object(
+                    cli, "load_pipeline_catalog", return_value=([self.descriptor], [])
+                ),
+                mock.patch.object(cli, "_log_cli") as log,
+            ):
+                for name in ("sample_EF.h5", "sample_EF.hdf5", "cohort.zip"):
+                    with self.subTest(name=name):
+                        source = root / name
+                        source.touch()
+                        self.assertEqual(
+                            1, cli.run_cli(source, ["HTML summary"], root / "results")
+                        )
+                        self.assertIn(".holo", log.call_args.args[0])
+                        self.assertFalse((root / "results").exists())
+
+    def test_cli_reports_expected_result_for_unprocessed_hologram(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            holo = root / "sample.holo"
+            holo.touch()
+            with (
+                mock.patch.object(
+                    cli, "load_pipeline_catalog", return_value=([self.descriptor], [])
+                ),
+                mock.patch.object(cli, "_log_cli") as log,
+            ):
+                self.assertEqual(
+                    1, cli.run_cli(holo, ["HTML summary"], root / "results")
+                )
+                self.assertIn("sample_EF.h5", log.call_args.args[0])
+                self.assertIn("EyeFlow", log.call_args.args[0])
+                self.assertFalse((root / "results").exists())
 
 
 if __name__ == "__main__":

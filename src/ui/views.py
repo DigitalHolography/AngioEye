@@ -38,13 +38,32 @@ class MinimalView(ttk.Frame):
             minimal_logo_label.grid(row=1, column=0, pady=(0, 18))
             controller.set_widget("minimal_logo_label", minimal_logo_label)
 
+        input_buttons = ttk.Frame(content)
+        input_buttons.grid(row=2, column=0, pady=(0, 10))
         minimal_select_button = ttk.Button(
-            content,
-            text="Select EyeFlow outputs or ZIP archive",
+            input_buttons,
+            text="Select .holo files",
             command=controller.choose_input,
         )
-        minimal_select_button.grid(row=2, column=0, pady=(0, 10))
+        minimal_select_button.pack(side="left")
         controller.set_widget("minimal_select_button", minimal_select_button)
+        minimal_folder_button = ttk.Button(
+            input_buttons,
+            text="Select folder",
+            command=controller.choose_folder,
+        )
+        minimal_folder_button.pack(side="left", padx=(8, 0))
+        controller.set_widget("minimal_folder_button", minimal_folder_button)
+        minimal_input_hint = tk.Label(
+            content,
+            text="drop folder or .holo file",
+            bg=controller.bg_color,
+            fg=controller.muted_fg,
+            justify="center",
+            wraplength=420,
+        )
+        minimal_input_hint.grid(row=3, column=0, pady=(0, 8), sticky="ew")
+        controller.set_widget("minimal_input_hint", minimal_input_hint)
         minimal_input_path_label = tk.Label(
             content,
             textvariable=controller.input_path_var,
@@ -53,7 +72,7 @@ class MinimalView(ttk.Frame):
             justify="center",
             wraplength=420,
         )
-        minimal_input_path_label.grid(row=3, column=0, pady=(0, 8), sticky="ew")
+        minimal_input_path_label.grid(row=4, column=0, pady=(0, 8), sticky="ew")
         controller.set_widget("minimal_input_path_label", minimal_input_path_label)
 
         minimal_output_path_label = tk.Label(
@@ -64,11 +83,11 @@ class MinimalView(ttk.Frame):
             justify="center",
             wraplength=420,
         )
-        minimal_output_path_label.grid(row=4, column=0, pady=(0, 18), sticky="ew")
+        minimal_output_path_label.grid(row=5, column=0, pady=(0, 18), sticky="ew")
         controller.set_widget("minimal_output_path_label", minimal_output_path_label)
 
         minimal_run_button = ttk.Button(content, text="Run", command=controller.run)
-        minimal_run_button.grid(row=5, column=0, pady=(0, 18))
+        minimal_run_button.grid(row=6, column=0, pady=(0, 18))
         controller.set_widget("minimal_run_button", minimal_run_button)
 
         minimal_progress = ttk.Progressbar(
@@ -80,7 +99,7 @@ class MinimalView(ttk.Frame):
             length=340,
             style=controller.progress_style,
         )
-        minimal_progress.grid(row=6, column=0, sticky="ew")
+        minimal_progress.grid(row=7, column=0, sticky="ew")
         controller.set_widget("minimal_progress", minimal_progress)
         minimal_status_label = tk.Label(
             content,
@@ -90,11 +109,11 @@ class MinimalView(ttk.Frame):
             justify="center",
             wraplength=420,
         )
-        minimal_status_label.grid(row=7, column=0, pady=(8, 0), sticky="ew")
+        minimal_status_label.grid(row=8, column=0, pady=(8, 0), sticky="ew")
         controller.set_widget("minimal_status_label", minimal_status_label)
         ttk.Button(
             content, text="Choose pipelines", command=controller.choose_pipelines
-        ).grid(row=8, column=0, pady=(12, 0))
+        ).grid(row=9, column=0, pady=(12, 0))
 
 
 class RunTab(ttk.Frame):
@@ -122,14 +141,26 @@ class RunTab(ttk.Frame):
         )
         input_entry = ttk.Entry(advanced_input_frame, textvariable=controller.input_var)
         input_entry.grid(row=0, column=1, sticky="ew", padx=(0, 4))
+        controller.set_widget("input_entry", input_entry)
         input_btn_frame = ttk.Frame(advanced_input_frame)
         input_btn_frame.grid(row=0, column=2, sticky="w")
-        ttk.Button(
+        folder_button = ttk.Button(
             input_btn_frame, text="Browse folder", command=controller.choose_folder
-        ).pack(side="left")
-        ttk.Button(
-            input_btn_frame, text="Browse file", command=controller.choose_file
-        ).pack(side="left", padx=(4, 0))
+        )
+        folder_button.pack(side="left")
+        controller.set_widget("folder_button", folder_button)
+        file_button = ttk.Button(
+            input_btn_frame, text="Browse .holo files", command=controller.choose_file
+        )
+        file_button.pack(side="left", padx=(4, 0))
+        controller.set_widget("file_button", file_button)
+        input_hint = ttk.Label(
+            advanced_input_frame,
+            text="drop folder or .holo file",
+            wraplength=580,
+        )
+        input_hint.grid(row=1, column=1, columnspan=2, sticky="w", pady=(4, 0))
+        controller.set_widget("input_hint", input_hint)
 
         ttk.Label(advanced_input_frame, text="Output").grid(
             row=2,

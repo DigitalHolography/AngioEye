@@ -30,9 +30,28 @@ For development, use `uv sync --extra dev` or `pip install -e ".[dev]"`.
 
 ## Inputs and processing branches
 
-Select one EyeFlow `.h5`/`.hdf5` file, multiple HDF5 files, one folder scanned
-recursively, or one ZIP containing HDF5 files. AppleDouble and `__MACOSX` metadata
-files are ignored. Folder names are preserved as cohort labels.
+Browse or drag and drop `.holo` files, or one folder containing `.holo` files
+(including subfolders). Direct HDF5 and ZIP inputs are rejected. Folder names
+are preserved as cohort labels.
+
+Each hologram identifies an acquisition already processed by
+[EyeFlow](https://github.com/DigitalHolography/EyeFlow). For `sample.holo`, AngioEye
+automatically reads the matching result:
+
+```text
+data/
+  sample.holo
+  sample/
+    sample_EF/
+      h5/
+        sample_EF.h5
+```
+
+AngioEye does not process the hologram itself. If a result is missing, the error
+shows its expected location and asks you to run EyeFlow first. In a batch,
+acquisitions with available results still run; missing results are reported in
+the log and `batch_run.json`. HoloDoppler, DopplerView, and unrelated HDF5 files
+are excluded from input discovery.
 
 Select the EyeFlow processing branch to analyze:
 
@@ -47,7 +66,7 @@ AngioEye does not run metric calculations to fill missing groups.
 
 ## Running statistical pipelines
 
-In the GUI, choose inputs and an output folder in **Run**, choose the tools in
+In the GUI, choose inputs and an output parent folder in **Run**, choose the tools in
 **Pipelines**, then run the batch. HTML summary and Pipeline Metrics Manifest
 are selected initially. Selection preferences are saved between launches;
 existing Postprocess preferences migrate to the Pipelines library.
@@ -57,12 +76,12 @@ The CLI uses the same batch workflow:
 ```powershell
 angioeye --list-pipelines
 angioeye --data data/ --pipelines "HTML summary" "Pipeline Metrics Manifest" --output results/
-angioeye-cli --data sample_EF.h5 --pipelines "Fixed Threshold Patient Evaluation" --output results/
-angioeye-cli --data cohort.zip --pipelines "Variability and heterogeneity" --processing-branch ProcessingAlt --output results/ --zip
+angioeye-cli --data sample.holo --pipelines "Fixed Threshold Patient Evaluation" --output results/
+angioeye-cli --data cohort/ --pipelines "Variability and heterogeneity" --processing-branch ProcessingAlt --output results/ --zip
 ```
 
-`--data` accepts multiple explicit HDF5 paths. `--pipelines` also accepts a text
-file containing one tool name per line, or a quoted list literal. Use
+`--data` accepts multiple explicit `.holo` paths or one folder. `--pipelines` also
+accepts a text file containing one tool name per line, or a quoted list literal. Use
 `--zip-name statistics.zip` to choose the optional output archive name.
 The CLI returns a nonzero status when an input, pipeline, or archive fails.
 
@@ -76,9 +95,11 @@ Group comparisons and composite calibration use cohort subfolders, for example:
 ```text
 cohort/
   control/
-    subject_1_EF.h5
+    subject_1.holo
+    subject_1/subject_1_EF/h5/subject_1_EF.h5
   pathology/
-    subject_2_EF.h5
+    subject_2.holo
+    subject_2/subject_2_EF/h5/subject_2_EF.h5
 ```
 
 Composite Scoring requires a recognizable control group and a second group.
@@ -88,18 +109,35 @@ These tools report unsuitable layouts instead of generating empty analyses.
 
 ## Results and source preservation
 
-EyeFlow inputs are opened read-only. AngioEye makes independent compact analysis
-files under `results/h5/`, preserving group folders and naming files `_AE.h5`.
+EyeFlow inputs are opened read-only. Each acquisition has an AngioEye companion
+folder beside its EyeFlow outputs by default. For `sample.holo`:
+
+```text
+sample/
+  sample_EF/h5/sample_EF.h5
+  sample_AE/
+    h5/sample_AE.h5
+    html/sample_AE.html
+```
+
+The GUI output folder and CLI `--output` select a parent location. A custom
+parent mirrors the same `<name>/<name>_AE/` structure, preserving cohort
+subfolders. When `--output` is omitted, results are created beside the inputs.
+
+AngioEye makes independent compact analysis files named `_AE.h5`.
 Each contains the selected branch's metrics under `/Processing/Metrics`, global
 beat signals, cardiac timing, and lightweight metadata. Source image stacks,
 maps, and segment waveform stacks are omitted.
 
 Derived statistics are stored under `/AngioEye/Statistics` in these analysis
-files. Reports go into the results folder, including `html/`, `png/`,
-`cohort-results/`, or a tool's report folder. `batch_run.json` records source
-paths, the branch, tool results, failures, and the batch summary. Optional ZIP
-export includes the results and reports. Use a separate output folder for each
-analysis or processing branch.
+files. Acquisition HTML summaries go into the corresponding `_AE/html/` folder.
+Single-file runs also keep manifests and tool reports in that `_AE` folder.
+Folder and multiple-file runs keep shared comparison reports and `batch_run.json`
+under the output parent's `cohort-results/` folder, including `png/`, `h5/`,
+or a tool's report folder. The manifest records source paths, the branch, tool results, failures,
+and the batch summary. Optional ZIP export includes generated results and
+reports, excluding source holograms and EyeFlow/HoloDoppler/DopplerView files.
+Use a separate output parent for each analysis or processing branch.
 
 ## Adding a pipeline
 

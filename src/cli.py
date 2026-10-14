@@ -101,7 +101,7 @@ def run_cli(
         result = run_batch(
             paths,
             [registry[name] for name in names],
-            output_dir or Path.cwd() / "results",
+            output_dir,
             processing_branch=processing_branch,
             zip_outputs=zip_outputs,
             zip_name=zip_name,
@@ -120,7 +120,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "-d",
         nargs="+",
         action="append",
-        help="EyeFlow HDF5 files, one cohort folder, or one ZIP archive.",
+        help=".holo files or one cohort folder containing .holo files (EyeFlow results must already exist).",
     )
     parser.add_argument(
         "--pipelines",
@@ -134,7 +134,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="List statistical tools and required exported metrics.",
     )
     parser.add_argument(
-        "--output", "-o", type=Path, help="Results folder (default: ./results)."
+        "--output",
+        "-o",
+        type=Path,
+        help="Parent folder for <holo>/<holo>_AE outputs (default: beside the inputs).",
     )
     parser.add_argument(
         "--processing-branch",

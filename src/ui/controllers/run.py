@@ -7,6 +7,7 @@ from pathlib import Path
 from queue import Empty, Queue
 from threading import Thread
 
+from input_output.inputs import validate_input_paths
 from workflows import run_batch
 
 from ..services import services_for
@@ -50,20 +51,20 @@ class RunTabController(ViewController):
         self.update_minimal_path_labels()
 
     def choose_folder(self) -> None:
+        if getattr(self.app, "_batch_running", False):
+            return
         path = services_for(self.app).file_dialogs.askdirectory(
-            title="Select folder containing EyeFlow HDF5 outputs",
+            title="Select folder containing .holo recordings (including subfolders)",
         )
         if path:
             self.apply_inputs([Path(path)])
 
     def choose_file(self) -> None:
+        if getattr(self.app, "_batch_running", False):
+            return
         paths = services_for(self.app).file_dialogs.askopenfilenames(
-            filetypes=[
-                ("EyeFlow outputs and archives", "*.h5 *.hdf5 *.zip"),
-                ("HDF5 files", "*.h5 *.hdf5"),
-                ("ZIP archives", "*.zip"),
-            ],
-            title="Select EyeFlow outputs or one ZIP archive",
+            filetypes=[("Hologram recordings", "*.holo")],
+            title="Select .holo recordings",
         )
         if paths:
             self.apply_inputs([Path(path) for path in paths])
@@ -71,34 +72,27 @@ class RunTabController(ViewController):
     def choose_output(self) -> None:
         path = services_for(self.app).file_dialogs.askdirectory(
             initialdir=self.output_var.get() or None,
-            title="Select output folder for batch statistics",
+            title="Select parent folder for AngioEye acquisition outputs",
         )
         if path:
             self.output_var.set(path)
 
     @staticmethod
     def is_supported_file_input(path: Path) -> bool:
-        return path.suffix.lower() in {".h5", ".hdf5", ".zip"}
+        return path.suffix.lower() == ".holo"
 
-    def apply_inputs(self, input_paths: Sequence[Path]) -> None:
-        paths = [path.expanduser() for path in input_paths]
-        if not paths:
-            return
-        if len(paths) > 1 and any(
-            path.suffix.lower() not in {".h5", ".hdf5"} or path.is_dir()
-            for path in paths
-        ):
-            services_for(self.app).dialogs.showwarning(
-                "Unsupported selection",
-                "Select multiple EyeFlow HDF5 outputs, one folder, or one ZIP archive.",
-            )
-            return
+    def apply_inputs(self, input_paths: Sequence[str | Path]) -> bool:
+        if getattr(self.app, "_batch_running", False):
+            return False
+        try:
+            paths = list(validate_input_paths(input_paths))
+        except (ValueError, OSError) as exc:
+            services_for(self.app).dialogs.showwarning("Unsupported input", str(exc))
+            return False
         self.app.batch_input_paths = paths
         if len(paths) == 1:
             label = str(paths[0])
-            output_dir = paths[0].parent / f"{paths[0].stem}_angioeye"
-            if paths[0].is_dir():
-                output_dir = paths[0].parent / f"{paths[0].name}_angioeye"
+            output_dir = paths[0] if paths[0].is_dir() else paths[0].parent
             archive_name = f"{paths[0].stem}_statistics.zip"
         else:
             names = ", ".join(path.name for path in paths[:3])
@@ -111,7 +105,7 @@ class RunTabController(ViewController):
                 )
             except ValueError:
                 common_parent = paths[0].parent
-            output_dir = common_parent / "angioeye_statistics"
+            output_dir = common_parent
             archive_name = "statistics.zip"
         self.app.batch_selection_label = label
         self.input_var.set(label)
@@ -120,6 +114,7 @@ class RunTabController(ViewController):
         self.app._reset_progress()
         self.app._set_minimal_status("Ready.")
         self.update_minimal_path_labels()
+        return True
 
     def selected_inputs(self) -> tuple[Path, ...]:
         raw_value = self.input_var.get().strip()
@@ -149,13 +144,21 @@ class RunTabController(ViewController):
 
     def update_minimal_path_labels(self) -> None:
         value = self.input_var.get().strip()
-        self.app.minimal_input_path_var.set(value or "No EyeFlow inputs selected")
+        self.app.minimal_input_path_var.set(value or "No .holo recordings selected")
         output = self.output_var.get().strip()
         self.app.minimal_output_path_var.set(f"Output: {output}" if output else "")
 
     def _set_running(self, running: bool) -> None:
         self.app._batch_running = running
-        for name in ("minimal_run_button", "run_button"):
+        for name in (
+            "minimal_run_button",
+            "run_button",
+            "minimal_select_button",
+            "minimal_folder_button",
+            "folder_button",
+            "file_button",
+            "input_entry",
+        ):
             button = getattr(self.app, name, None)
             if button is not None:
                 try:
@@ -217,8 +220,13 @@ class RunTabController(ViewController):
         if not inputs:
             dialogs.showwarning(
                 "Missing input",
-                "Select EyeFlow HDF5 outputs, a folder, or a ZIP archive.",
+                "Select .holo recordings or one folder containing .holo recordings.",
             )
+            return
+        try:
+            inputs = validate_input_paths(inputs)
+        except (ValueError, OSError) as exc:
+            dialogs.showwarning("Unsupported input", str(exc))
             return
         pipelines = self.selected_pipelines()
         if not pipelines:

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -10,14 +9,14 @@ from pathlib import Path
 import h5py
 
 from input_output import stage_analysis_file
-from input_output.archive_io import (
-    create_zip_from_tree,
-    iter_extracted_h5_members,
-    list_h5_members,
-)
+from input_output.archive_io import create_zip_from_tree
 from input_output.hdf5_schema import find_pipeline_group
 from input_output.inputs import prepare_run_inputs
-from input_output.output_paths import ae_result_filename
+from input_output.output_paths import (
+    acquisition_output_dir,
+    cohort_results_dir,
+    h5_output_dir,
+)
 from pipelines import PipelineContext, PipelineDescriptor
 
 
@@ -49,7 +48,7 @@ def _compatible(path: Path, descriptor: PipelineDescriptor) -> bool:
 def run_batch(
     input_paths: Sequence[str | Path],
     pipelines: Sequence[PipelineDescriptor],
-    output_dir: str | Path,
+    output_dir: str | Path | None = None,
     *,
     zip_outputs: bool = False,
     zip_name: str = "outputs.zip",
@@ -59,11 +58,13 @@ def run_batch(
 ) -> BatchRunResult:
     """Run each tool once over compact analysis copies, preserving source files.
 
-    Group folders are preserved under ``h5/`` for cohort labels. Only exported
-    metrics and the small signals needed by reports are copied into results.
+    ``output_dir`` is the parent of the mirrored acquisition trees; by default
+    results live beside the selected holograms. Each acquisition owns
+    ``<stem>/<stem>_AE/``. Only exported metrics and the small signals needed by
+    reports are copied into results.
     """
     if not input_paths:
-        raise ValueError("Select EyeFlow HDF5 files, a folder, or a ZIP archive.")
+        raise ValueError("Select .holo files or one folder containing .holo files.")
     if not pipelines:
         raise ValueError("Select at least one statistical pipeline.")
     if processing_branch not in {"Processing", "ProcessingAlt"}:
@@ -71,35 +72,51 @@ def run_batch(
     if zip_outputs and (Path(zip_name).name != zip_name or not zip_name.strip()):
         raise ValueError("ZIP name must be a filename without directory components.")
     plan = prepare_run_inputs(input_paths)
-    root = Path(output_dir).expanduser().resolve()
     source_root = plan.input_path.resolve()
-    if zip_outputs:
-        archive_target = root / (
-            zip_name if zip_name.lower().endswith(".zip") else f"{zip_name}.zip"
-        )
-        if plan.is_zip and (
-            archive_target.resolve() == source_root
-            or (archive_target.exists() and archive_target.samefile(source_root))
-        ):
-            raise ValueError("The output ZIP must differ from the input archive.")
-    if plan.kind == "folder" and root == source_root:
-        raise ValueError("Choose an output folder separate from the input folder.")
-    if plan.is_zip:
-        members = list_h5_members(plan.input_path)
-        input_count = len(members)
-    else:
-        sources = list(dict.fromkeys(path.resolve() for path in plan.h5_paths))
-        sources = [path for path in sources if not path.is_relative_to(root)]
-        input_count = len(sources)
+    if source_root.is_file():
+        source_root = source_root.parent
+    output_parent = (
+        Path(output_dir).expanduser().resolve()
+        if output_dir is not None
+        else source_root
+    )
+    input_count = plan.item_count
     if not input_count:
         raise ValueError("No EyeFlow HDF5 files found in the selected input.")
+    acquisition_dirs = tuple(
+        acquisition_output_dir(
+            holo,
+            output_parent=output_parent,
+            relative_parent=holo.parent.relative_to(source_root),
+        ).resolve()
+        for holo in plan.holo_paths
+    )
+    batch_root = (
+        acquisition_dirs[0]
+        if plan.kind == "file" and input_count == 1
+        else output_parent
+    )
+    root = (
+        batch_root
+        if plan.kind == "file" and input_count == 1
+        else cohort_results_dir(output_parent)
+    ).resolve()
+    source_paths = (*plan.selected_holo_paths, *plan.h5_paths)
+    if any(
+        path.resolve().is_relative_to(output_root)
+        for path in source_paths
+        for output_root in (*acquisition_dirs, root)
+    ):
+        raise ValueError(
+            f"The AngioEye report folder contains selected inputs: {root}. "
+            "Choose a different output parent folder."
+        )
     root.mkdir(parents=True, exist_ok=True)
-    result = BatchRunResult(output_dir=root)
+    result = BatchRunResult(output_dir=root, failures=list(plan.input_failures))
     staged: list[Path] = []
     total = input_count + len(pipelines)
     completed = 0
     report_entries: list[dict] = []
-    reserved: set[Path] = set()
 
     def emit(message: str) -> None:
         if log is not None:
@@ -111,56 +128,41 @@ def run_batch(
         if progress is not None:
             progress(completed, total, message)
 
-    def stage(source: Path, relative: Path, provenance: Path) -> None:
-        destination = root / "h5" / relative.parent / ae_result_filename(relative)
-        if destination in reserved:
-            destination = destination.with_name(
-                f"{destination.stem}_{len(reserved)}.h5"
-            )
-        reserved.add(destination)
+    def stage(source: Path, app_dir: Path, holo: Path) -> None:
+        destination = h5_output_dir(app_dir) / f"{holo.stem}_AE.h5"
         try:
             stage_analysis_file(
                 source, destination, processing_branch=processing_branch
             )
             with h5py.File(destination, "a") as analysis:
-                analysis.attrs["angioeye_input_file"] = str(provenance)
+                analysis.attrs["angioeye_input_file"] = str(source)
+                analysis.attrs["angioeye_input_holo"] = str(holo)
             staged.append(destination)
-            result.input_files.append(provenance)
-            emit(f"[INPUT] {provenance} -> {destination.relative_to(root)}")
+            result.input_files.append(source)
+            emit(f"[INPUT] {holo} -> {source} -> {destination.relative_to(batch_root)}")
         except Exception as exc:
-            failure = f"Input '{provenance}': {type(exc).__name__}: {exc}"
+            failure = f"Input '{holo}' ({source}): {type(exc).__name__}: {exc}"
             result.failures.append(failure)
             emit(f"[INPUT FAIL] {failure}")
         finally:
-            advance(f"Read {provenance.name}")
+            advance(f"Read {holo.name}")
 
     if progress is not None:
         progress(0, total, "Reading EyeFlow metrics...")
-    if plan.is_zip:
-        for extracted in iter_extracted_h5_members(plan.input_path, members):
-            stage(
-                extracted.path,
-                extracted.member.relative_path,
-                plan.input_path / extracted.member.relative_path,
-            )
-    else:
-        if source_root.is_file():
-            source_root = source_root.parent
-        if len(input_paths) > 1:
-            source_root = Path(
-                os.path.commonpath([str(path.parent) for path in sources])
-            )
-        for source in sources:
-            stage(source, source.relative_to(source_root), source)
+    for failure in plan.input_failures:
+        emit(f"[INPUT FAIL] {failure}")
+        advance("Missing EyeFlow result")
+    for source, holo, app_dir in zip(
+        plan.h5_paths, plan.holo_paths, acquisition_dirs, strict=True
+    ):
+        source = source.resolve()
+        holo = holo.resolve()
+        stage(source, app_dir, holo)
 
     mode = (
-        "zip_batch"
-        if plan.is_zip
-        else (
-            "cohort_batch"
-            if plan.kind == "folder"
-            else ("single_file" if input_count == 1 else "file_batch")
-        )
+        "cohort_batch"
+        if plan.kind == "folder"
+        else ("single_file" if input_count == 1 else "file_batch")
     )
     for descriptor in pipelines:
         entry = {"name": descriptor.name, "status": "failed"}
@@ -207,6 +209,7 @@ def run_batch(
                 zip_outputs=zip_outputs,
                 input_h5_paths=tuple(result.input_files[index] for index in indices),
                 processing_branch=processing_branch,
+                analysis_root=batch_root,
             )
             emit(
                 f"[PIPELINE] Running {descriptor.name} over {len(compatible)} file(s)..."
@@ -249,8 +252,14 @@ def run_batch(
         json.dumps(
             {
                 "processing_branch": processing_branch,
+                "input_holo_files": [
+                    str(path.resolve()) for path in plan.selected_holo_paths
+                ],
                 "input_files": [str(path) for path in result.input_files],
-                "analysis_files": [str(path.relative_to(root)) for path in staged],
+                "analysis_files": [
+                    str(path.relative_to(batch_root)) for path in staged
+                ],
+                "analysis_root": str(batch_root),
                 "pipelines": report_entries,
                 "failures": result.failures,
                 "summary": result.summary_message,
@@ -266,9 +275,13 @@ def run_batch(
         archive = root / (
             zip_name if zip_name.lower().endswith(".zip") else f"{zip_name}.zip"
         )
-        files = [path for path in root.rglob("*") if path.is_file() and path != archive]
+        files = list(
+            dict.fromkeys(path for path in result.generated_paths if path.is_file())
+        )
         try:
-            result.zip_path = create_zip_from_tree(root, archive, source_paths=files)
+            result.zip_path = create_zip_from_tree(
+                batch_root, archive, source_paths=files
+            )
             result.generated_paths.append(result.zip_path)
             emit(f"[ZIP] {result.zip_path}")
         except Exception as exc:

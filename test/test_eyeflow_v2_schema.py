@@ -163,18 +163,26 @@ class EyeFlowAnalysisSchemaTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "must differ"):
                 stage_analysis_file(source, source)
 
-    def test_multiple_inputs_accept_hdf5_and_reject_other_files(self) -> None:
+    def test_multiple_holograms_resolve_eyeflow_exports(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            first = Path(tmp) / "first_EF.h5"
-            second = Path(tmp) / "second_EF.hdf5"
-            write_eyeflow_fixture(first)
-            write_eyeflow_fixture(second)
-            plan = prepare_run_inputs((first, second))
-            self.assertEqual(plan.h5_paths, (first, second))
-            unsupported = Path(tmp) / "acquisition.holo"
-            unsupported.touch()
-            with self.assertRaisesRegex(ValueError, "only supports .h5/.hdf5"):
-                prepare_run_inputs((first, unsupported))
+            holos = [Path(tmp) / f"{name}.holo" for name in ("first", "second")]
+            exports = []
+            for holo in holos:
+                holo.touch()
+                source = (
+                    holo.parent
+                    / holo.stem
+                    / f"{holo.stem}_EF"
+                    / "h5"
+                    / f"{holo.stem}_EF.h5"
+                )
+                source.parent.mkdir(parents=True)
+                write_eyeflow_fixture(source)
+                exports.append(source)
+            plan = prepare_run_inputs(holos)
+            self.assertEqual(plan.h5_paths, tuple(exports))
+            with self.assertRaises(ValueError):
+                prepare_run_inputs((holos[0], exports[1]))
 
     def test_zip_ignores_metadata_and_rejects_absolute_windows_members(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

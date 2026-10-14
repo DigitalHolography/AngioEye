@@ -91,7 +91,7 @@ def run_composite_scoring(context: PipelineContext) -> PipelineResult:
     try:
         all_metric_specs, all_split_stats = calibrate_metrics_from_processed_files(
             context.processed_files,
-            context.output_dir,
+            context.batch_root,
             metric_panel=METRIC_PANEL,
             control_group=CONTROL_GROUP_NAME,
             pathology_group=PATHOLOGY_GROUP_NAME,
@@ -130,7 +130,7 @@ def run_composite_scoring(context: PipelineContext) -> PipelineResult:
                 f"Composite Scoring skipped {file_path}: {type(exc).__name__}: {exc}"
             )
             continue
-        cohort = extract_group_name(file_path.parent, context.output_dir)
+        cohort = extract_group_name(file_path.parent, context.batch_root)
         score_records.extend(
             score_records_for_tree(
                 tree,

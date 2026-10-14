@@ -72,6 +72,52 @@ def _write_eyeflow_hemifield_file(path: Path, *, namespaced: bool) -> None:
 
 
 class HtmlSummaryPathTests(unittest.TestCase):
+    def test_html_summary_is_written_beside_acquisition_h5_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_dir = Path(tmp_dir) / "outputs"
+            processed_h5 = (
+                output_dir / "control" / "sample" / "sample_AE" / "h5" / "sample_AE.h5"
+            )
+            _write_minimal_waveform_metrics_file(processed_h5)
+            context = PipelineContext(
+                output_dir=output_dir,
+                processed_files=(processed_h5,),
+                selected_pipelines=("waveform_shape_metrics",),
+                input_path=Path(tmp_dir) / "batch",
+                zip_outputs=False,
+            )
+
+            result = WaveformMetricSummaryTablesPipeline().run(context)
+
+            expected = processed_h5.parent.parent / "html" / "sample_AE.html"
+            self.assertEqual(
+                [expected.resolve()],
+                [Path(path).resolve() for path in result.generated_paths],
+            )
+            self.assertTrue(expected.exists())
+            self.assertFalse((output_dir / "html").exists())
+
+    def test_html_summary_keeps_holo_stem_ending_in_app_suffix(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_dir = Path(tmp_dir)
+            processed_h5 = (
+                output_dir / "sample_AE" / "sample_AE_AE" / "h5" / "sample_AE_AE.h5"
+            )
+            _write_minimal_waveform_metrics_file(processed_h5)
+            context = PipelineContext(
+                output_dir=output_dir,
+                processed_files=(processed_h5,),
+                selected_pipelines=("waveform_shape_metrics",),
+                input_path=output_dir / "sample_AE.holo",
+                zip_outputs=False,
+            )
+
+            result = WaveformMetricSummaryTablesPipeline().run(context)
+
+            expected = processed_h5.parent.parent / "html" / "sample_AE_AE.html"
+            self.assertEqual([str(expected)], result.generated_paths)
+            self.assertTrue(expected.exists())
+
     def test_html_summary_reads_new_hemifield_metrics_and_maps(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)

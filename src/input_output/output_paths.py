@@ -8,6 +8,19 @@ APP_SUFFIXES = ("HD", "DV", "EF", "AE")
 _APP_STEM_SUFFIXES = tuple(f"_{suffix}" for suffix in APP_SUFFIXES)
 
 
+def acquisition_output_dir(
+    holo_path: str | Path,
+    output_parent: str | Path | None = None,
+    relative_parent: str | Path = Path("."),
+) -> Path:
+    """Return ``<parent>/<relative_parent>/<holo_stem>/<holo_stem>_AE``."""
+    source = Path(holo_path).expanduser()
+    parent = (
+        source.parent if output_parent is None else Path(output_parent).expanduser()
+    )
+    return parent / Path(relative_parent) / source.stem / f"{source.stem}_AE"
+
+
 def h5_output_dir(output_root: str | Path) -> Path:
     """Return the standard directory for generated HDF5 outputs."""
     return Path(output_root) / H5_OUTPUT_DIRNAME

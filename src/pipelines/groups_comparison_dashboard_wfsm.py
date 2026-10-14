@@ -81,7 +81,7 @@ class GraphicsDashboardPipeline(BatchPipeline):
         from .utils import groups_comparison_dashboard
 
         with temporary_zip_from_tree(
-            output_dir,
+            context.batch_root,
             source_paths=context.processed_files,
         ) as temp_zip:
             all_results, single_group = groups_comparison_dashboard.analyze_zip(

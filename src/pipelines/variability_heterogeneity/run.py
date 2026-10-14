@@ -110,7 +110,7 @@ class VariabilityHeterogeneityPipeline(BatchPipeline):
                     [tree],
                     overwrite=True,
                 )
-                group_name = extract_group_name(file_path.parent, output_dir)
+                group_name = extract_group_name(file_path.parent, context.batch_root)
                 add_file_blocks_to_results(
                     results,
                     group_name,

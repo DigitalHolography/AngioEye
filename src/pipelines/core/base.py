@@ -115,6 +115,12 @@ class PipelineContext:
     idle_callback: Callable[[], None] | None = None
     record_timing: Callable[[str, float], None] | None = None
     processing_branch: str = "Processing"
+    analysis_root: Path | None = None
+
+    @property
+    def batch_root(self) -> Path:
+        """Root of staged acquisitions used to resolve cohort identities."""
+        return self.output_dir if self.analysis_root is None else self.analysis_root
 
     @property
     def input_files(self) -> tuple[Path, ...]:

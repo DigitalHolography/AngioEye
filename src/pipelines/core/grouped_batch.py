@@ -22,13 +22,33 @@ class GroupedH5File:
     file_path: Path
 
 
+def _has_acquisition_wrapper(parts: tuple[str, ...]) -> bool:
+    """Identify the generated ``<holo>/<holo>_AE/h5`` directory suffix."""
+    return (
+        len(parts) >= 3
+        and parts[-1].lower() == "h5"
+        and parts[-2].lower() == f"{parts[-3]}_ae".lower()
+    )
+
+
+def _cohort_parts(
+    parts: tuple[str, ...], *, acquisition_wrapper: bool = False
+) -> tuple[str, ...]:
+    if acquisition_wrapper or _has_acquisition_wrapper(parts):
+        parts = parts[:-3]
+    if parts and parts[0].lower() == "h5":
+        parts = parts[1:]
+    return parts
+
+
 def extract_group_name(
     root: str | Path, batch_root: str | Path, *, group_depth: int = 1
 ) -> str:
     """
     group_depth controls how many leading path segments under batch_root are
     joined (with "/") into the group name. Default 1 is the original
-    single-level cohort/group convention (e.g. "control"/"patient"). Pass 2
+    single-level cohort/group convention (e.g. "control"/"patient"). The
+    generated ``<holo>/<holo>_AE/h5`` directories do not count as groups. Pass 2
     for two-level groupings such as participant/eye x epoch (e.g.
     "L/baseline1"), falling back to whatever depth is actually available if
     the path is shallower than requested.
@@ -44,18 +64,17 @@ def extract_group_name(
     if relative == Path("."):
         return "all"
 
-    parts = relative.parts
-    if parts[0].lower() == "h5":
-        parts = parts[1:]
+    parts = _cohort_parts(
+        relative.parts,
+        acquisition_wrapper=_has_acquisition_wrapper(root_path.parts),
+    )
     if not parts:
         return "all"
     return "/".join(parts[:group_depth])
 
 
 def _extract_member_group_name(member: ZipH5Member, *, group_depth: int = 1) -> str:
-    parts = member.relative_path.parts[:-1]
-    if parts and parts[0].lower() == "h5":
-        parts = parts[1:]
+    parts = _cohort_parts(member.relative_path.parts[:-1])
     if not parts:
         return "all"
     return "/".join(parts[:group_depth])
