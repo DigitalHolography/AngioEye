@@ -4,14 +4,23 @@ import tkinter as tk
 from tkinter import ttk
 
 from app_settings import normalize_pipeline_visibility
-from pipelines import PipelineDescriptor, load_pipeline_catalog
-from workflows.pipeline_readiness import pipeline_input_status
+from pipelines import (
+    PipelineDescriptor,
+    format_required_metric_options,
+    load_pipeline_catalog,
+)
 
-from ..widgets import _Tooltip
+from ..widgets import _Tooltip, ellipsize_text
 from .library import LibraryController
 
 
 class PipelineLibraryController(LibraryController):
+    _STATUS_MAX_CHARS = 40
+
+    @staticmethod
+    def is_hidden(pipeline: PipelineDescriptor) -> bool:
+        return getattr(pipeline, "visibility", "visible") == "hidden"
+
     @property
     def summary_var(self):
         return self.app.pipeline_library_summary_var
@@ -30,11 +39,11 @@ class PipelineLibraryController(LibraryController):
         rows = sorted(
             [*available, *missing], key=lambda pipeline: pipeline.name.lower()
         )
-        self.app.pipeline_registry = {p.name: p for p in available}
-        self.app.pipeline_catalog = {p.name: p for p in rows}
-        self.app.pipeline_rows = rows
-        self.sync_visibility(rows)
-        self.populate(rows)
+        visible_rows = [p for p in rows if not self.is_hidden(p)]
+        self.app.pipeline_catalog = {p.name: p for p in visible_rows}
+        self.app.pipeline_rows = visible_rows
+        self.sync_visibility(visible_rows)
+        self.populate(visible_rows)
         self.app._install_drop_targets()
 
     def sync_visibility(self, rows: list[PipelineDescriptor]) -> None:
@@ -96,47 +105,33 @@ class PipelineLibraryController(LibraryController):
 
     def refresh(self) -> None:
         self.register()
-        self.app.postprocess_library_controller.register()
 
     def open_folder(self) -> None:
-        self.open_folder_path(self.package_folder("pipelines"), "Pipeline folder")
+        self.open_folder_path(
+            self.package_folder("pipelines"),
+            "Pipeline folder",
+        )
 
     def status_text(self, pipeline: PipelineDescriptor) -> str:
-        if pipeline.available:
-            run_controller = getattr(self.app, "run_controller", None)
-            selection_provider = getattr(
-                run_controller,
-                "collect_input_selection",
-                None,
-            )
-            if callable(selection_provider):
-                return (
-                    pipeline_input_status(pipeline, selection_provider())
-                    or "Available"
-                )
-            return "Available"
-        if pipeline.missing_deps:
-            return f"Missing deps: {', '.join(pipeline.missing_deps)}"
-        return "Unavailable"
-
-    def update_input_statuses(self, *_args) -> None:
-        status_labels = getattr(self, "_status_labels", {})
-        for pipeline in getattr(self.app, "pipeline_rows", []):
-            label = status_labels.get(pipeline.name)
-            if label is not None:
-                label.configure(text=self.status_text(pipeline))
+        metrics = format_required_metric_options(pipeline)
+        if not pipeline.available:
+            missing = ", ".join(pipeline.missing_deps)
+            return f"Missing dependencies: {missing}" if missing else "Unavailable"
+        return f"EyeFlow metrics: {metrics}" if metrics else "Available"
 
     def populate(self, rows: list[PipelineDescriptor]) -> None:
         for child in self.app.pipeline_library_inner.winfo_children():
             child.destroy()
         self.app.pipeline_visibility_vars = {}
-        self._status_labels = {}
         self.configure_library_columns(
             self.app.pipeline_library_inner,
             row_count=len(rows) + 1,
         )
 
-        selected_header = ttk.Label(self.app.pipeline_library_inner, text="Selected")
+        selected_header = ttk.Label(
+            self.app.pipeline_library_inner,
+            text="Selected",
+        )
         selected_header.grid(row=0, column=0, sticky="w", pady=(0, 6))
         status_header = ttk.Label(self.app.pipeline_library_inner, text="Status")
         status_header.grid(
@@ -160,16 +155,21 @@ class PipelineLibraryController(LibraryController):
                 text=pipeline.name,
                 variable=var,
                 state="normal" if is_available else "disabled",
-                command=lambda name=pipeline.name, visible_var=var: (
-                    self.set_visibility(name, visible_var.get())
+                command=lambda name=pipeline.name, visible_var=var: self.set_visibility(
+                    name, visible_var.get()
                 ),
             )
             check.grid(row=idx, column=0, sticky="w", pady=(0, 6))
             self.bind_mousewheel(check, self.app.pipeline_library_canvas)
 
+            full_status_text = self.status_text(pipeline)
+            display_status_text = ellipsize_text(
+                full_status_text,
+                self._STATUS_MAX_CHARS,
+            )
             status = ttk.Label(
                 self.app.pipeline_library_inner,
-                text=self.status_text(pipeline),
+                text=display_status_text,
             )
             status.grid(
                 row=idx,
@@ -179,7 +179,7 @@ class PipelineLibraryController(LibraryController):
                 pady=(0, 6),
             )
             self.bind_mousewheel(status, self.app.pipeline_library_canvas)
-            self._status_labels[pipeline.name] = status
+            check.lift()
 
             tip_text = self.descriptor_tooltip_text(pipeline)
             if tip_text:
@@ -189,9 +189,15 @@ class PipelineLibraryController(LibraryController):
                     bg=self.app._surface_color,
                     fg=self.app._text_fg,
                 )
+            status_tip_text = (
+                full_status_text
+                if display_status_text != full_status_text
+                else tip_text
+            )
+            if status_tip_text:
                 _Tooltip(
                     status,
-                    tip_text,
+                    status_tip_text,
                     bg=self.app._surface_color,
                     fg=self.app._text_fg,
                 )

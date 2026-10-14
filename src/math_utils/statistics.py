@@ -10,10 +10,8 @@ two-sample comparison helpers used by post-processing dashboards.
 from __future__ import annotations
 
 import warnings
-from math import erf, sqrt
 
 import numpy as np
-
 
 # AngioEye's numerical data path uses float32.  Keep the precision policy in
 # one place so all shared reductions use the same default.
@@ -45,7 +43,9 @@ def _nan_result_for_reduction(
         for item in normalized_axes:
             shape[item] = 1
     else:
-        shape = [size for index, size in enumerate(shape) if index not in normalized_axes]
+        shape = [
+            size for index, size in enumerate(shape) if index not in normalized_axes
+        ]
     return np.full(tuple(shape), np.nan, dtype=DEFAULT_FLOAT_DTYPE)
 
 
@@ -87,20 +87,6 @@ def nanstd(
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=RuntimeWarning)
         return np.nanstd(values, axis=axis, ddof=ddof, keepdims=keepdims)
-
-
-def nanvar(
-    x: np.ndarray | list | tuple,
-    axis: int | tuple[int, ...] | None = None,
-    ddof: int = 0,
-    keepdims: bool = False,
-    dtype: np.dtype | type | None = DEFAULT_FLOAT_DTYPE,
-) -> np.ndarray:
-    """Return ``np.nanvar`` without warnings for empty/all-NaN slices."""
-    values = _as_float_array(x, dtype)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", category=RuntimeWarning)
-        return np.nanvar(values, axis=axis, ddof=ddof, keepdims=keepdims)
 
 
 def nansum(
@@ -217,7 +203,9 @@ def _nanarg_reduction(
             result = operation(values, axis=-1)
         result = np.where(finite_count > 0, result, -1)
         if keepdims:
-            result_shape = tuple(1 if item in axes else x.shape[item] for item in range(x.ndim))
+            result_shape = tuple(
+                1 if item in axes else x.shape[item] for item in range(x.ndim)
+            )
             return result.reshape(result_shape)
         return result
 
@@ -251,9 +239,7 @@ def nanargmin(
     dtype: np.dtype | type | None = DEFAULT_FLOAT_DTYPE,
 ) -> np.ndarray:
     """Return a NaN-aware argmin, using ``-1`` for empty/all-NaN slices."""
-    return _nanarg_reduction(
-        _as_float_array(x, dtype), axis, keepdims, np.nanargmin
-    )
+    return _nanarg_reduction(_as_float_array(x, dtype), axis, keepdims, np.nanargmin)
 
 
 def nanargmax(
@@ -263,9 +249,7 @@ def nanargmax(
     dtype: np.dtype | type | None = DEFAULT_FLOAT_DTYPE,
 ) -> np.ndarray:
     """Return a NaN-aware argmax, using ``-1`` for empty/all-NaN slices."""
-    return _nanarg_reduction(
-        _as_float_array(x, dtype), axis, keepdims, np.nanargmax
-    )
+    return _nanarg_reduction(_as_float_array(x, dtype), axis, keepdims, np.nanargmax)
 
 
 def nanmad(
@@ -277,23 +261,7 @@ def nanmad(
     """Return the median absolute deviation, ignoring non-finite values."""
     values = _as_float_array(x, dtype)
     center = nanmedian(values, axis=axis, keepdims=True, dtype=None)
-    return nanmedian(
-        np.abs(values - center), axis=axis, keepdims=keepdims, dtype=None
-    )
-
-
-def nancv(
-    x: np.ndarray | list | tuple,
-    axis: int | tuple[int, ...] | None = None,
-    ddof: int = 0,
-    keepdims: bool = False,
-    dtype: np.dtype | type | None = DEFAULT_FLOAT_DTYPE,
-) -> np.ndarray:
-    """Return NaN-aware coefficient of variation ``std / abs(mean)``."""
-    values = _as_float_array(x, dtype)
-    mean = nanmean(values, axis=axis, keepdims=keepdims, dtype=None)
-    std = nanstd(values, axis=axis, ddof=ddof, keepdims=keepdims, dtype=None)
-    return std / np.abs(mean)
+    return nanmedian(np.abs(values - center), axis=axis, keepdims=keepdims, dtype=None)
 
 
 def finite_values(x: np.ndarray | list | tuple) -> np.ndarray:
@@ -302,53 +270,8 @@ def finite_values(x: np.ndarray | list | tuple) -> np.ndarray:
     return values[np.isfinite(values)]
 
 
-# Descriptive aliases retained for callers that use these names explicitly.
-finite_1d = finite_values
+# The report modules use this name for finite numerical values.
 clean_values = finite_values
-
-
-def iqr_1d(x: np.ndarray | list | tuple) -> float:
-    """Return the interquartile range of finite values, or NaN if empty."""
-    values = finite_values(x)
-    if values.size == 0:
-        return np.nan
-    q25 = nanpercentile(values, 25, dtype=None)
-    q75 = nanpercentile(values, 75, dtype=None)
-    return float(q75 - q25)
-
-
-def mad_1d(x: np.ndarray | list | tuple) -> float:
-    """Return the median absolute deviation of finite values, or NaN."""
-    values = finite_values(x)
-    if values.size == 0:
-        return np.nan
-    return float(nanmad(values, dtype=None))
-
-
-def cv_1d(x: np.ndarray | list | tuple, eps: float = 1e-12) -> float:
-    """Return sample standard deviation divided by absolute mean."""
-    values = finite_values(x)
-    if values.size == 0:
-        return np.nan
-    mean = nanmean(values, dtype=None)
-    std = nanstd(values, ddof=1, dtype=None) if values.size > 1 else 0.0
-    return float(std / (np.abs(mean) + eps))
-
-
-def median_1d(x: np.ndarray | list | tuple) -> float:
-    """Return the median of finite values, or NaN if empty."""
-    values = finite_values(x)
-    if values.size == 0:
-        return np.nan
-    return float(nanmedian(values, dtype=None))
-
-
-def std_1d(x: np.ndarray | list | tuple) -> float:
-    """Return sample standard deviation of finite values, or NaN if empty."""
-    values = finite_values(x)
-    if values.size == 0:
-        return np.nan
-    return float(nanstd(values, ddof=1, dtype=None) if values.size > 1 else 0.0)
 
 
 def nanmedian_or_nan(x: np.ndarray | list | tuple) -> float:
@@ -450,40 +373,13 @@ def cohen_d(
     control_std = nanstd(control, ddof=1)
     group_std = nanstd(group, ddof=1)
     pooled_var = (
-        (control.size - 1) * control_std**2
-        + (group.size - 1) * group_std**2
+        (control.size - 1) * control_std**2 + (group.size - 1) * group_std**2
     ) / (control.size + group.size - 2)
 
     if pooled_var <= 0 or not np.isfinite(pooled_var):
         return np.nan
 
     return float((nanmean(group) - nanmean(control)) / np.sqrt(pooled_var))
-
-
-def mean_difference_ci95(
-    control_values: np.ndarray | list | tuple,
-    group_values: np.ndarray | list | tuple,
-) -> tuple[float, float, float]:
-    """Return approximate 95% CI for the mean difference group minus control."""
-    control = finite_values(control_values)
-    group = finite_values(group_values)
-    if control.size < 2 or group.size < 2:
-        return np.nan, np.nan, np.nan
-
-    difference = float(nanmean(group) - nanmean(control))
-    standard_error = np.sqrt(
-        nanvar(control, ddof=1) / control.size
-        + nanvar(group, ddof=1) / group.size
-    )
-
-    if not np.isfinite(standard_error):
-        return difference, np.nan, np.nan
-
-    return (
-        difference,
-        float(difference - 1.96 * standard_error),
-        float(difference + 1.96 * standard_error),
-    )
 
 
 def mann_whitney_pvalue(
@@ -598,18 +494,3 @@ def best_threshold_sensitivity_specificity_cumulative_sweep(
 
     _, threshold, sensitivity, specificity, direction = best
     return threshold, sensitivity, specificity, direction
-
-
-def overlap_from_cohen_d(d: float | None) -> float:
-    """Return the equal-variance Gaussian overlap approximation."""
-    if d is None or not np.isfinite(d):
-        return np.nan
-    return float(1.0 + erf(-abs(float(d)) / (2.0 * sqrt(2.0))))
-
-
-# Explicit aliases make the intent clear at call sites that use the scalar
-# helpers from the original pipeline implementations.
-safe_nanmean = nanmean
-safe_nanmedian = nanmedian
-safe_nanstd = nanstd
-safe_nanvar = nanvar

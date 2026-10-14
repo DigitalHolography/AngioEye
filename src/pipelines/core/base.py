@@ -1,82 +1,137 @@
-﻿import csv
-from collections.abc import Sequence
+"""Batch analysis contracts for statistical pipelines over EyeFlow outputs."""
+
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, TypeAlias
 
-import h5py
-
-from input_output.hdf5_io import MetricsTree
 from dependency_utils import find_missing_dependencies
 
-# Global Registry of all imports needed by the pipelines
-PIPELINE_REGISTRY: dict[str, type["ProcessPipeline"]] = {}
+PIPELINE_REGISTRY: dict[str, type["BatchPipeline"]] = {}
+PipelineInputMethod: TypeAlias = Literal[
+    "single_file", "file_batch", "cohort_batch", "zip_batch"
+]
+DEFAULT_INPUT_METHODS: tuple[PipelineInputMethod, ...] = (
+    "single_file",
+    "file_batch",
+    "cohort_batch",
+    "zip_batch",
+)
 
 
-# Decorator to register all neede pipelines
+def normalize_input_methods(
+    input_methods: list[PipelineInputMethod] | None,
+) -> list[PipelineInputMethod]:
+    if input_methods is None:
+        return list(DEFAULT_INPUT_METHODS)
+    if not input_methods:
+        raise ValueError("input_methods must include at least one supported method.")
+    for method in input_methods:
+        if method not in DEFAULT_INPUT_METHODS:
+            raise ValueError(
+                f"Unknown pipeline input method '{method}'. "
+                f"Valid: {', '.join(DEFAULT_INPUT_METHODS)}."
+            )
+    return list(dict.fromkeys(input_methods))
+
+
+def required_metric_options_for(obj: object) -> tuple[tuple[str, ...], ...]:
+    options = getattr(obj, "required_metric_options", None)
+    if options:
+        return tuple(tuple(option) for option in options if option)
+    return tuple((name,) for name in getattr(obj, "required_metrics", ()))
+
+
+def format_required_metric_options(obj: object) -> str:
+    return " and ".join(
+        f"({' or '.join(group)})" if len(group) > 1 else group[0]
+        for group in required_metric_options_for(obj)
+    )
+
+
 def registerPipeline(
-    name: str, description: str = "", required_deps: list[str] | None = None
+    name: str,
+    description: str = "",
+    required_deps: list[str] | None = None,
+    required_metrics: list[str] | None = None,
+    required_metric_options: list[list[str]] | None = None,
+    input_methods: list[PipelineInputMethod] | None = None,
+    visibility: str = "visible",
+    minimum_input_files: int = 1,
+    accepted_input_modes: list[str] | None = None,
 ):
-    def decorator(cls):
-        # metadata for the class
+    """Register a class or function that analyzes a batch of metric HDF5 files.
+
+    Required metric groups describe data written by EyeFlow. Each option group
+    is an OR choice; distinct groups must all be present in the input file.
+    """
+
+    def decorator(target):
+        if isinstance(target, type):
+            cls = target
+        else:
+            cls = type(
+                "".join(part.capitalize() for part in name.replace("_", " ").split())
+                or "FunctionPipeline",
+                (FunctionPipeline,),
+                {"func": staticmethod(target)},
+            )
         cls.name = name
-        cls.description = description or getattr(cls, "description", "")
-        cls.requires = required_deps or []
-
-        missing = find_missing_dependencies(cls.requires)
-        cls.missing_deps = missing
-        cls.available = len(missing) == 0
-
-        # Add to registry
+        cls.description = description or getattr(target, "description", "")
+        cls.requires = list(required_deps or [])
+        cls.missing_deps = find_missing_dependencies(cls.requires)
+        cls.available = not cls.missing_deps
+        options = (
+            required_metric_options
+            if required_metric_options is not None
+            else [[metric] for metric in required_metrics or []]
+        )
+        cls.required_metric_options = [
+            list(dict.fromkeys(group)) for group in options if group
+        ]
+        cls.required_metrics = list(
+            dict.fromkeys(
+                metric for group in cls.required_metric_options for metric in group
+            )
+        )
+        cls.input_methods = normalize_input_methods(input_methods)
+        cls.visibility = visibility
+        cls.minimum_input_files = max(1, int(minimum_input_files))
+        cls.accepted_input_modes = tuple(dict.fromkeys(accepted_input_modes or []))
         PIPELINE_REGISTRY[name] = cls
-        return cls
+        return target
 
     return decorator
 
 
 @dataclass
-class ProcessResult:
-    metrics: dict[str, Any]
-    attrs: dict[str, Any] | None = None  # attributes stored on the pipeline group
-    output_h5_path: str | None = None
+class PipelineContext:
+    output_dir: Path
+    processed_files: tuple[Path, ...]
+    selected_pipelines: tuple[str, ...]
+    input_path: Path
+    zip_outputs: bool
+    input_h5_paths: tuple[Path, ...] = ()
+    idle_callback: Callable[[], None] | None = None
+    record_timing: Callable[[str, float], None] | None = None
+    processing_branch: str = "Processing"
+    analysis_root: Path | None = None
+
+    @property
+    def batch_root(self) -> Path:
+        """Root of staged acquisitions used to resolve cohort identities."""
+        return self.output_dir if self.analysis_root is None else self.analysis_root
+
+    @property
+    def input_files(self) -> tuple[Path, ...]:
+        return self.processed_files
 
 
 @dataclass
-class DatasetValue:
-    """Represents a dataset payload plus optional attributes for that dataset."""
-
-    data: Any
-    attrs: dict[str, Any] | None = None
-
-
-def with_attrs(data: Any, attrs: dict[str, Any]) -> DatasetValue:
-    """Convenience helper to attach attributes to a dataset value."""
-    return DatasetValue(data=data, attrs=attrs)
-
-
-def process_result_to_metrics_tree(
-    pipeline_name: str,
-    result: "ProcessResult",
-) -> MetricsTree:
-    return MetricsTree(
-        name=pipeline_name,
-        metrics=result.metrics,
-        attrs=result.attrs,
-    )
-
-
-def process_results_to_metric_trees(
-    results: Sequence[tuple[str, "ProcessResult"]],
-) -> list[MetricsTree]:
-    return [
-        process_result_to_metrics_tree(pipeline_name, result)
-        for pipeline_name, result in results
-    ]
-
-
-# +==========================================================================+ #
-# |                            PIPELINES CLASSES                             | #
-# +==========================================================================+ #
+class PipelineResult:
+    summary: str = ""
+    generated_paths: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -84,84 +139,63 @@ class PipelineDescriptor:
     name: str
     description: str
     available: bool
-    # To avoid Python Mutable Default Arguments
     requires: list[str] = field(default_factory=list)
     missing_deps: list[str] = field(default_factory=list)
-    pipeline_cls: type["ProcessPipeline"] | None = None
+    required_metrics: list[str] = field(default_factory=list)
+    required_metric_options: list[list[str]] = field(default_factory=list)
+    input_methods: list[PipelineInputMethod] = field(
+        default_factory=lambda: list(DEFAULT_INPUT_METHODS)
+    )
+    pipeline_cls: type["BatchPipeline"] | None = None
     error_msg: str = ""
+    visibility: str = "visible"
+    minimum_input_files: int = 1
+    accepted_input_modes: tuple[str, ...] = ()
 
-    def instantiate(self) -> "ProcessPipeline":
-        """Factory method to create the actual pipeline instance."""
+    def instantiate(self) -> "BatchPipeline":
         if not self.available or self.pipeline_cls is None:
             return MissingPipeline(
-                self.name,
-                self.error_msg or self.description,
-                self.missing_deps,
-                self.requires,
+                self.name, self.error_msg or self.description, self.missing_deps
             )
         return self.pipeline_cls()
 
 
-class ProcessPipeline:
+class BatchPipeline:
     name: str
     description: str
     available: bool
-    missing_deps: list[str]
     requires: list[str]
+    missing_deps: list[str]
+    required_metrics: list[str]
+    required_metric_options: list[list[str]]
+    input_methods: list[PipelineInputMethod]
+    visibility: str = "visible"
+    minimum_input_files: int = 1
+    accepted_input_modes: tuple[str, ...] = ()
 
     def __init__(self) -> None:
-        # Derive the pipeline name from the module filename (e.g., basic_stats.py -> basic_stats).
         if not getattr(self, "name", None):
-            module_name = (self.__class__.__module__ or "").rsplit(".", 1)[-1]
-            self.name: str = module_name or self.__class__.__name__
+            self.name = self.__class__.__name__
 
-    def run(self, h5file: h5py.File) -> ProcessResult:
+    def run(self, context: PipelineContext) -> PipelineResult:
         raise NotImplementedError
 
-    def write_companions(
-        self,
-        result: ProcessResult,
-        *,
-        source_h5_path: Path | str,
-        output_h5_path: Path | str,
-    ) -> list[Path]:
-        """Optional side-car outputs (PNG/HTML) next to the shared result H5.
 
-        Default is a no-op. Called by the pipeline engine after the combined
-        ``*_AE.h5`` has been written.
-        """
-        del result, source_h5_path, output_h5_path
-        return []
+class FunctionPipeline(BatchPipeline):
+    func: Callable[[PipelineContext], PipelineResult]
 
-    def export(self, result: ProcessResult, output_path: str) -> str:
-        """Default CSV export for metrics."""
-        with open(output_path, "w", newline="", encoding="utf-8") as csvfile:
-            writer = csv.writer(csvfile)
-            writer.writerow(["metric", "value"])
-            for key, value in result.metrics.items():
-                writer.writerow([key, value])
-        return output_path
+    def run(self, context: PipelineContext) -> PipelineResult:
+        return self.func(context)
 
 
-class MissingPipeline(ProcessPipeline):
-    """Placeholder for pipelines whose dependencies are missing."""
-
+class MissingPipeline(BatchPipeline):
     available = False
 
-    def __init__(
-        self, name: str, description: str, missing_deps: list[str], requires: list[str]
-    ) -> None:
-        # super().__init__()
+    def __init__(self, name: str, description: str, missing_deps: list[str]) -> None:
         self.name = name
-        self.description = description or "Pipeline unavailable (missing dependencies)."
+        self.description = description
         self.missing_deps = missing_deps
-        self.requires = requires
 
-    def run(self, h5file):
-        missing = ", ".join(
-            self.missing_deps or self.requires or ["unknown dependency"]
-        )
-        raise ImportError(
-            f"Pipeline '{self.name}' unavailable. Missing dependencies: {missing}"
-        )
-
+    def run(self, context: PipelineContext) -> PipelineResult:
+        reason = ", ".join(self.missing_deps) or self.description
+        raise RuntimeError(f"Pipeline '{self.name}' unavailable ({reason}).")

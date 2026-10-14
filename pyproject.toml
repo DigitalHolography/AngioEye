@@ -4,41 +4,25 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "AngioEye"
-version = "1.23.1"
-description = "Cohort-analysis engine for retinal Doppler holography"
+version = "1.24.0"
+description = "Batch statistical analysis of EyeFlow exports"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "GPL-3.0-only" }
+license = "GPL-3.0-only"
 
 # =============== [ DEPENDENCIES ] ===============
 
 dependencies = [
-    
     "numpy>=1.24",
-   
     "h5py>=3.9",
-   
     "sv-ttk>=2.6",
-   
     "tkinterdnd2",
     "scipy>=1.15.3",
     "pandas>=2.3.3",
     "matplotlib>=3.10.9",
-    "jinja2>=3.1.6",
-    "plotly>=5.18",
 ]
 
 [project.optional-dependencies]
-# For specific pipelines
-pipelines = ["pandas>=2.1"]
-postprocess = [
-    "jinja2>=3.1",
-    "matplotlib>=3.8",
-    "pandas>=2.1",
-    "plotly>=5.18",
-    "scipy>=1.10",
-]
-
 # For developers
 dev = ["ruff", "pre-commit", "pyinstaller"]
 
@@ -59,12 +43,13 @@ py-modules = [
     "cli",
     "app_settings",
     "dependency_utils",
-    "graphics",
+    "batch_engine",
     "launcher",
 ]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+namespaces = false
 
 # =============== [ TOOLS OPTIONS ] ===============
 

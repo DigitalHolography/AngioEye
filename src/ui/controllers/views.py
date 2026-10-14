@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from .base import ViewController
 from .pipeline_library import PipelineLibraryController
-from .postprocess_library import PostprocessLibraryController
 from .run import RunTabController
 
 
@@ -14,10 +13,6 @@ class MinimalViewController(ViewController):
     @property
     def output_path_var(self):
         return self.app.minimal_output_path_var
-
-    @property
-    def holo_status_var(self):
-        return self.app.holo_status_var
 
     @property
     def status_var(self):
@@ -55,8 +50,15 @@ class MinimalViewController(ViewController):
     def choose_input(self) -> None:
         self.app.run_controller.choose_file()
 
+    def choose_folder(self) -> None:
+        self.app.run_controller.choose_folder()
+
     def run(self) -> None:
         self.app.run_controller.run()
+
+    def choose_pipelines(self) -> None:
+        self.app._apply_ui_mode("advanced")
+        self.app.notebook.select(self.app.pipeline_library_tab)
 
 
 class AdvancedViewController(ViewController):
@@ -65,6 +67,3 @@ class AdvancedViewController(ViewController):
 
     def create_pipeline_library_controller(self) -> PipelineLibraryController:
         return self.app.pipeline_library_controller
-
-    def create_postprocess_library_controller(self) -> PostprocessLibraryController:
-        return self.app.postprocess_library_controller

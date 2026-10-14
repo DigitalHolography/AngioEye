@@ -4,11 +4,11 @@ Build the AngioEye Windows installer.
 
 .DESCRIPTION
 Builds a PyInstaller one-dir bundle for the unified GUI/CLI application, copies
-editable pipeline/postprocess modules next to the bundle, generates an Inno Setup
+editable statistical pipeline modules next to the bundle, generates an Inno Setup
 script, and compiles the final setup executable into dist\installer.
 
 .EXAMPLE
-.\build_installer.ps1 -IncludeAllExtras
+.\build_installer.ps1
 
 .EXAMPLE
 .\build_installer.ps1 -InnoSetupCompiler "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
@@ -21,9 +21,6 @@ script, and compiles the final setup executable into dist\installer.
 param(
     [string]$InnoSetupCompiler = "",
     [string]$Python = "",
-    [switch]$IncludePipelineExtras,
-    [switch]$IncludePostprocessExtras,
-    [switch]$IncludeAllExtras,
     [switch]$Console,
     [switch]$SkipClean
 )
@@ -170,10 +167,6 @@ function Invoke-PyInstaller {
 
     if ($uv -and -not $Python) {
         $uvArgs = @("run")
-        if ($IncludeAllExtras -or $IncludePipelineExtras) {
-            $uvArgs += @("--extra", "pipelines")
-        }
-        $uvArgs += @("--extra", "postprocess")
         $uvArgs += @("--with", "pyinstaller", "python", "-m", "PyInstaller")
         $uvArgs += $Arguments
         & $uv.Source @uvArgs
@@ -284,11 +277,8 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 def common_datas():
     datas = []
     datas += collect_data_files("pipelines")
-    datas += collect_data_files("postprocess")
-    datas += collect_data_files("jinja2")
     datas += collect_data_files("matplotlib")
     datas += collect_data_files("pandas")
-    datas += collect_data_files("plotly")
     datas += collect_data_files("scipy")
     datas += collect_data_files("sv_ttk")
     datas += collect_data_files("tkinterdnd2")
@@ -303,11 +293,8 @@ def common_hiddenimports():
     hiddenimports = []
     hiddenimports += ["angio_eye", "cli", "launcher"]
     hiddenimports += collect_submodules("pipelines")
-    hiddenimports += collect_submodules("postprocess")
-    hiddenimports += collect_submodules("jinja2")
     hiddenimports += collect_submodules("matplotlib")
     hiddenimports += collect_submodules("pandas")
-    hiddenimports += collect_submodules("plotly")
     hiddenimports += collect_submodules("scipy")
     hiddenimports += collect_submodules("tkinterdnd2")
     hiddenimports += ["matplotlib.backends.backend_ps"]
@@ -376,6 +363,7 @@ function Copy-EditablePackageModules {
     }
 
     if (Test-Path -LiteralPath $destinationDir -PathType Container) {
+        Assert-ChildPath -BasePath $BundleDir -TargetPath $destinationDir
         Remove-Item -LiteralPath $destinationDir -Recurse -Force
     }
     New-Item -ItemType Directory -Force -Path $destinationDir | Out-Null
@@ -415,7 +403,6 @@ function Copy-InstallerExtras {
     }
 
     Copy-EditablePackageModules -PackageName "pipelines" -BundleDir $BundleDir
-    Copy-EditablePackageModules -PackageName "postprocess" -BundleDir $BundleDir
 }
 
 function Write-InnoSetupScript {

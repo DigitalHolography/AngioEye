@@ -1,7 +1,7 @@
+import hashlib
+import json
 import sys
 import tempfile
-import threading
-import time
 import unittest
 import zipfile
 from pathlib import Path
@@ -13,1357 +13,395 @@ SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from input_output import list_h5_members  # noqa: E402
-from pipeline_engine import run_postprocesses  # noqa: E402
-from workflows import (  # noqa: E402
-    HoloInputContext,
-    RunWorkflowResult,
-    WorkflowCallbacks,
-    WorkflowInputSelection,
-    WorkflowInputError,
-    WorkflowOutputOptions,
-    WorkflowRequestState,
-    WorkflowRunRequest,
-    WorkflowWorkSelection,
-    ZipBatchSettings,
-    build_workflow_request,
-    dispatch_workflow,
-    prepare_run_input,
-    prepare_run_inputs,
-    run_filesystem_workflow,
-    run_holo_workflow,
-    run_zip_workflow,
-)
-from workflows._postprocess_requirements import (  # noqa: E402
-    compatible_postprocess_files,
-    missing_required_option_errors,
-    missing_required_pipeline_errors,
-)
-from workflows._standard_pipeline_runs import (  # noqa: E402
-    run_filesystem_pipeline_run,
-    run_zip_pipeline_run,
-)
+from input_output.archive_io import reset_output_dir  # noqa: E402
+from pipelines import BatchPipeline, PipelineDescriptor, PipelineResult  # noqa: E402
+from pipelines.core.grouped_batch import extract_group_name  # noqa: E402
+from pipelines.html_summary import WaveformMetricSummaryTablesPipeline  # noqa: E402
+from workflows import run_batch  # noqa: E402
 
 
-def process_pool_run_pipeline_file(
-    h5_path,
-    _pipelines,
-    output_root,
-    output_relative_parent=Path("."),
-    output_filename=None,
-):
-    target_dir = output_root / output_relative_parent
-    target_dir.mkdir(parents=True, exist_ok=True)
-    output_path = target_dir / (output_filename or f"{h5_path.stem}_result.h5")
-    output_path.write_text("result", encoding="utf-8")
-    return output_path
+class SummaryPipeline(BatchPipeline):
+    def run(self, context):
+        records = []
+        for path in context.processed_files:
+            with h5py.File(path, "a") as h5file:
+                records.append(
+                    {
+                        "group": extract_group_name(path.parent, context.batch_root),
+                        "value": float(
+                            h5file["/Processing/Metrics/waveform_shape_metrics/RI"][0]
+                        ),
+                    }
+                )
+                h5file.create_dataset("/AngioEye/Statistics/test/value", data=12)
+        report = context.output_dir / "summary.json"
+        report.write_text(json.dumps(records), encoding="utf-8")
+        return PipelineResult(summary="Wrote summary", generated_paths=[str(report)])
 
 
-def _write_pipeline_group(path: Path, pipeline_name: str, root: str) -> None:
+class ReplacingReportPipeline(BatchPipeline):
+    def run(self, context):
+        report_dir = context.output_dir / "Variability and heterogeneity"
+        reset_output_dir(report_dir)
+        report = report_dir / "report.txt"
+        report.write_text("Shared cohort report", encoding="utf-8")
+        return PipelineResult(summary="Wrote report", generated_paths=[str(report)])
+
+
+def descriptor(name="Test summary", required="waveform_shape_metrics"):
+    return PipelineDescriptor(
+        name=name,
+        description="Test",
+        available=True,
+        required_metrics=[required],
+        pipeline_cls=SummaryPipeline,
+    )
+
+
+def write_eyeflow(path, *, primary=2, alternate=9):
     path.parent.mkdir(parents=True, exist_ok=True)
     with h5py.File(path, "w") as h5file:
-        group = h5file.require_group(f"{root}/{pipeline_name}")
-        group.attrs["pipeline"] = pipeline_name
-
-
-class PostprocessRequirementTests(unittest.TestCase):
-    @staticmethod
-    def _input_restricted_postprocess():
-        return type(
-            "Postprocess",
-            (),
-            {
-                "name": "Low-rank cohort",
-                "accepted_input_modes": ("folder", "zip"),
-                "required_pipelines": (),
-            },
-        )()
-
-    @staticmethod
-    def _request_state(input_selection, postprocess):
-        return WorkflowRequestState(
-            input_selection=input_selection,
-            work_selection=WorkflowWorkSelection(
-                pipeline_names=(),
-                pipelines=(),
-                postprocesses=(postprocess,),
-            ),
-            output_options=WorkflowOutputOptions(
-                base_output_value="outputs",
-                zip_outputs=False,
-                zip_name="outputs.zip",
-                persist_source=False,
-            ),
-        )
-
-    def test_folder_zip_only_postprocess_rejects_holo_request(self):
-        postprocess = self._input_restricted_postprocess()
-        state = self._request_state(
-            WorkflowInputSelection(
-                convention="holo",
-                holo_paths=(Path("acquisition.holo"),),
-            ),
-            postprocess,
-        )
-
-        with self.assertRaisesRegex(
-            WorkflowInputError,
-            "accepts only folder or zip input; received holo",
-        ):
-            build_workflow_request(
-                state,
-                zip_output_dir=lambda folder, *_args: folder,
-                output_filename_for_run=lambda *_args: None,
+        h5file.attrs["output_schema"] = "eyeflow_v2"
+        for branch, value in (("Processing", primary), ("ProcessingAlt", alternate)):
+            h5file.create_dataset(
+                f"/{branch}/Metrics/waveform_shape_metrics/RI", data=[value]
             )
 
-    def test_folder_zip_only_postprocess_rejects_individual_h5_request(self):
-        postprocess = self._input_restricted_postprocess()
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            input_path = Path(tmp_dir) / "acquisition.h5"
-            input_path.write_text("h5", encoding="utf-8")
-            state = self._request_state(
-                WorkflowInputSelection(
-                    convention="legacy",
-                    data_value=str(input_path),
-                ),
-                postprocess,
+
+def write_acquisition(folder, name="a", **options):
+    folder.mkdir(parents=True, exist_ok=True)
+    holo = folder / f"{name}.holo"
+    holo.write_bytes(b"raw acquisition")
+    source = folder / name / f"{name}_EF" / "h5" / f"{name}_EF.h5"
+    write_eyeflow(source, **options)
+    return holo, source
+
+
+class StatisticalBatchTests(unittest.TestCase):
+    def test_folder_preserves_groups_and_sources_and_uses_selected_branch(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            inputs = root / "cohort"
+            acquisitions = [
+                write_acquisition(inputs / group) for group in ("control", "patient")
+            ]
+            sources = [source for _holo, source in acquisitions]
+            before = [hashlib.sha256(path.read_bytes()).hexdigest() for path in sources]
+            progress = []
+            result = run_batch(
+                [inputs],
+                [descriptor()],
+                root / "results",
+                processing_branch="ProcessingAlt",
+                zip_outputs=True,
+                progress=lambda *args: progress.append(args),
+            )
+            self.assertEqual([], result.failures)
+            records = json.loads((result.output_dir / "summary.json").read_text())
+            self.assertEqual(
+                ["control", "patient"], [record["group"] for record in records]
+            )
+            self.assertEqual([9, 9], [record["value"] for record in records])
+            self.assertEqual(
+                before,
+                [hashlib.sha256(path.read_bytes()).hexdigest() for path in sources],
+            )
+            self.assertEqual((3, 3), progress[-1][:2])
+            with h5py.File(root / "results/control/a/a_AE/h5/a_AE.h5") as analysis:
+                self.assertEqual(analysis.attrs["angioeye_input_file"], str(sources[0]))
+                self.assertEqual(
+                    analysis.attrs["angioeye_input_holo"], str(acquisitions[0][0])
+                )
+            with zipfile.ZipFile(result.zip_path) as archive:
+                self.assertIn("control/a/a_AE/h5/a_AE.h5", archive.namelist())
+                self.assertIn("cohort-results/summary.json", archive.namelist())
+                self.assertNotIn("outputs.zip", archive.namelist())
+
+    def test_folder_ignores_other_exports_and_unselected_acquisitions(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            inputs = root / "cohort"
+            _holo, source = write_acquisition(inputs / "control")
+            write_eyeflow(inputs / "stray_EF.h5", primary=100)
+            write_eyeflow(inputs / "a" / "a_HD" / "h5" / "a_HD_output.h5")
+            write_eyeflow(inputs / "b" / "b_EF" / "h5" / "b_EF.h5")
+            result = run_batch([inputs], [descriptor()], root / "results")
+            self.assertEqual([], result.failures)
+            self.assertEqual([source], result.input_files)
+
+    def test_bad_input_and_missing_metric_do_not_stop_other_tools(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            good_holo, _source = write_acquisition(root, "good")
+            bad_holo, bad = write_acquisition(root, "bad")
+            bad.write_text("corrupt", encoding="utf-8")
+            result = run_batch(
+                [good_holo, bad_holo],
+                [descriptor("Unavailable metrics", "unknown"), descriptor()],
+                root / "results",
+            )
+            self.assertEqual(2, len(result.failures))
+            self.assertTrue((result.output_dir / "summary.json").is_file())
+            manifest = json.loads((result.output_dir / "batch_run.json").read_text())
+            self.assertEqual(
+                ["failed", "completed"],
+                [entry["status"] for entry in manifest["pipelines"]],
             )
 
-            with self.assertRaisesRegex(
-                WorkflowInputError,
-                "accepts only folder or zip input; received file",
+    def test_rerun_excludes_previous_results_inside_cohort(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            write_acquisition(root / "control")
+            output = root / "results"
+            for _run in range(2):
+                result = run_batch([root], [descriptor()], output)
+                self.assertEqual(1, len(result.input_files))
+                self.assertEqual([], result.failures)
+
+    def test_rejects_empty_selection_and_unsafe_archive_name(self):
+        with self.assertRaisesRegex(ValueError, "at least one"):
+            run_batch(["file.h5"], [], "results")
+        with self.assertRaisesRegex(ValueError, "filename"):
+            run_batch(
+                ["file.h5"],
+                [descriptor()],
+                "results",
+                zip_outputs=True,
+                zip_name="../out.zip",
+            )
+
+    def test_rejects_direct_hdf5_and_zip_inputs_without_creating_outputs(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            _holo, source = write_acquisition(root)
+            archive_path = root / "outputs.zip"
+            with zipfile.ZipFile(archive_path, "w") as archive:
+                archive.write(source, "a.h5")
+            for path in (source, archive_path):
+                with self.subTest(path=path):
+                    before = path.read_bytes()
+                    with self.assertRaisesRegex(ValueError, ".holo"):
+                        run_batch([path], [descriptor()], root / "results")
+                    self.assertEqual(before, path.read_bytes())
+                    self.assertFalse((root / "results").exists())
+
+    def test_archive_failure_is_recorded_in_final_summary(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            holo, _source = write_acquisition(root)
+            with mock.patch(
+                "workflows.batch.create_zip_from_tree", side_effect=OSError("disk full")
             ):
-                build_workflow_request(
-                    state,
-                    zip_output_dir=lambda folder, *_args: folder,
-                    output_filename_for_run=lambda *_args: None,
+                result = run_batch(
+                    [holo], [descriptor()], root / "results", zip_outputs=True
+                )
+            manifest = json.loads((result.output_dir / "batch_run.json").read_text())
+            self.assertEqual(1, len(result.failures))
+            self.assertIn("1 failure(s)", result.summary_message)
+            self.assertEqual(result.failures, manifest["failures"])
+            self.assertEqual(result.summary_message, manifest["summary"])
+
+    def test_single_hologram_only_analyzes_its_matching_result(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            holo, source = write_acquisition(root, "a")
+            write_acquisition(root, "b", primary=100)
+            result = run_batch([holo], [descriptor()], root / "results")
+            self.assertEqual([source], result.input_files)
+            self.assertEqual([], result.failures)
+            self.assertTrue((result.output_dir / "h5/a_AE.h5").is_file())
+            records = json.loads((result.output_dir / "summary.json").read_text())
+            self.assertEqual([{"group": "all", "value": 2.0}], records)
+            self.assertEqual(b"raw acquisition", holo.read_bytes())
+
+    def test_default_single_output_sits_beside_eyeflow_tree(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            holo, source = write_acquisition(root, "scan.v2_AE")
+            before = source.read_bytes()
+            result = run_batch([holo], [descriptor()])
+            app_dir = root / "scan.v2_AE" / "scan.v2_AE_AE"
+            self.assertEqual(app_dir, result.output_dir)
+            self.assertTrue((app_dir / "h5/scan.v2_AE_AE.h5").is_file())
+            self.assertTrue((app_dir / "summary.json").is_file())
+            self.assertTrue((app_dir / "batch_run.json").is_file())
+            self.assertEqual(before, source.read_bytes())
+            self.assertFalse((root / "h5").exists())
+
+    def test_custom_parent_keeps_named_acquisition_tree(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            holo, source = write_acquisition(root / "data", "sample")
+            output = root / "results"
+            result = run_batch([holo], [descriptor()], output)
+            self.assertEqual(output / "sample/sample_AE", result.output_dir)
+            analysis = output / "sample/sample_AE/h5/sample_AE.h5"
+            self.assertTrue(analysis.is_file())
+            manifest = json.loads((result.output_dir / "batch_run.json").read_text())
+            self.assertEqual([str(Path("h5/sample_AE.h5"))], manifest["analysis_files"])
+            self.assertEqual([str(source)], manifest["input_files"])
+
+    def test_html_reports_share_each_acquisition_ae_folder(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            acquisitions = [
+                write_acquisition(root / group) for group in ("control", "patient")
+            ]
+            for _holo, source in acquisitions:
+                with h5py.File(source, "a") as original:
+                    for vessel in ("artery", "vein"):
+                        original.create_dataset(
+                            f"/Processing/Metrics/waveform_shape_metrics/{vessel}/global/bandlimited/RI",
+                            data=[0.6, 0.7],
+                        )
+            html_tool = PipelineDescriptor(
+                name="HTML summary",
+                description="",
+                available=True,
+                required_metrics=["waveform_shape_metrics"],
+                pipeline_cls=WaveformMetricSummaryTablesPipeline,
+            )
+            before = [source.read_bytes() for _holo, source in acquisitions]
+            single = run_batch([acquisitions[0][0]], [html_tool])
+            self.assertEqual([], single.failures)
+            single_html = root / "control/a/a_AE/html/a_AE.html"
+            self.assertIn(single_html, single.generated_paths)
+            self.assertIn("RI", single_html.read_text(encoding="utf-8"))
+            output = root / "custom"
+            batch = run_batch([root], [html_tool], output, zip_outputs=True)
+            self.assertEqual([], batch.failures)
+            for group in ("control", "patient"):
+                html = output / group / "a/a_AE/html/a_AE.html"
+                self.assertIn(html, batch.generated_paths)
+                self.assertTrue(html.is_file())
+            with zipfile.ZipFile(batch.zip_path) as archive:
+                self.assertIn("control/a/a_AE/html/a_AE.html", archive.namelist())
+                self.assertIn("patient/a/a_AE/html/a_AE.html", archive.namelist())
+            self.assertFalse((output / "html").exists())
+            self.assertEqual(
+                before, [source.read_bytes() for _holo, source in acquisitions]
+            )
+
+    def test_default_batch_exports_only_ae_outputs_in_zip_and_preserves_sources(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            acquisitions = [
+                write_acquisition(root / group) for group in ("control", "patient")
+            ]
+            before = [source.read_bytes() for _holo, source in acquisitions]
+            stray = root / "personal_notes.txt"
+            stray.write_text("not an output", encoding="utf-8")
+            hd = root / "control/a/a_HD/h5/a_HD_output.h5"
+            write_eyeflow(hd)
+            for _run in range(2):
+                result = run_batch([root], [descriptor()], zip_outputs=True)
+                self.assertEqual(root / "cohort-results", result.output_dir)
+                self.assertEqual([], result.failures)
+                self.assertEqual(2, len(result.input_files))
+                records = json.loads((result.output_dir / "summary.json").read_text())
+                self.assertEqual(
+                    ["control", "patient"], [record["group"] for record in records]
+                )
+                with zipfile.ZipFile(result.zip_path) as archive:
+                    names = set(archive.namelist())
+                    self.assertIn("control/a/a_AE/h5/a_AE.h5", names)
+                    self.assertIn("patient/a/a_AE/h5/a_AE.h5", names)
+                    self.assertIn("cohort-results/summary.json", names)
+                    self.assertIn("cohort-results/batch_run.json", names)
+                    self.assertNotIn("personal_notes.txt", names)
+                    self.assertFalse(
+                        any(
+                            name.endswith(".holo") or "_EF/" in name or "_HD/" in name
+                            for name in names
+                        )
+                    )
+                self.assertEqual(
+                    before, [source.read_bytes() for _holo, source in acquisitions]
                 )
 
-    def test_required_persist_option_is_reported(self):
-        postprocess = type(
-            "Postprocess",
-            (),
-            {
-                "name": "Variability",
-                "required_option": ["persist_eyeflow_data"],
-            },
-        )()
+    def test_folder_with_one_acquisition_keeps_its_group_label(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            write_acquisition(root / "control")
+            result = run_batch([root], [descriptor()])
+            records = json.loads((result.output_dir / "summary.json").read_text())
+            self.assertEqual(["control"], [record["group"] for record in records])
+            self.assertEqual([], result.failures)
 
-        self.assertEqual(
-            [
-                "Variability requires the Persist Eyeflow Data option; "
-                "add --keep-source."
-            ],
-            missing_required_option_errors(
-                postprocesses=(postprocess,),
-                persist_source=False,
-            ),
-        )
-        self.assertEqual(
-            [],
-            missing_required_option_errors(
-                postprocesses=(postprocess,),
-                persist_source=True,
-            ),
-        )
-
-    def test_selected_required_pipeline_keeps_processed_outputs(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            processed_output = tmp_path / "new_result.h5"
-            input_h5 = tmp_path / "input.h5"
-            _write_pipeline_group(
-                processed_output,
-                "waveform_shape_metrics",
-                "/AngioEye/Processing",
-            )
-
-            result = compatible_postprocess_files(
-                processed_outputs=(processed_output,),
-                input_h5_paths=(input_h5,),
-                required_pipelines=("waveform_shape_metrics",),
-                selected_pipeline_names=("waveform_shape_metrics",),
-            )
-
-            self.assertEqual((processed_output,), result.files)
-            self.assertEqual((), result.skipped)
-
-    def test_unselected_required_pipeline_still_skips_incompatible_files(self):
-        processed_output = Path("new_result.h5")
-        input_h5 = Path("input.h5")
-
-        result = compatible_postprocess_files(
-            processed_outputs=(processed_output,),
-            input_h5_paths=(input_h5,),
-            required_pipelines=("waveform_shape_metrics",),
-            selected_pipeline_names=(),
-        )
-
-        self.assertEqual((), result.files)
-        self.assertEqual((input_h5,), result.skipped)
-
-    def test_selected_alternative_required_pipeline_keeps_processed_outputs(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            processed_output = tmp_path / "new_result.h5"
-            input_h5 = tmp_path / "input.h5"
-            _write_pipeline_group(
-                processed_output,
-                "waveform_shape_metrics",
-                "/AngioEye/Processing",
-            )
-
-            result = compatible_postprocess_files(
-                processed_outputs=(processed_output,),
-                input_h5_paths=(input_h5,),
-                required_pipelines=(
-                    "waveform_shape_metrics",
-                    "waveform_shape_metrics_denoised",
-                ),
-                required_pipeline_options=(
+    def test_batch_report_replacement_cannot_delete_same_named_input_cohort(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            acquisitions = [
+                write_acquisition(root / group)
+                for group in ("control", "Variability and heterogeneity")
+            ]
+            sources = [path for acquisition in acquisitions for path in acquisition]
+            before = [path.read_bytes() for path in sources]
+            report_tool = descriptor()
+            report_tool.pipeline_cls = ReplacingReportPipeline
+            for _run in range(2):
+                result = run_batch([root], [report_tool])
+                self.assertEqual([], result.failures)
+                self.assertTrue(
                     (
-                        "waveform_shape_metrics",
-                        "waveform_shape_metrics_denoised",
-                    ),
-                ),
-                selected_pipeline_names=("waveform_shape_metrics",),
-            )
-
-            self.assertEqual((processed_output,), result.files)
-            self.assertEqual((), result.skipped)
-
-    def test_native_eyeflow_pipeline_is_used_when_ae_pipeline_was_not_selected(
-        self,
-    ):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            processed_output = tmp_path / "old_result.h5"
-            input_h5 = tmp_path / "eyeflow.h5"
-            _write_pipeline_group(
-                processed_output,
-                "topological_metrics",
-                "/AngioEye/Processing",
-            )
-            _write_pipeline_group(
-                input_h5,
-                "waveform_shape_metrics",
-                "/Processing/Metrics",
-            )
-
-            result = compatible_postprocess_files(
-                processed_outputs=(processed_output,),
-                input_h5_paths=(input_h5,),
-                required_pipelines=("waveform_shape_metrics",),
-                selected_pipeline_names=(),
-            )
-
-            self.assertEqual((input_h5,), result.files)
-            self.assertEqual((), result.skipped)
-
-    def test_selected_ae_pipeline_wins_when_both_files_have_required_data(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            processed_output = tmp_path / "new_result.h5"
-            input_h5 = tmp_path / "eyeflow.h5"
-            _write_pipeline_group(
-                processed_output,
-                "waveform_shape_metrics",
-                "/AngioEye/Processing",
-            )
-            _write_pipeline_group(
-                input_h5,
-                "waveform_shape_metrics",
-                "/Processing/Metrics",
-            )
-
-            result = compatible_postprocess_files(
-                processed_outputs=(processed_output,),
-                input_h5_paths=(input_h5,),
-                required_pipelines=("waveform_shape_metrics",),
-                selected_pipeline_names=("waveform_shape_metrics",),
-            )
-
-            self.assertEqual((processed_output,), result.files)
-            self.assertEqual((), result.skipped)
-
-    def test_requirement_free_postprocess_uses_eyeflow_when_no_pipeline_selected(
-        self,
-    ):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            processed_output = tmp_path / "empty_result.h5"
-            input_h5 = tmp_path / "eyeflow.h5"
-            processed_output.write_text("empty", encoding="utf-8")
-            input_h5.write_text("source", encoding="utf-8")
-
-            result = compatible_postprocess_files(
-                processed_outputs=(processed_output,),
-                input_h5_paths=(input_h5,),
-                required_pipelines=(),
-                selected_pipeline_names=(),
-            )
-
-            self.assertEqual((input_h5,), result.files)
-            self.assertEqual((), result.skipped)
-
-    def test_pipeline_option_groups_require_each_group(self):
-        postprocess = type(
-            "Postprocess",
-            (),
-            {
-                "name": "Variability",
-                "required_pipeline_options": (
-                    ("one", "one_alternative"),
-                    ("two", "two_alternative"),
-                ),
-            },
-        )()
-
-        errors = missing_required_pipeline_errors(
-            postprocesses=(postprocess,),
-            selected_pipeline_names=("one_alternative", "two"),
-        )
-
-        self.assertEqual([], errors)
-
-        errors = missing_required_pipeline_errors(
-            postprocesses=(postprocess,),
-            selected_pipeline_names=("one",),
-        )
-
-        self.assertEqual(
-            [
-                "Variability requires pipeline data: "
-                "(one or one_alternative) and (two or two_alternative)"
-            ],
-            errors,
-        )
-
-    def test_fully_incompatible_postprocess_is_skipped_without_failure(self):
-        calls: list[str] = []
-        logs: list[str] = []
-        failures: list[str] = []
-        progress: list[float] = []
-
-        class _Postprocess:
-            def run(self, _context):
-                calls.append("run")
-
-        class _Descriptor:
-            name = "Low-rank cohort"
-            required_pipelines = ("lowrank_waveform_decomposition",)
-            required_pipeline_options = ()
-
-            def instantiate(self):
-                return _Postprocess()
-
-        run_postprocesses(
-            postprocesses=(_Descriptor(),),
-            output_dir=Path("outputs"),
-            processed_outputs=(Path("waveform_result.h5"),),
-            input_h5_paths=(Path("input.h5"),),
-            input_path=Path("input.h5"),
-            selected_pipeline_names=("waveform_shape_metrics",),
-            failures=failures,
-            zip_outputs=False,
-            log=logs.append,
-            advance_progress=progress.append,
-            resolve_postprocess_files=lambda *_args: (
-                (),
-                (Path("input.h5"),),
-            ),
-        )
-
-        self.assertEqual([], calls)
-        self.assertEqual([], failures)
-        self.assertEqual([1.0], progress)
-        self.assertIn(
-            "[POST SKIP] Low-rank cohort: no compatible input files.",
-            logs,
-        )
-
-    def test_partly_incompatible_postprocess_skips_without_failure(self):
-        calls: list[tuple[Path, ...]] = []
-        logs: list[str] = []
-        failures: list[str] = []
-
-        class _Postprocess:
-            def run(self, context):
-                calls.append(context.processed_files)
-                return type("Result", (), {"summary": "", "metadata": {}})()
-
-        class _Descriptor:
-            name = "Low-rank cohort"
-            required_pipelines = ("lowrank_waveform_decomposition",)
-            required_pipeline_options = ()
-
-            def instantiate(self):
-                return _Postprocess()
-
-        compatible_path = Path("compatible.h5")
-        skipped_path = Path("incompatible.h5")
-        run_postprocesses(
-            postprocesses=(_Descriptor(),),
-            output_dir=Path("outputs"),
-            processed_outputs=(compatible_path, Path("other_result.h5")),
-            input_h5_paths=(Path("first_input.h5"), skipped_path),
-            input_path=Path("inputs"),
-            selected_pipeline_names=("waveform_shape_metrics",),
-            failures=failures,
-            zip_outputs=False,
-            log=logs.append,
-            advance_progress=lambda _units: None,
-            resolve_postprocess_files=lambda *_args: (
-                (compatible_path,),
-                (skipped_path,),
-            ),
-        )
-
-        self.assertEqual([(compatible_path,)], calls)
-        self.assertEqual([], failures)
-        self.assertIn(
-            "[POST SKIP] Low-rank cohort skipped 1 file(s) without required "
-            "pipeline data.",
-            logs,
-        )
-
-    def test_postprocess_requiring_two_acquisitions_skips_single_input(self):
-        calls: list[str] = []
-        logs: list[str] = []
-        progress: list[float] = []
-
-        class _Postprocess:
-            def run(self, _context):
-                calls.append("run")
-
-        class _Descriptor:
-            name = "Low-rank cohort"
-            required_pipelines = ()
-            required_pipeline_options = ()
-            minimum_input_files = 2
-
-            def instantiate(self):
-                return _Postprocess()
-
-        run_postprocesses(
-            postprocesses=(_Descriptor(),),
-            output_dir=Path("outputs"),
-            processed_outputs=(Path("one_result.h5"),),
-            input_h5_paths=(Path("one_input.h5"),),
-            input_path=Path("one.holo"),
-            selected_pipeline_names=(),
-            failures=[],
-            zip_outputs=False,
-            log=logs.append,
-            advance_progress=progress.append,
-        )
-
-        self.assertEqual([], calls)
-        self.assertEqual([1.0], progress)
-        self.assertIn("requires at least 2 compatible acquisition(s)", logs[0])
-
-    def test_input_path_postprocess_can_run_without_processed_files(self):
-        calls: list[Path] = []
-
-        class _Postprocess:
-            def run(self, context):
-                calls.append(context.input_path)
-                return type("Result", (), {"summary": "", "metadata": {}})()
-
-        class _Descriptor:
-            name = "Input-folder cohort"
-            required_pipelines = ()
-            required_pipeline_options = ()
-            minimum_input_files = 2
-
-            def instantiate(self):
-                return _Postprocess()
-
-        input_path = Path("cohort.zip")
-        run_postprocesses(
-            postprocesses=(_Descriptor(),),
-            output_dir=Path("outputs"),
-            processed_outputs=(),
-            input_h5_paths=(),
-            input_path=input_path,
-            selected_pipeline_names=(),
-            failures=[],
-            zip_outputs=False,
-            log=lambda _message: None,
-            advance_progress=lambda _units: None,
-        )
-
-        self.assertEqual([input_path], calls)
-
-class FilesystemWorkflowTests(unittest.TestCase):
-    def _run_workflow(
-        self,
-        tmp_path: Path,
-        *,
-        zip_should_fail: bool,
-        postprocesses=None,
-    ):
-        logs: list[str] = []
-        status: list[str] = []
-        progress: list[float] = []
-        final_progress: list[tuple[float, str]] = []
-        zip_errors: list[str] = []
-        zip_source_folders: list[Path] = []
-
-        input_root = tmp_path / "inputs"
-        input_root.mkdir()
-        h5_path = input_root / "sample.h5"
-        h5_path.write_text("h5", encoding="utf-8")
-        base_output_dir = tmp_path / "outputs"
-        base_output_dir.mkdir()
-
-        def run_pipeline_file(
-            _h5_path,
-            _pipelines,
-            output_dir,
-            output_relative_parent=Path("."),
-            output_filename=None,
-        ):
-            target_dir = output_dir / output_relative_parent
-            target_dir.mkdir(parents=True, exist_ok=True)
-            png_dir = output_dir / "png"
-            png_dir.mkdir(parents=True, exist_ok=True)
-            (png_dir / "composite_scoring_raw_rwas_by_cohort.png").write_text(
-                "png",
-                encoding="utf-8",
-            )
-            output_path = target_dir / (output_filename or "sample_result.h5")
-            output_path.write_text("result", encoding="utf-8")
-            return output_path
-
-        def zip_output_dir(folder, target_path=None, progress_callback=None):
-            zip_source_folders.append(folder)
-            if zip_should_fail:
-                raise RuntimeError("zip failed")
-            if progress_callback is not None:
-                progress_callback(1, 1, Path("sample_result.h5"))
-            assert target_path is not None
-            target_path.write_text("archive", encoding="utf-8")
-            return target_path
-
-        result = run_filesystem_workflow(
-            inputs=[h5_path],
-            data_root=input_root,
-            pipelines=[object()],
-            postprocesses=list(postprocesses or []),
-            selected_pipeline_names=["Demo"],
-            input_path=input_root,
-            base_output_dir=base_output_dir,
-            zip_outputs=True,
-            zip_name="outputs.zip",
-            output_filename=None,
-            settings=ZipBatchSettings(batch_size=4),
-            run_pipeline_file=run_pipeline_file,
-            run_postprocesses=lambda *args, **kwargs: None,
-            relative_parent=lambda *_args: Path("."),
-            zip_output_dir=zip_output_dir,
-            log=logs.append,
-            advance_progress=progress.append,
-            start_final_progress=lambda units, text: final_progress.append(
-                (units, text)
-            ),
-            set_status=status.append,
-            make_zip_progress_callback=lambda: None,
-            on_zip_error=zip_errors.append,
-        )
-
-        return (
-            base_output_dir,
-            result,
-            logs,
-            status,
-            progress,
-            final_progress,
-            zip_errors,
-            zip_source_folders,
-        )
-
-    def test_run_filesystem_workflow_removes_work_dir_after_zip_success(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            (
-                base_output_dir,
-                result,
-                logs,
-                status,
-                progress,
-                final_progress,
-                zip_errors,
-                zip_source_folders,
-            ) = self._run_workflow(Path(tmp_dir), zip_should_fail=False)
-
-            self.assertFalse(result.zip_failed)
-            self.assertEqual(base_output_dir / "outputs.zip", result.zip_path)
-            self.assertTrue((base_output_dir / "outputs.zip").exists())
-            self.assertTrue(
-                (
-                    base_output_dir
-                    / "png"
-                    / "composite_scoring_raw_rwas_by_cohort.png"
-                ).exists()
-            )
-            self.assertFalse(zip_source_folders[0].exists())
-            self.assertIn("ZIP archive:", result.summary_message)
-            self.assertIn("Companion outputs:", result.summary_message)
-            self.assertIn("Creating ZIP...", status)
-            self.assertEqual([(1, "Creating ZIP...")], final_progress)
-            self.assertEqual([1], progress)
-            self.assertEqual([], zip_errors)
-            self.assertTrue(
-                any("[ZIP] Archive created:" in message for message in logs)
-            )
-            self.assertTrue(
-                any(
-                    message.startswith("[TIME] Pipeline phase completed in ")
-                    for message in logs
+                        root / "cohort-results/Variability and heterogeneity/report.txt"
+                    ).is_file()
                 )
-            )
-            self.assertTrue(
-                any(
-                    message.startswith("[TIME] ZIP finalization completed in ")
-                    for message in logs
-                )
-            )
+                self.assertEqual(before, [path.read_bytes() for path in sources])
 
-    def test_run_filesystem_workflow_logs_postprocess_duration(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            (
-                _base_output_dir,
-                _result,
-                logs,
-                _status,
-                _progress,
-                _final_progress,
-                _zip_errors,
-                _zip_source_folders,
-            ) = self._run_workflow(
-                Path(tmp_dir),
-                zip_should_fail=False,
-                postprocesses=[object()],
-            )
-
-            self.assertTrue(
-                any(
-                    message.startswith("[TIME] Postprocess phase completed in ")
-                    for message in logs
-                )
-            )
-
-    def test_run_filesystem_workflow_keeps_work_dir_after_zip_failure(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            (
-                base_output_dir,
-                result,
-                logs,
-                _status,
-                progress,
-                _final_progress,
-                zip_errors,
-                zip_source_folders,
-            ) = self._run_workflow(Path(tmp_dir), zip_should_fail=True)
-
-            self.assertTrue(result.zip_failed)
-            self.assertIsNone(result.zip_path)
-            self.assertFalse((base_output_dir / "outputs.zip").exists())
-            self.assertTrue(zip_source_folders[0].exists())
-            self.assertTrue((zip_source_folders[0] / "sample_result.h5").exists())
-            self.assertEqual("zip failed", result.zip_error)
-            self.assertEqual([1, 1.0], progress)
-            self.assertEqual(["zip failed"], zip_errors)
-            self.assertTrue(
-                any("[ZIP FAIL] zip failed" == message for message in logs)
-            )
-            self.assertTrue(
-                any(
-                    message.startswith("[TIME] Pipeline phase completed in ")
-                    for message in logs
-                )
-            )
-            self.assertTrue(
-                any(
-                    message.startswith("[TIME] ZIP finalization completed in ")
-                    for message in logs
-                )
-            )
-
-
-class ZipWorkflowOutputTests(unittest.TestCase):
-    def test_zip_workflow_removes_stale_output_tree_before_writing(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            zip_path = tmp_path / "inputs.zip"
-            with zipfile.ZipFile(zip_path, "w") as archive:
-                archive.writestr("sample.h5", "h5")
-
-            output_dir = tmp_path / "outputs"
-            stale_dir = output_dir / "unzipped_output"
-            stale_dir.mkdir(parents=True)
-            (stale_dir / "old-result.txt").write_text("old", encoding="utf-8")
-            (output_dir / "stale.txt").write_text("old", encoding="utf-8")
-
-            def run_pipeline_file(
-                _h5_path,
-                _pipelines,
-                output_root,
-                output_relative_parent=Path("."),
-                output_filename=None,
+    def test_shared_report_folder_cannot_contain_selected_holograms(self):
+        for processed in (True, False):
+            with (
+                self.subTest(processed=processed),
+                tempfile.TemporaryDirectory() as temp,
             ):
-                target_dir = output_root / output_relative_parent
-                target_dir.mkdir(parents=True, exist_ok=True)
-                output_path = target_dir / (output_filename or "sample_result.h5")
-                output_path.write_text("result", encoding="utf-8")
-                return output_path
+                root = Path(temp)
+                good, _source = write_acquisition(root / "control")
+                blocked, blocked_source = write_acquisition(root / "cohort-results")
+                if not processed:
+                    blocked_source.unlink()
+                before = blocked.read_bytes()
+                with self.assertRaisesRegex(ValueError, "contains selected inputs"):
+                    run_batch([root], [descriptor()])
+                self.assertEqual(before, blocked.read_bytes())
+                self.assertFalse((good.parent / "a/a_AE").exists())
+                self.assertFalse((root / "cohort-results/batch_run.json").exists())
 
-            result = run_zip_workflow(
-                zip_path=zip_path,
-                members=list_h5_members(zip_path),
-                member_count=1,
-                pipelines=[object()],
-                postprocesses=[],
-                selected_pipeline_names=["Demo"],
-                base_output_dir=output_dir,
-                zip_outputs=False,
-                zip_name="outputs.zip",
-                settings=ZipBatchSettings(batch_size=1),
-                run_pipeline_file=run_pipeline_file,
-                run_postprocesses=lambda *args, **kwargs: None,
-                zip_output_dir=lambda *_args, **_kwargs: output_dir / "outputs.zip",
-                log=lambda _message: None,
-                advance_progress=lambda _units: None,
-                start_final_progress=lambda _units, _status: None,
-                set_status=lambda _status: None,
-                make_zip_progress_callback=lambda: None,
+    def test_missing_companion_is_reported_while_other_acquisitions_run(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            inputs = root / "cohort"
+            _holo, source = write_acquisition(inputs / "control")
+            missing = inputs / "patient" / "missing.holo"
+            missing.parent.mkdir()
+            missing.touch()
+            progress = []
+            messages = []
+            result = run_batch(
+                [inputs],
+                [descriptor()],
+                root / "results",
+                log=messages.append,
+                progress=lambda *args: progress.append(args),
             )
-
-            self.assertFalse(result.zip_failed)
-            self.assertFalse(stale_dir.exists())
-            self.assertFalse((output_dir / "stale.txt").exists())
-            self.assertTrue(any(output_dir.rglob("sample_pipelines_result.h5")))
-
-
-class ZipPipelineParallelismTests(unittest.TestCase):
-    def test_filesystem_postprocess_only_run_does_not_create_pipeline_outputs(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            root = Path(tmp_dir)
-            input_paths = [root / "first.h5", root / "second.h5"]
-            for path in input_paths:
-                path.write_text("h5", encoding="utf-8")
-            calls: list[Path] = []
-
-            result = run_filesystem_pipeline_run(
-                inputs=input_paths,
-                data_root=root,
-                pipelines=(),
-                output_dir=root / "outputs",
-                output_filename=None,
-                settings=ZipBatchSettings(batch_size=2, process_workers=1),
-                run_pipeline_file=lambda path, *_args, **_kwargs: calls.append(path),
-                relative_parent=lambda *_args: Path("."),
-                log=lambda _message: None,
-                advance_progress=lambda _units: None,
-            )
-
-        self.assertEqual([], calls)
-        self.assertEqual([], result.processed_outputs)
-        self.assertEqual(input_paths, result.processed_input_paths)
-
-    def test_zip_postprocess_only_run_does_not_create_pipeline_outputs(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            root = Path(tmp_dir)
-            zip_path = root / "cohort.zip"
-            with zipfile.ZipFile(zip_path, "w") as archive:
-                archive.writestr("1_ctrl/first.h5", "h5")
-                archive.writestr("2_path/second.h5", "h5")
-            members = list_h5_members(zip_path)
-            calls: list[Path] = []
-
-            result = run_zip_pipeline_run(
-                zip_path=zip_path,
-                members=members,
-                member_count=len(members),
-                pipelines=(),
-                output_dir=root / "outputs",
-                settings=ZipBatchSettings(batch_size=2, process_workers=1),
-                run_pipeline_file=lambda path, *_args, **_kwargs: calls.append(path),
-                log=lambda _message: None,
-                advance_progress=lambda _units: None,
-            )
-
-        self.assertEqual([], calls)
-        self.assertEqual([], result.processed_outputs)
-        self.assertEqual([], result.processed_input_paths)
-
-    def test_run_filesystem_pipeline_run_uses_process_pool_for_picklable_runner(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            input_dir = tmp_path / "inputs"
-            input_dir.mkdir()
-            input_paths = []
-            for index in range(4):
-                input_path = input_dir / f"sample_{index}.h5"
-                input_path.write_text("h5", encoding="utf-8")
-                input_paths.append(input_path)
-            output_dir = tmp_path / "outputs"
-            output_dir.mkdir()
-            logs: list[str] = []
-            progress: list[float] = []
-
-            result = run_filesystem_pipeline_run(
-                inputs=input_paths,
-                data_root=input_dir,
-                pipelines=["waveform_shape_metrics"],
-                output_dir=output_dir,
-                output_filename=None,
-                settings=ZipBatchSettings(
-                    batch_size=2,
-                    process_workers=2,
-                ),
-                run_pipeline_file=process_pool_run_pipeline_file,
-                relative_parent=lambda *_args: Path("."),
-                log=logs.append,
-                advance_progress=progress.append,
-            )
-
-            self.assertEqual(4, len(result.processed_outputs))
-            self.assertEqual([], result.failures)
-            self.assertEqual([1, 1, 1, 1], progress)
-            self.assertTrue(
-                any(
-                    "Starting ProcessPoolExecutor(max_workers=2)" in message
-                    for message in logs
-                ),
-                logs,
-            )
-            self.assertTrue(
-                any(message.startswith("[BATCH OK]") for message in logs),
-                logs,
-            )
-
-    def test_run_zip_pipeline_run_uses_process_pool_for_picklable_runner(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            zip_path = tmp_path / "inputs.zip"
-            output_dir = tmp_path / "outputs"
-            output_dir.mkdir()
-            with zipfile.ZipFile(zip_path, "w") as archive:
-                for index in range(4):
-                    archive.writestr(f"CTRL/sample_{index}.h5", "h5")
-
-            members = list_h5_members(zip_path)
-            logs: list[str] = []
-            progress: list[float] = []
-
-            result = run_zip_pipeline_run(
-                zip_path=zip_path,
-                members=members,
-                member_count=len(members),
-                pipelines=["waveform_shape_metrics"],
-                output_dir=output_dir,
-                settings=ZipBatchSettings(
-                    batch_size=2,
-                    process_workers=2,
-                ),
-                run_pipeline_file=process_pool_run_pipeline_file,
-                log=logs.append,
-                advance_progress=progress.append,
-            )
-
-            self.assertEqual(4, len(result.processed_outputs))
-            self.assertEqual([], result.failures)
-            self.assertEqual([1, 1, 1, 1], progress)
-            self.assertTrue(
-                any(
-                    "Starting ProcessPoolExecutor(max_workers=2)" in message
-                    for message in logs
-                ),
-                logs,
-            )
-            self.assertTrue(
-                any(message.startswith("[ZIP] Streaming 4 file(s)") for message in logs),
-                logs,
-            )
-            self.assertTrue(
-                any(message.startswith("[PROCESS] Queued ZIP batch 2/2") for message in logs),
-                logs,
-            )
-
-    def test_run_holo_workflow_uses_process_pool_for_picklable_runner(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            contexts: list[HoloInputContext] = []
-            for index in range(4):
-                holo_path = tmp_path / f"sample_{index}.holo"
-                holo_path.write_text("holo", encoding="utf-8")
-                ef_dir = tmp_path / f"sample_{index}" / f"sample_{index}_EF"
-                h5_dir = ef_dir / "h5"
-                h5_dir.mkdir(parents=True)
-                h5_path = h5_dir / f"sample_{index}.h5"
-                h5_path.write_text("h5", encoding="utf-8")
-                contexts.append(
-                    HoloInputContext(
-                        holo_path=holo_path,
-                        ef_dir=ef_dir,
-                        h5_path=h5_path,
-                        output_dir=tmp_path
-                        / f"sample_{index}"
-                        / f"sample_{index}_AE",
-                    )
-                )
-
-            logs: list[str] = []
-            progress: list[float] = []
-
-            result = run_holo_workflow(
-                contexts=contexts,
-                pipelines=["waveform_shape_metrics"],
-                postprocesses=[],
-                selected_pipeline_names=["waveform_shape_metrics"],
-                run_pipeline_file=process_pool_run_pipeline_file,
-                run_postprocesses=lambda *args, **kwargs: None,
-                log=logs.append,
-                advance_progress=progress.append,
-                start_final_progress=lambda _units, _status: None,
-                settings=ZipBatchSettings(
-                    batch_size=2,
-                    process_workers=2,
-                ),
-            )
-
-            self.assertEqual(4, len(result.processed_outputs))
-            self.assertEqual([], result.failures)
-            self.assertEqual([1, 1, 1, 1], progress)
-            self.assertTrue(
-                any(
-                    "Starting ProcessPoolExecutor(max_workers=2)" in message
-                    for message in logs
-                ),
-                logs,
-            )
-            self.assertTrue(
-                any(
-                    message.startswith("[PROCESS] Queued holo batch 2/2")
-                    for message in logs
-                ),
-                logs,
-            )
-
-    def test_run_filesystem_pipeline_run_parallelizes_files_inside_batch(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            input_dir = tmp_path / "inputs"
-            input_dir.mkdir()
-            input_paths = []
-            for index in range(4):
-                input_path = input_dir / f"sample_{index}.h5"
-                input_path.write_text("h5", encoding="utf-8")
-                input_paths.append(input_path)
-            output_dir = tmp_path / "outputs"
-            output_dir.mkdir()
-            active = 0
-            max_active = 0
-            progress: list[float] = []
-            idle_calls = 0
-            lock = threading.Lock()
-
-            def run_pipeline_file(
-                h5_path,
-                _pipelines,
-                output_root,
-                output_relative_parent=Path("."),
-                output_filename=None,
-            ):
-                nonlocal active, max_active
-                with lock:
-                    active += 1
-                    max_active = max(max_active, active)
-                try:
-                    time.sleep(0.12)
-                    target_dir = output_root / output_relative_parent
-                    target_dir.mkdir(parents=True, exist_ok=True)
-                    output_path = target_dir / (
-                        output_filename or f"{h5_path.stem}_result.h5"
-                    )
-                    output_path.write_text("result", encoding="utf-8")
-                    return output_path
-                finally:
-                    with lock:
-                        active -= 1
-
-            def _idle_callback():
-                nonlocal idle_calls
-                idle_calls += 1
-
-            result = run_filesystem_pipeline_run(
-                inputs=input_paths,
-                data_root=input_dir,
-                pipelines=[object()],
-                output_dir=output_dir,
-                output_filename=None,
-                settings=ZipBatchSettings(batch_size=4),
-                run_pipeline_file=run_pipeline_file,
-                relative_parent=lambda *_args: Path("."),
-                log=lambda _message: None,
-                advance_progress=progress.append,
-                idle_callback=_idle_callback,
-            )
-
-            self.assertEqual(4, len(result.processed_outputs))
-            self.assertEqual([], result.failures)
-            self.assertEqual([1, 1, 1, 1], progress)
-            self.assertGreater(max_active, 1)
-            self.assertGreater(idle_calls, 0)
-
-    def test_run_zip_pipeline_run_parallelizes_files_inside_batch(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            zip_path = tmp_path / "inputs.zip"
-            output_dir = tmp_path / "outputs"
-            output_dir.mkdir()
-            with zipfile.ZipFile(zip_path, "w") as archive:
-                for index in range(4):
-                    archive.writestr(f"CTRL/sample_{index}.h5", "h5")
-
-            members = list_h5_members(zip_path)
-            active = 0
-            max_active = 0
-            idle_calls = 0
-            lock = threading.Lock()
-
-            def run_pipeline_file(
-                h5_path,
-                _pipelines,
-                output_root,
-                output_relative_parent=Path("."),
-                output_filename=None,
-            ):
-                nonlocal active, max_active
-                with lock:
-                    active += 1
-                    max_active = max(max_active, active)
-                try:
-                    time.sleep(0.12)
-                    target_dir = output_root / output_relative_parent
-                    target_dir.mkdir(parents=True, exist_ok=True)
-                    output_path = target_dir / (
-                        output_filename or f"{h5_path.stem}_result.h5"
-                    )
-                    output_path.write_text("result", encoding="utf-8")
-                    return output_path
-                finally:
-                    with lock:
-                        active -= 1
-
-            result = run_zip_pipeline_run(
-                zip_path=zip_path,
-                members=members,
-                member_count=len(members),
-                pipelines=[object()],
-                output_dir=output_dir,
-                settings=ZipBatchSettings(
-                    batch_size=4,
-                    extract_workers=1,
-                ),
-                run_pipeline_file=run_pipeline_file,
-                log=lambda _message: None,
-                advance_progress=lambda _units: None,
-            )
-
-            self.assertEqual(4, len(result.processed_outputs))
-            self.assertEqual([], result.failures)
-            self.assertGreater(max_active, 1)
-
-            def _idle_callback():
-                nonlocal idle_calls
-                idle_calls += 1
-
-            run_zip_pipeline_run(
-                zip_path=zip_path,
-                members=members,
-                member_count=len(members),
-                pipelines=[object()],
-                output_dir=output_dir,
-                settings=ZipBatchSettings(
-                    batch_size=4,
-                    extract_workers=1,
-                ),
-                run_pipeline_file=run_pipeline_file,
-                log=lambda _message: None,
-                advance_progress=lambda _units: None,
-                idle_callback=_idle_callback,
-            )
-            self.assertGreater(idle_calls, 0)
-
-
-class WorkflowDispatchTests(unittest.TestCase):
-    def _request(self, tmp_path: Path, **overrides) -> WorkflowRunRequest:
-        values = {
-            "mode": "folder",
-            "pipelines": [object()],
-            "postprocesses": [],
-            "selected_pipeline_names": ["Demo"],
-            "base_output_dir": tmp_path / "outputs",
-            "zip_outputs": False,
-            "zip_name": "outputs.zip",
-            "persist_source": True,
-            "zip_output_dir": lambda folder, target_path=None, progress_callback=None: (
-                target_path or folder / "outputs.zip"
-            ),
-            "input_plan": None,
-        }
-        values.update(overrides)
-        values["base_output_dir"].mkdir(parents=True, exist_ok=True)
-        return WorkflowRunRequest(**values)
-
-    def _callbacks(self) -> WorkflowCallbacks:
-        return WorkflowCallbacks(
-            log=lambda _message: None,
-            start_primary_progress=lambda _units, _status: None,
-            start_final_progress=lambda _units, _status: None,
-            advance_progress=lambda _units=1.0: None,
-            set_progress_units=lambda _units: None,
-            set_status=lambda _status: None,
-            make_zip_progress_callback=lambda: None,
-        )
-
-    def _result(self, tmp_path: Path) -> RunWorkflowResult:
-        return RunWorkflowResult(
-            output_dir=tmp_path / "outputs",
-            processed_outputs=[],
-            failures=[],
-            summary_message="done",
-        )
-
-    def test_dispatch_routes_file_inputs(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            h5_path = tmp_path / "sample.h5"
-            h5_path.write_text("h5", encoding="utf-8")
-            request = self._request(
-                tmp_path,
-                mode="file",
-                input_plan=prepare_run_input(h5_path),
-            )
-
-            with mock.patch(
-                "workflows.dispatch.run_filesystem_workflow",
-                return_value=self._result(tmp_path),
-            ) as run_filesystem:
-                result = dispatch_workflow(request, self._callbacks())
-
-            self.assertIsNotNone(result.workflow_result)
-            self.assertEqual([h5_path], list(run_filesystem.call_args.kwargs["inputs"]))
-
-    def test_prepare_run_inputs_groups_multiple_hdf5_files_as_file_run(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            first_path = tmp_path / "first.h5"
-            second_path = tmp_path / "second.hdf5"
-            first_path.write_text("h5", encoding="utf-8")
-            second_path.write_text("hdf5", encoding="utf-8")
-
-            input_plan = prepare_run_inputs([first_path, second_path])
-
-            self.assertEqual("file", input_plan.kind)
-            self.assertEqual(tmp_path, input_plan.input_path)
-            self.assertEqual((first_path, second_path), input_plan.h5_paths)
-
-    def test_dispatch_routes_folder_inputs(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            input_dir = tmp_path / "inputs"
-            input_dir.mkdir()
-            (input_dir / "sample.h5").write_text("h5", encoding="utf-8")
-            request = self._request(
-                tmp_path,
-                mode="folder",
-                input_plan=prepare_run_input(input_dir),
-            )
-
-            with mock.patch(
-                "workflows.dispatch.run_filesystem_workflow",
-                return_value=self._result(tmp_path),
-            ) as run_filesystem:
-                result = dispatch_workflow(request, self._callbacks())
-
-            self.assertIsNotNone(result.workflow_result)
-            run_filesystem.assert_called_once()
-
-    def test_dispatch_routes_zip_inputs(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            zip_path = tmp_path / "inputs.zip"
-            with zipfile.ZipFile(zip_path, "w") as archive:
-                archive.writestr("sample.h5", "h5")
-            request = self._request(
-                tmp_path,
-                mode="zip",
-                input_plan=prepare_run_input(zip_path),
-            )
-
-            with mock.patch(
-                "workflows.dispatch.run_zip_workflow",
-                return_value=self._result(tmp_path),
-            ) as run_zip:
-                result = dispatch_workflow(request, self._callbacks())
-
-            self.assertIsNotNone(result.workflow_result)
-            self.assertEqual(1, run_zip.call_args.kwargs["member_count"])
-
-    def test_dispatch_routes_holo_inputs(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            holo_path = tmp_path / "sample.holo"
-            holo_path.write_text("holo", encoding="utf-8")
-            ef_h5_dir = tmp_path / "sample" / "sample_EF"
-            ef_h5_dir.mkdir(parents=True)
-            (ef_h5_dir / "sample.h5").write_text("h5", encoding="utf-8")
-            request = self._request(
-                tmp_path,
-                mode="holo",
-                holo_paths=[holo_path],
-            )
-
-            with mock.patch(
-                "workflows.dispatch.run_holo_workflow",
-                return_value=self._result(tmp_path),
-            ) as run_holo:
-                result = dispatch_workflow(request, self._callbacks())
-
-            self.assertIsNotNone(result.workflow_result)
-            self.assertEqual(1, len(run_holo.call_args.kwargs["contexts"]))
-            self.assertTrue((tmp_path / "sample" / "sample_AE").is_dir())
-
-    def test_holo_postprocess_uses_eyeflow_when_no_ae_pipeline_is_selected(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            holo_path = tmp_path / "sample.holo"
-            holo_path.write_text("holo", encoding="utf-8")
-            ef_h5 = tmp_path / "sample" / "sample_EF" / "h5" / "sample.h5"
-            _write_pipeline_group(
-                ef_h5,
-                "waveform_shape_metrics",
-                "/Processing/Metrics",
-            )
-            stale_ae_h5 = (
-                tmp_path / "sample" / "sample_AE" / "h5" / "sample_AE.h5"
-            )
-            _write_pipeline_group(
-                stale_ae_h5,
-                "topological_metrics",
-                "/AngioEye/Processing",
-            )
-
-            processed_files: list[tuple[Path, ...]] = []
-
-            class _Postprocess:
-                name = "Waveform summary"
-
-                def run(self, context):
-                    processed_files.append(context.processed_files)
-                    return type("Result", (), {"summary": "", "metadata": {}})()
-
-            class _Descriptor:
-                name = "Waveform summary"
-                required_pipelines = ()
-                required_pipeline_options = (("waveform_shape_metrics",),)
-
-                @staticmethod
-                def instantiate():
-                    return _Postprocess()
-
-            request = self._request(
-                tmp_path,
-                mode="holo",
-                pipelines=[],
-                postprocesses=[_Descriptor()],
-                selected_pipeline_names=[],
-                holo_paths=[holo_path],
-            )
-
-            result = dispatch_workflow(request, self._callbacks())
-
-            self.assertEqual([(ef_h5,)], processed_files)
-            self.assertIsNotNone(result.workflow_result)
-            self.assertTrue(result.workflow_result.processed_outputs)
-            with h5py.File(stale_ae_h5, "r") as h5file:
-                self.assertNotIn(
-                    "/AngioEye/Processing/topological_metrics",
-                    h5file,
-                )
-
-    def test_dispatch_routes_holo_path_list_inputs(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            holo_paths = []
-            for stem, parent in (
-                ("first", tmp_path),
-                ("second", tmp_path / "other"),
-            ):
-                parent.mkdir(exist_ok=True)
-                holo_path = parent / f"{stem}.holo"
-                holo_path.write_text("holo", encoding="utf-8")
-                ef_h5_dir = parent / stem / f"{stem}_EF"
-                ef_h5_dir.mkdir(parents=True)
-                (ef_h5_dir / f"{stem}.h5").write_text("h5", encoding="utf-8")
-                holo_paths.append(holo_path)
-            list_path = tmp_path / "list.txt"
-            list_path.write_text(
-                "\n".join(str(path) for path in holo_paths),
-                encoding="utf-8",
-            )
-            request = self._request(
-                tmp_path,
-                mode="holo",
-                holo_paths=[list_path],
-            )
-
-            with mock.patch(
-                "workflows.dispatch.run_holo_workflow",
-                return_value=self._result(tmp_path),
-            ) as run_holo:
-                result = dispatch_workflow(request, self._callbacks())
-
-            self.assertIsNotNone(result.workflow_result)
-            contexts = run_holo.call_args.kwargs["contexts"]
-            self.assertEqual(2, len(contexts))
-            self.assertEqual(holo_paths, [context.holo_path for context in contexts])
-            self.assertTrue((tmp_path / "first" / "first_AE").is_dir())
-            self.assertTrue(
-                (tmp_path / "other" / "second" / "second_AE").is_dir()
-            )
-
-    def test_dispatch_rejects_empty_zip_without_tk(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            zip_path = tmp_path / "empty.zip"
-            with zipfile.ZipFile(zip_path, "w"):
-                pass
-            request = self._request(
-                tmp_path,
-                mode="zip",
-                input_plan=prepare_run_input(zip_path),
-            )
-
-            with self.assertRaises(WorkflowInputError):
-                dispatch_workflow(request, self._callbacks())
-
-    def test_dispatch_rejects_mismatched_mode_and_input_kind(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            h5_path = tmp_path / "sample.h5"
-            h5_path.write_text("h5", encoding="utf-8")
-            request = self._request(
-                tmp_path,
-                mode="folder",
-                input_plan=prepare_run_input(h5_path),
-            )
-
-            with self.assertRaises(WorkflowInputError):
-                dispatch_workflow(request, self._callbacks())
+            self.assertEqual([source], result.input_files)
+            self.assertEqual(1, len(result.failures))
+            self.assertIn("missing_EF.h5", result.failures[0])
+            self.assertTrue((result.output_dir / "summary.json").is_file())
+            self.assertIn("Analyzed 1/2", result.summary_message)
+            self.assertEqual((3, 3), progress[-1][:2])
+            self.assertTrue(any("[INPUT FAIL]" in message for message in messages))
+            manifest = json.loads((result.output_dir / "batch_run.json").read_text())
+            self.assertEqual(result.failures, manifest["failures"])
+
+    def test_missing_single_result_fails_before_creating_outputs(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            holo = root / "missing.holo"
+            holo.touch()
+            with self.assertRaisesRegex(FileNotFoundError, "missing_EF.h5"):
+                run_batch([holo], [descriptor()], root / "results")
+            self.assertFalse((root / "results").exists())
 
 
 if __name__ == "__main__":

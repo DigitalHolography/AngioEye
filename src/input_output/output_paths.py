@@ -1,56 +1,24 @@
-from collections.abc import Sequence
-import re
 from pathlib import Path
-
-from .hdf5_schema import is_hdf5_path
 
 H5_OUTPUT_DIRNAME = "h5"
 PNG_OUTPUT_DIRNAME = "png"
-PNGS_OUTPUT_DIRNAME = "pngs"
 HTML_OUTPUT_DIRNAME = "html"
 COHORT_RESULTS_DIRNAME = "cohort-results"
 APP_SUFFIXES = ("HD", "DV", "EF", "AE")
 _APP_STEM_SUFFIXES = tuple(f"_{suffix}" for suffix in APP_SUFFIXES)
-# Epoch folders are ``1_label``, ``2_label``, … Patient-id ZIP wraps such as
-# ``260803_Flicker_EF`` also match ``number_label`` but are not epochs.
-_EPOCH_FOLDER_RE = re.compile(
-    r"^(?P<index>\d+)_(?P<label>[A-Za-z0-9]+(?:[_-][A-Za-z0-9]+)*)$"
-)
-_MAX_EPOCH_INDEX = 99
 
 
-def default_h5_output_dir(path: str | Path) -> Path:
-    """Return the default output root for a selected HDF5 input."""
-    try:
-        return app_output_dir(path, "AE")
-    except ValueError:
-        return Path(path).expanduser().parent
-
-
-def default_h5_output_filename(path: str | Path) -> str:
-    """Return the standard AE artifact name for a single HDF5 input."""
-    try:
-        stem = dataset_stem_from_path(path)
-    except ValueError:
-        stem = Path(path).expanduser().stem
-        if stem.casefold().endswith("_ef"):
-            stem = stem[:-3]
-    return f"{stem or 'output'}_AE.h5"
-
-
-def default_output_filename_for_run(
-    data_path: str | Path,
-    inputs: Sequence[Path],
-) -> str | None:
-    """Return the single-file AE name, leaving batch naming to the engine."""
-    data_path_obj = Path(data_path).expanduser()
-    if (
-        len(inputs) == 1
-        and data_path_obj.is_file()
-        and is_hdf5_path(data_path_obj)
-    ):
-        return default_h5_output_filename(inputs[0])
-    return None
+def acquisition_output_dir(
+    holo_path: str | Path,
+    output_parent: str | Path | None = None,
+    relative_parent: str | Path = Path("."),
+) -> Path:
+    """Return ``<parent>/<relative_parent>/<holo_stem>/<holo_stem>_AE``."""
+    source = Path(holo_path).expanduser()
+    parent = (
+        source.parent if output_parent is None else Path(output_parent).expanduser()
+    )
+    return parent / Path(relative_parent) / source.stem / f"{source.stem}_AE"
 
 
 def h5_output_dir(output_root: str | Path) -> Path:
@@ -66,29 +34,6 @@ def h5_output_parent(
     return h5_output_dir(output_root) / Path(relative_parent)
 
 
-def is_epoch_folder(name: str) -> bool:
-    """True for numbered cohort epoch folders such as ``1_BL1`` / ``2_Flicker``."""
-    match = _EPOCH_FOLDER_RE.fullmatch(str(name).strip())
-    if match is None:
-        return False
-    return 1 <= int(match.group("index")) <= _MAX_EPOCH_INDEX
-
-
-def strip_epoch_wrap(relative_parent: str | Path) -> Path:
-    """Drop a ZIP wrap folder so epoch folders sit at the output root.
-
-    ``260803_Flicker_EF/1_BL1`` → ``1_BL1``. ``1_BL1`` is unchanged.
-    """
-    relative = Path(relative_parent)
-    parts = relative.parts
-    if not parts:
-        return Path(".")
-    for index, part in enumerate(parts):
-        if is_epoch_folder(part):
-            return Path(*parts[index:])
-    return relative
-
-
 def ae_result_filename(source_h5: str | Path) -> str:
     """``260803_GOA_1_EF.h5`` → ``260803_GOA_1_AE.h5``."""
     stem = Path(source_h5).stem
@@ -99,21 +44,6 @@ def ae_result_filename(source_h5: str | Path) -> str:
             stem = stem[: -len(suffix)] or stem
             break
     return f"{stem}_AE.h5"
-
-
-def pipeline_result_parent(
-    output_root: str | Path,
-    relative_parent: str | Path = Path("."),
-) -> Path:
-    """Parent directory for one pipeline result H5.
-
-    Epoch folders (``1_BL1``, …) keep H5s beside ``pngs/``. A flat relative
-    parent still uses the canonical ``h5/`` product folder (``.holo`` runs).
-    """
-    relative = strip_epoch_wrap(relative_parent)
-    if relative == Path("."):
-        return h5_output_parent(output_root, relative)
-    return Path(output_root) / relative
 
 
 def cohort_results_dir(output_root: str | Path) -> Path:
@@ -142,11 +72,8 @@ def normalize_app_suffix(app_suffix: str) -> str:
 
 
 def dataset_root_from_path(path: str | Path) -> Path:
-    """Return the <stem> dataset folder for a HOLO/app companion path."""
+    """Return the <stem> dataset folder for an app companion path."""
     path_obj = Path(path).expanduser()
-    if path_obj.suffix.lower() == ".holo":
-        return path_obj.parent / path_obj.stem
-
     candidates = (path_obj, *path_obj.parents)
     for candidate in candidates:
         folder_name = candidate.name
@@ -159,7 +86,7 @@ def dataset_root_from_path(path: str | Path) -> Path:
 
 
 def dataset_stem_from_path(path: str | Path) -> str:
-    """Return the dataset stem for a HOLO/app companion path."""
+    """Return the dataset stem for an app companion path."""
     return dataset_root_from_path(path).name
 
 

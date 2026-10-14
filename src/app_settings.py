@@ -15,7 +15,12 @@ DEFAULT_SETTINGS_FILENAME = "default_settings.json"
 LAST_BATCH_LOG_FILENAME = "last_batch_log.txt"
 VERSION_PATTERN = re.compile(r'^version\s*=\s*"([^"]+)"\s*$')
 INVALID_PATH_CHARS_PATTERN = re.compile(r'[<>:"/\\|?*]+')
-DEFAULT_SELECTED_PIPELINE = "waveform_shape_metrics"
+DEFAULT_SELECTED_PIPELINES = {"HTML summary", "Pipeline Metrics Manifest"}
+LEGACY_PIPELINE_NAMES = {
+    "Variability and heterogeneity tables": "Variability and heterogeneity",
+    "groups comparison dashboard": "Group comparison (Dashboard) - Waveform Shape Metrics",
+    "groups comparison html": "Group comparison (HTML) - Waveform Shape Metrics",
+}
 
 
 def _read_version_from_pyproject(pyproject_path: Path) -> str | None:
@@ -146,22 +151,10 @@ def normalize_pipeline_visibility(
     if not stored_visibility:
         ordered_names = list(dict.fromkeys(pipeline_names))
         return (
-            {
-                name: name == DEFAULT_SELECTED_PIPELINE
-                for name in ordered_names
-            },
+            {name: name in DEFAULT_SELECTED_PIPELINES for name in ordered_names},
             bool(ordered_names),
         )
     return normalize_named_visibility(pipeline_names, stored_visibility)
-
-
-def normalize_postprocess_visibility(
-    postprocess_names: Iterable[str], stored_visibility: Mapping[str, bool] | None
-) -> tuple[dict[str, bool], bool]:
-    if not stored_visibility:
-        ordered_names = list(dict.fromkeys(postprocess_names))
-        return ({name: False for name in ordered_names}, bool(ordered_names))
-    return normalize_named_visibility(postprocess_names, stored_visibility)
 
 
 class AppSettingsStore:
@@ -193,8 +186,26 @@ class AppSettingsStore:
 
     def load(self) -> dict[str, Any]:
         if not self.path.exists():
-            return self.load_defaults()
-        return _load_settings_file(self.path)
+            settings = self.load_defaults()
+        else:
+            settings = _load_settings_file(self.path)
+        # The former per-file pipelines moved to EyeFlow; preserve the user's
+        # batch analysis selection when loading preferences from that release.
+        legacy_visibility = settings.pop("postprocess_visibility", None)
+        if isinstance(legacy_visibility, dict):
+            settings["pipeline_visibility"] = legacy_visibility
+        visibility = settings.get("pipeline_visibility")
+        if isinstance(visibility, dict):
+            for legacy_name, current_name in LEGACY_PIPELINE_NAMES.items():
+                if legacy_name in visibility:
+                    value = visibility.pop(legacy_name)
+                    visibility.setdefault(current_name, value)
+        legacy_batching = settings.pop("postprocess_batching", None)
+        if isinstance(legacy_batching, dict):
+            settings.setdefault("pipeline_batching", legacy_batching)
+        settings.pop("persist_source", None)
+        settings.pop("trim_h5source", None)
+        return settings
 
     def save(self, settings: Mapping[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -228,15 +239,9 @@ class AppSettingsStore:
     def save_pipeline_visibility(self, visibility: Mapping[str, bool]) -> None:
         self.save_named_visibility("pipeline_visibility", visibility)
 
-    def load_postprocess_visibility(self) -> dict[str, bool]:
-        return self.load_named_visibility("postprocess_visibility")
-
-    def save_postprocess_visibility(self, visibility: Mapping[str, bool]) -> None:
-        self.save_named_visibility("postprocess_visibility", visibility)
-
     def load_ui_mode(self) -> str:
         mode = self.load().get("ui_mode")
-        if mode in {"advanced", "sandbox_advanced"}:
+        if isinstance(mode, str) and mode in {"advanced", "sandbox_advanced"}:
             return "advanced"
         return "minimal"
 
@@ -247,31 +252,19 @@ class AppSettingsStore:
         )
         self.save(settings)
 
-    def load_persist_source(self) -> bool:
+    def load_processing_branch(self) -> str:
+        value = self.load().get("processing_branch", "Processing")
+        return (
+            value
+            if isinstance(value, str) and value in {"Processing", "ProcessingAlt"}
+            else "Processing"
+        )
+
+    def save_processing_branch(self, processing_branch: str) -> None:
+        if processing_branch not in {"Processing", "ProcessingAlt"}:
+            raise ValueError("Choose Processing or ProcessingAlt.")
         settings = self.load()
-        persist_source = settings.get("persist_source")
-        if isinstance(persist_source, bool):
-            return persist_source
-
-        # Migrate the old, negatively named preference.  In that preference,
-        # trim_h5source=True meant that source data was not persisted.
-        legacy_trim = settings.get("trim_h5source")
-        if isinstance(legacy_trim, bool):
-            return legacy_trim is False
-
-        defaults = self.load_defaults()
-        persist_source = defaults.get("persist_source")
-        if isinstance(persist_source, bool):
-            return persist_source
-        legacy_trim = defaults.get("trim_h5source")
-        if isinstance(legacy_trim, bool):
-            return legacy_trim is False
-        return False
-
-    def save_persist_source(self, persist_source: bool) -> None:
-        settings = self.load()
-        settings["persist_source"] = bool(persist_source)
-        settings.pop("trim_h5source", None)
+        settings["processing_branch"] = processing_branch
         self.save(settings)
 
     def load_batch_execution(self) -> dict[str, Any]:
@@ -281,21 +274,17 @@ class AppSettingsStore:
 
         default_batch_execution = self.load_defaults().get("batch_execution")
         return (
-            default_batch_execution
-            if isinstance(default_batch_execution, dict)
-            else {}
+            default_batch_execution if isinstance(default_batch_execution, dict) else {}
         )
 
-    def load_postprocess_batching(self) -> dict[str, Any]:
-        postprocess_batching = self.load().get("postprocess_batching")
-        if isinstance(postprocess_batching, dict):
-            return postprocess_batching
+    def load_pipeline_batching(self) -> dict[str, Any]:
+        pipeline_batching = self.load().get("pipeline_batching")
+        if isinstance(pipeline_batching, dict):
+            return pipeline_batching
 
-        default_postprocess_batching = self.load_defaults().get(
-            "postprocess_batching"
-        )
+        default_pipeline_batching = self.load_defaults().get("pipeline_batching")
         return (
-            default_postprocess_batching
-            if isinstance(default_postprocess_batching, dict)
+            default_pipeline_batching
+            if isinstance(default_pipeline_batching, dict)
             else {}
         )

@@ -1,7 +1,9 @@
 from pathlib import Path
 
 from app_settings import LAST_BATCH_LOG_FILENAME
+
 from .services import services_for
+
 
 class ProgressMixin:
     def _set_minimal_status(self, text: str) -> None:
@@ -50,24 +52,8 @@ class ProgressMixin:
 
     def _reset_progress(self) -> None:
         self._progress_total_units = 1.0
-        self._progress_completed_units = 0.0
         self._set_progress_style(self._progress_primary_style)
         self.batch_progress_var.set(0.0)
-        self.update_idletasks()
-
-    def _start_progress(
-        self,
-        total_units: float,
-        *,
-        style_name: str | None = None,
-        status_text: str | None = None,
-    ) -> None:
-        self._progress_total_units = max(float(total_units), 1.0)
-        self._progress_completed_units = 0.0
-        self._set_progress_style(style_name or self._progress_primary_style)
-        self.batch_progress_var.set(0.0)
-        if status_text is not None:
-            self._set_minimal_status(status_text)
         self.update_idletasks()
 
     def _set_progress_units(self, completed_units: float) -> None:
@@ -75,20 +61,16 @@ class ProgressMixin:
             max(float(completed_units), 0.0),
             max(self._progress_total_units, 1.0),
         )
-        self._progress_completed_units = clamped_units
         self.batch_progress_var.set(
             (clamped_units / max(self._progress_total_units, 1.0)) * 100.0
         )
         self.update_idletasks()
 
-    def _advance_progress(self, units: float = 1.0) -> None:
-        self._set_progress_units(self._progress_completed_units + units)
-
     def _reset_batch_output(
         self,
         message: str = (
-            "Select an input/output path, choose pipelines in Pipeline Library, "
-            "choose optional postprocess steps in Postprocess Library, then run."
+            "Select EyeFlow outputs and an output folder, choose statistical "
+            "tools in Pipelines, then run."
         ),
     ) -> None:
         self.batch_output.configure(state="normal")

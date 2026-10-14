@@ -1,12 +1,13 @@
-from pathlib import Path
 import unittest
-
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 class BuildInstallerScriptTests(unittest.TestCase):
-    def test_powershell_build_defaults_to_gui_and_supports_console_variant(self) -> None:
+    def test_powershell_build_defaults_to_gui_and_supports_console_variant(
+        self,
+    ) -> None:
         script = (PROJECT_ROOT / "build_installer.ps1").read_text(encoding="utf-8")
         project = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
 

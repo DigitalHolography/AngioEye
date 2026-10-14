@@ -15,7 +15,7 @@ class PipelineLibraryTab(ttk.Frame):
 
         ttk.Label(
             self,
-            text="Select the pipelines to run. "
+            text="Select statistical pipelines for the EyeFlow batch. "
             "This preference is saved between app launches.",
         ).grid(row=0, column=0, sticky="w")
 
@@ -67,15 +67,11 @@ class PipelineLibraryTab(ttk.Frame):
         controller.set_canvas_widgets(canvas, inner, window)
         inner.bind(
             "<Configure>",
-            lambda _evt: canvas.configure(
-                scrollregion=canvas.bbox("all")
-            ),
+            lambda _evt: canvas.configure(scrollregion=canvas.bbox("all")),
         )
         canvas.bind(
             "<Configure>",
-            lambda evt: canvas.itemconfigure(
-                window, width=evt.width
-            ),
+            lambda evt: canvas.itemconfigure(window, width=evt.width),
         )
         controller.bind_mousewheel(canvas, canvas)
         controller.bind_mousewheel(inner, canvas)

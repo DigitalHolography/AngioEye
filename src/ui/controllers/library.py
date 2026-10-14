@@ -5,7 +5,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import ttk
 
-from postprocess import format_required_pipeline_options, required_options_for
+from pipelines import format_required_metric_options
 
 from ..services import services_for
 from .base import ViewController
@@ -122,28 +122,16 @@ class LibraryController(ViewController):
         description = getattr(descriptor, "description", "")
         if description:
             parts.append(description)
-        required_pipelines = format_required_pipeline_options(descriptor)
-        if required_pipelines:
-            parts.append(f"Requires pipelines: {required_pipelines}")
-        required_options = self.format_required_options(descriptor)
-        if required_options:
-            parts.append(f"Requires options: {required_options}")
-        missing_pipelines = getattr(descriptor, "missing_pipelines", [])
-        if missing_pipelines:
-            parts.append(
-                "Unavailable until these pipelines are available: "
-                f"{', '.join(missing_pipelines)}"
-            )
-        missing_deps = getattr(descriptor, "missing_deps", []) or getattr(
-            descriptor, "requires", []
-        )
+        metrics = format_required_metric_options(descriptor)
+        if metrics:
+            parts.append(f"Required EyeFlow metrics: {metrics}")
+        minimum_files = getattr(descriptor, "minimum_input_files", 1)
+        if minimum_files > 1:
+            parts.append(f"Requires at least {minimum_files} input files")
+        missing_deps = getattr(descriptor, "missing_deps", [])
         if missing_deps:
             parts.append(f"Install: {', '.join(missing_deps)}")
         return "\n".join(parts)
-
-    @staticmethod
-    def format_required_options(descriptor) -> str:
-        return ", ".join(required_options_for(descriptor))
 
     def package_folder(self, package_name: str) -> Path | None:
         module = sys.modules.get(package_name)

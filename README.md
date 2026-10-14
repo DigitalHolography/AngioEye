@@ -1,212 +1,188 @@
 # AngioEye
 
-AngioEye is the cohort-analysis engine for retinal Doppler holography. It browses EyeFlow .h5 outputs, reads per-segment metrics, applies QC, compares models, and aggregates results at eye/cohort level (including artery–vein summaries) to help design biomarkers. It exports clean CSV reports for stats, figures, and clinical models.
+AngioEye runs statistical tools over batches of EyeFlow HDF5 exports. EyeFlow
+calculates the waveform and model metrics; AngioEye aggregates those exported
+results, compares cohorts, and produces tables, figures, scores, and HTML reports.
 
----
+The former Postprocess tools are now **Pipelines**. The application has one
+Pipelines library and runs each selected tool once over the batch.
 
-## Setup
+## Installation
 
-### Prerequisites
+Python 3.10 or later is required. From a checkout:
 
-- Python 3.10 or higher.
-- It is highly recommended to use a virtual environment.
+```powershell
+uv sync
+uv run angioeye
+```
 
-This project uses a `pyproject.toml` to describe all requirements needed. To start using it, **it is better to use a Python virtual environment (venv)**.
+Or create a virtual environment and install with pip:
 
-```sh
-# Creates the venv
+```powershell
 python -m venv .venv
-
-# To enter the venv
-# If you are using Windows PowerShell, you might need to activate the "Execution" policy
-./.venv/Scripts/activate
-```
-
-You can easily exit it with the command
-
-```sh
-deactivate
-```
-
-### 1. Basic Installation (User)
-
-```sh
+.venv/Scripts/activate
 pip install -e .
-
-# Installs pipeline-specific dependencies (optional)
-pip install -e ".[pipelines]"
-
-# Installs postprocess-specific dependencies such as the included dashboard and plotting postprocesses (optional)
-pip install -e ".[postprocess]"
-```
-
-### 2. Development Setup (Contributor)
-
-```sh
-# Install all dependencies including dev tools (ruff, pre-commit, pyinstaller)
-pip install -e ".[dev,pipelines,postprocess]"
-
-# Initialize pre-commit hooks (optional)
-pre-commit install
-```
-
-> [!NOTE]
-> The pre-commit is really useful to run automatic checks before pushing code, reducing chances of ugly code being pushed.
->
-> If a pre-commit hook fails, it will try to fix all needed files, **so you will need to add them again before recreating the commit**.
-
-> [!TIP]
-> You can run the linter easily, once the `dev` dependencies are installed, with the command:
->
-> ```sh
-> # To only run the checks
-> lint-tool
->
-> # To let the linter try to fix as much as possible
-> lint-tool --fix
-> ```
-
----
-
-## Usage
-
-Launch the main application to process files interactively:
-
-### GUI
-
-The GUI handles batch processing for folders, single .h5/.hdf5 files, or .zip archives and lets you run multiple pipelines at once. Batch outputs preserve the input subfolder layout under the chosen output directory (one combined `.h5` per input file).
-
-You can also select batch-level postprocess steps. These run after the selected pipelines finish and before optional zipping, so any generated dashboards, PNGs, or summaries are included in the final output folder or archive.
-
-Use the Pipeline Library tab to select which pipelines run. Selection preferences are saved per user between app launches, including installed builds.
-Use the Postprocess Library tab the same way for postprocess steps.
-
-```sh
-# Via the entry point
 angioeye
-
-# Or via the script
-python src/angio_eye.py
 ```
 
-When you run `angioeye` from inside the repository checkout, the launcher prefers the local `src/` tree so newly added or edited pipelines are picked up without needing a full reinstall.
+All statistical and GUI dependencies are included in the basic installation.
+For development, use `uv sync --extra dev` or `pip install -e ".[dev]"`.
 
-Installed builds expose editable `pipelines/` and `postprocess/` folders next to `AngioEye.exe`; use the Library tabs' Open folder and Reload buttons to edit and refresh them.
+## Inputs and processing branches
 
-### CLI
+Browse or drag and drop `.holo` files, or one folder containing `.holo` files
+(including subfolders). Direct HDF5 and ZIP inputs are rejected. Folder names
+are preserved as cohort labels.
 
-The CLI is designed for batch processing in headless environments or clusters.
+Each hologram identifies an acquisition already processed by
+[EyeFlow](https://github.com/DigitalHolography/EyeFlow). For `sample.holo`, AngioEye
+automatically reads the matching result:
 
-```sh
-# Via the same entry point (arguments select CLI mode)
-angioeye --data data/ --pipelines waveform_shape_metrics --output ./results
-
-# Multiple names can follow one option, or be supplied as a list literal
-angioeye --data data/ --pipelines pipeline1 pipeline2 --postprocesses "HTML summary"
-angioeye --data data/ --pipelines '["pipeline1", "pipeline2"]'
-
-# Or via the script
-python src/cli.py --data data/ --pipelines pipelines.txt --output ./results
-
-# Dedicated installed CLI entry point
-angioeye-cli --data data/ --pipelines pipelines.txt --output ./results
+```text
+data/
+  sample.holo
+  sample/
+    sample_EF/
+      h5/
+        sample_EF.h5
 ```
 
-The Windows installer defaults to a GUI-only `AngioEye.exe`. To build a
-console-enabled variant for CLI use, pass `-Console` to `build_installer.ps1`.
+AngioEye does not process the hologram itself. If a result is missing, the error
+shows its expected location and asks you to run EyeFlow first. In a batch,
+acquisitions with available results still run; missing results are reported in
+the log and `batch_run.json`. HoloDoppler, DopplerView, and unrelated HDF5 files
+are excluded from input discovery.
 
----
+Select the EyeFlow processing branch to analyze:
 
-## Pipeline System
+- `Processing` reads `/Processing/Metrics`.
+- `ProcessingAlt` reads `/ProcessingAlt/Metrics`.
 
-Pipelines are the heart of AngioEye. To add a new analysis, create a file in `src/pipelines/` with a class inheriting from `ProcessPipeline`.
+The supplied `260312_GUJ_4_EF.h5` example contains both branches, with
+`waveform_shape_metrics`, `absolute_waveform_metrics`, and
+`lowrank_waveform_decomposition` exports. A missing selected branch is reported
+as an input error. Every tool checks the exported metric groups it requires;
+AngioEye does not run metric calculations to fill missing groups.
 
-To register it to the app, add the decorator `@registerPipeline`. You can define any needed imports inside, as well as some more info.
+## Running statistical pipelines
 
-To see more complete examples, check out `src/pipelines/waveform_shape_metrics.py` and `src/pipelines/Windkessel_RC.py`.
+In the GUI, choose inputs and an output parent folder in **Run**, choose the tools in
+**Pipelines**, then run the batch. HTML summary and Pipeline Metrics Manifest
+are selected initially. Selection preferences are saved between launches;
+existing Postprocess preferences migrate to the Pipelines library.
 
-### Simple Pipeline Structure
+The CLI uses the same batch workflow:
+
+```powershell
+angioeye --list-pipelines
+angioeye --data data/ --pipelines "HTML summary" "Pipeline Metrics Manifest" --output results/
+angioeye-cli --data sample.holo --pipelines "Fixed Threshold Patient Evaluation" --output results/
+angioeye-cli --data cohort/ --pipelines "Variability and heterogeneity" --processing-branch ProcessingAlt --output results/ --zip
+```
+
+`--data` accepts multiple explicit `.holo` paths or one folder. `--pipelines` also
+accepts a text file containing one tool name per line, or a quoted list literal. Use
+`--zip-name statistics.zip` to choose the optional output archive name.
+The CLI returns a nonzero status when an input, pipeline, or archive fails.
+
+Available tools include per-file HTML summaries, a metric manifest,
+fixed-threshold evaluation, waveform group comparisons, variability and
+heterogeneity, composite scoring, and low-rank cohort figures. Windkessel QC
+is available for exports containing `Windkessel_RC` metrics.
+
+Group comparisons and composite calibration use cohort subfolders, for example:
+
+```text
+cohort/
+  control/
+    subject_1.holo
+    subject_1/subject_1_EF/h5/subject_1_EF.h5
+  pathology/
+    subject_2.holo
+    subject_2/subject_2_EF/h5/subject_2_EF.h5
+```
+
+Composite Scoring requires a recognizable control group and a second group.
+Low-rank cohort figures require consecutive numbered group folders, such as
+`1_ctrl/`, `2_path/` or `1_baseline/`, `2_flicker/`, `3_recovery/`.
+These tools report unsuitable layouts instead of generating empty analyses.
+
+## Results and source preservation
+
+EyeFlow inputs are opened read-only. Each acquisition has an AngioEye companion
+folder beside its EyeFlow outputs by default. For `sample.holo`:
+
+```text
+sample/
+  sample_EF/h5/sample_EF.h5
+  sample_AE/
+    h5/sample_AE.h5
+    html/sample_AE.html
+```
+
+The GUI output folder and CLI `--output` select a parent location. A custom
+parent mirrors the same `<name>/<name>_AE/` structure, preserving cohort
+subfolders. When `--output` is omitted, results are created beside the inputs.
+
+AngioEye makes independent compact analysis files named `_AE.h5`.
+Each contains the selected branch's metrics under `/Processing/Metrics`, global
+beat signals, cardiac timing, and lightweight metadata. Source image stacks,
+maps, and segment waveform stacks are omitted.
+
+Derived statistics are stored under `/AngioEye/Statistics` in these analysis
+files. Acquisition HTML summaries go into the corresponding `_AE/html/` folder.
+Single-file runs also keep manifests and tool reports in that `_AE` folder.
+Folder and multiple-file runs keep shared comparison reports and `batch_run.json`
+under the output parent's `cohort-results/` folder, including `png/`, `h5/`,
+or a tool's report folder. The manifest records source paths, the branch, tool results, failures,
+and the batch summary. Optional ZIP export includes generated results and
+reports, excluding source holograms and EyeFlow/HoloDoppler/DopplerView files.
+Use a separate output parent for each analysis or processing branch.
+
+## Adding a pipeline
+
+Create a module in `src/pipelines/` with a registered batch class or function:
 
 ```python
-from pipelines import ProcessPipeline, ProcessResult, registerPipeline
+from pipelines import BatchPipeline, PipelineContext, PipelineResult, registerPipeline
+
 
 @registerPipeline(
-    name="My Analysis",
-    description="Calculates a custom clinical metric.",
-    required_deps=["torch>=2.2"],
+    name="My Cohort Summary",
+    description="Summarize exported EyeFlow metrics across a batch.",
+    required_metrics=["waveform_shape_metrics"],
 )
-class MyAnalysis(ProcessPipeline):
-    def run(self, h5file):
-        import torch
-        # 1. Read data using h5py
-        # 2. Perform calculations
-        # 3. Return metrics
-
-        metrics={"peak_flow": 12.5}
-
-        # Optional attributes applied to the pipeline group.
-        attrs = {
-            "pipeline_version": "1.0",
-            "author": "StaticExample"
-        }
-
-        return ProcessResult(
-            metrics=metrics,
-            attrs=attrs
+class MyCohortSummary(BatchPipeline):
+    def run(self, context: PipelineContext) -> PipelineResult:
+        # context.processed_files contains independent analysis copies.
+        # context.input_h5_paths contains source paths for provenance.
+        report = context.output_dir / "my_summary.txt"
+        report.write_text(f"Files: {len(context.processed_files)}", encoding="utf-8")
+        return PipelineResult(
+            summary="Generated my_summary.txt.",
+            generated_paths=[str(report)],
         )
 ```
 
-## Postprocess System
+Declare Python dependencies with `required_deps`. Use
+`required_metric_options=[["metric_a", "metric_a_alternative"], ["metric_b"]]`
+for alternative metric groups: choices within a list are OR alternatives,
+and separate lists are required together. Tools can constrain input methods
+and minimum file counts. Python dependencies determine catalog availability;
+metric requirements are checked against the selected EyeFlow inputs at run time.
 
-Postprocess steps are discovered from `src/postprocess/` in the same spirit as pipelines, but they run once per batch over the generated pipeline output folder.
+Installed builds expose editable `pipelines/` modules next to `AngioEye.exe`.
+The Pipelines tab provides Open folder and Reload buttons. A checkout launched
+through `angioeye` uses the local `src/` tree.
 
-Use `@registerPostprocess(...)` to declare:
+## Development and Windows installer
 
-- optional Python package dependencies with `required_deps`
-- required pipeline outputs with `required_pipelines`
-- grouped pipeline alternatives with `required_pipeline_options`; alternatives
-  within each inner list are OR'ed, while separate inner lists are AND'ed:
-  `[["one", "one_alternative"], ["two", "two_alternative"]]`
-
-### Simple Postprocess Structure
-
-```python
-from postprocess.core.base import (
-    BatchPostprocess,
-    PostprocessContext,
-    PostprocessResult,
-    registerPostprocess,
-)
-
-
-@registerPostprocess(
-    name="My Batch Summary",
-    description="Aggregate metrics across the generated batch outputs.",
-    required_pipelines=["Basic Stats"],
-)
-class MyBatchSummary(BatchPostprocess):
-    def run(self, context: PostprocessContext) -> PostprocessResult:
-        report_path = context.output_dir / "my_batch_summary.json"
-        report_path.write_text("{}", encoding="utf-8")
-
-        return PostprocessResult(
-            summary="Generated my_batch_summary.json.",
-            generated_paths=[str(report_path)],
-            metadata={"file_count": len(context.processed_files)},
-        )
+```powershell
+uv run python -m unittest discover -s test
+uv run ruff check .
+uv run ruff format --check .
+.\build_installer.ps1
 ```
 
-Inside a postprocess, you can:
-
-- read `context.output_dir`
-- read `context.processed_files`
-- read `context.input_h5_paths` (same order as `context.processed_files`)
-- read `context.selected_pipelines`
-- read `context.input_path`
-- read `context.zip_outputs`
-- write extra artifacts into `context.output_dir` before optional zipping
-- return a short `summary`, explicit `generated_paths`, and structured `metadata`
-
-The included `groups comparison dashboard` postprocess shows the intended pattern: it consumes the `waveform_shape_metrics` output and generates a cohort dashboard plus PNG exports after the batch finishes.
-`Pipeline Metrics Manifest` is a lighter built-in example that writes a JSON inventory of the generated pipeline metric datasets for the batch.
-`Postprocess Tutorial` is the minimal reference example: it writes a single JSON file showing every `PostprocessContext` field and the `PostprocessResult` output format.
+The installer script requires PyInstaller and Inno Setup 6. The default executable
+is a GUI build; pass `-Console` to build a console-enabled executable for CLI use.
